@@ -2,12 +2,10 @@ from datetime import datetime, timezone
 
 import streamlit as st
 
-from ecmwf_client import (
-    AVAILABLE_THRESHOLDS_MM,
-    THRESHOLD_COLORS,
-    PH_TZ,
-    fetch_forecast_table,
-)
+import ecmwf_client
+st.write("Loaded from:", ecmwf_client.__file__)
+st.write("Available names:", [n for n in dir(ecmwf_client) if not n.startswith("_")])
+st.stop()
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
 
