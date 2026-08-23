@@ -17,8 +17,8 @@ st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each t
 
 LOCATIONS = {
     "Guiguinto, Bulacan": (14.842279, 120.859681),
-    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
-    "Makati City, Metro Manila": (14.555539, 121.002918),
+    "Mandaluyong": (14.576975, 121.052521),
+    "Makati": (14.555539, 121.002918),
     "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
     "Bacoor, Cavite": (14.454261, 120.941266),
 }
@@ -54,31 +54,24 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
     return result, False
 
 
-def _theme_colors():
-    """Best-effort dark/light detection via Streamlit's theme API (1.46+).
-    Falls back to a fixed light-card scheme if unavailable so the table
-    still reads correctly either way."""
-    try:
-        is_dark = st.context.theme.type == "dark"
-    except Exception:
-        is_dark = False
-
-    if is_dark:
-        return {
-            "card_bg": "#1e1e1e",
-            "text": "#f5f5f5",
-            "border": "rgba(255,255,255,0.15)",
-        }
-    return {
-        "card_bg": "#ffffff",
-        "text": "#111111",
-        "border": "rgba(0,0,0,0.12)",
-    }
-
-
 def _hex_to_rgb(hex_color: str):
     hex_color = hex_color.lstrip("#")
     return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _relative_luminance(r: int, g: int, b: int) -> float:
+    """Perceived brightness (0=black, 1=white). Used to decide whether a
+    threshold's color needs light or dark text on top of it."""
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+# Streamlit exposes its live theme colors as CSS custom properties on the
+# page. Using them directly (instead of detecting the theme in Python once
+# per script run) means the table updates immediately when the person
+# toggles light/dark mode, with no stale state.
+CARD_BG = "var(--background-color, #ffffff)"
+BASE_TEXT = "var(--text-color, #111111)"
+BORDER = "rgba(128,128,128,0.35)"
 
 
 def _fmt_ph(dt: datetime) -> str:
@@ -89,15 +82,24 @@ def _fmt_window(w: dict) -> str:
     return f"{_fmt_ph(w['start_utc'])}<br>to<br>{_fmt_ph(w['end_utc'])}"
 
 
+def _cell_text_color(threshold_luminance: float, alpha: float) -> str:
+    """Below a certain fill strength the tint is faint enough that the
+    page's own text color still reads fine on it. Above that, pick black
+    or white based on how bright the *threshold's* color is -- e.g. yellow
+    (5mm) always needs dark text even at 100% fill, while maroon (50mm)
+    always needs white text, regardless of the probability value."""
+    if alpha < 0.35:
+        return BASE_TEXT
+    return "#111111" if threshold_luminance > 0.5 else "#ffffff"
+
+
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
-    theme = _theme_colors()
-    card_bg, base_text, border = theme["card_bg"], theme["text"], theme["border"]
 
     header_cells = "".join(
         f"<th style='padding:8px 12px;font-size:12px;white-space:nowrap;"
-        f"color:{base_text};border-bottom:2px solid {border};'>{_fmt_window(w)}</th>"
+        f"color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>{_fmt_window(w)}</th>"
         for w in windows
     )
 
@@ -105,35 +107,36 @@ def render_table_html(result: dict) -> str:
     for threshold in AVAILABLE_THRESHOLDS_MM:
         color_hex = THRESHOLD_COLORS[threshold]
         r, g, b = _hex_to_rgb(color_hex)
+        luminance = _relative_luminance(r, g, b)
         row_cells = ""
         for w in windows:
             val = data[threshold].get(w["label"])
             if val is None:
                 row_cells += (
-                    f"<td style='padding:8px 12px;text-align:center;color:{base_text};"
-                    f"border-bottom:1px solid {border};'>—</td>"
+                    f"<td style='padding:8px 12px;text-align:center;color:{BASE_TEXT};"
+                    f"border-bottom:1px solid {BORDER};'>—</td>"
                 )
                 continue
             alpha = max(0.0, min(1.0, val / 100))
             bg = f"rgba({r},{g},{b},{alpha:.2f})"
-            text_color = "#fff" if alpha > 0.55 else base_text
+            text_color = _cell_text_color(luminance, alpha)
             row_cells += (
                 f"<td style='padding:8px 12px;text-align:center;"
                 f"background-color:{bg};color:{text_color};font-weight:600;"
-                f"border-bottom:1px solid {border};'>{val:.0f}%</td>"
+                f"border-bottom:1px solid {BORDER};'>{val:.0f}%</td>"
             )
         rows_html += (
             f"<tr><td style='padding:8px 12px;font-weight:700;white-space:nowrap;"
-            f"color:{base_text};background-color:{color_hex}33;"
-            f"border-bottom:1px solid {border};'>≥{threshold} mm</td>{row_cells}</tr>"
+            f"color:{BASE_TEXT};background-color:{color_hex}33;"
+            f"border-bottom:1px solid {BORDER};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
 
     return f"""
-    <div style="overflow-x:auto;background-color:{card_bg};border-radius:8px;padding:4px;">
+    <div style="overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;">
     <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">
       <thead><tr>
-        <th style='padding:8px 12px;text-align:left;color:{base_text};
-        border-bottom:2px solid {border};'>Threshold</th>
+        <th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};
+        border-bottom:2px solid {BORDER};'>Threshold</th>
         {header_cells}
       </tr></thead>
       <tbody>{rows_html}</tbody>
@@ -150,6 +153,7 @@ with col2:
     lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
 if st.button("Get forecast", type="primary"):
+    request_started_at = time.time()
     try:
         result, was_cached = get_forecast_with_progress(lat, lon, lead_days)
     except Exception as e:
@@ -174,11 +178,6 @@ if st.button("Get forecast", type="primary"):
             f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
             f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
         )
-        size_bytes = result.get("downloaded_bytes")
-        if size_bytes:
-            size_kb = size_bytes / 1024
-            size_str = f"{size_kb/1024:.1f} MB" if size_kb > 1024 else f"{size_kb:.0f} KB"
-            st.markdown(f"**Data downloaded:** {size_str}")
     with info_col2:
         now_utc = datetime.now(timezone.utc)
         available_ph = result["available_since"].astimezone(PH_TZ)
@@ -201,5 +200,8 @@ if st.button("Get forecast", type="primary"):
     st.subheader("Exceedance probability by threshold and 24h window (00 UTC – 00 UTC)")
     st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
+
+    elapsed = time.time() - request_started_at
+    st.caption(f"⏱️ Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else ""))
 else:
     st.info("Choose a location and click **Get forecast**.")
