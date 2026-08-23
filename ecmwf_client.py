@@ -7,9 +7,11 @@ fields for 24h accumulated total precipitation: tpg1, tpg5, tpg10, tpg20,
 tpg25, tpg50, tpg100 (mm). These are fixed thresholds baked into the model
 output, computed from ECMWF's 50-member ensemble.
 
-Only the 5 thresholds requested by the app (1/5/20/50/100 mm) are fetched,
-and only the 24h windows that start at 00 UTC are kept (the raw product
-also includes windows starting at 12 UTC, which we discard here).
+All 5 thresholds used by the app (1/5/20/50/100 mm) are fetched in a single
+combined request (one file, one network round trip) rather than one request
+per threshold -- this is the main optimization over the earlier version.
+If the combined request fails for any reason, the client falls back to
+fetching thresholds one at a time so the app still works, just slower.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 from datetime import timedelta, timezone
+from typing import Callable, Optional
 
 import pandas as pd
 import xarray as xr
@@ -35,6 +38,8 @@ THRESHOLD_COLORS = {
 PH_TZ = timezone(timedelta(hours=8))
 UTC = timezone.utc
 
+ProgressFn = Optional[Callable[[float, str], None]]
+
 
 def _param_for(threshold_mm: int) -> str:
     return f"tpg{threshold_mm}"
@@ -46,49 +51,96 @@ def _request_step_labels(max_lead_days: int) -> list[str]:
     return [f"{12 * i}-{12 * i + 24}" for i in range(n)]
 
 
-def _fetch_single_threshold(
-    lat: float,
-    lon: float,
-    threshold_mm: int,
-    client: Client,
-    tmpdir: str,
-    step_labels: list[str],
-):
-    """Retrieve one threshold's field and extract the nearest-grid-point
-    values, keyed by the window's *end* step in hours (e.g. 24, 36, 48...).
-    """
-    param = _param_for(threshold_mm)
-    target = str(Path(tmpdir) / f"{param}.grib2")
+def _notify(progress_callback: ProgressFn, frac: float, msg: str) -> None:
+    if progress_callback is not None:
+        progress_callback(frac, msg)
 
-    client.retrieve(
+
+def _extract_point_series(ds: xr.Dataset, var_name: str, point) -> dict[int, float]:
+    step_hours_end = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
+    values = {}
+    for idx, end_h in enumerate(step_hours_end):
+        val = float(point[var_name].isel(step=idx).values)
+        values[int(end_h)] = round(val, 1)
+    return values
+
+
+def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
+    """Single request for all thresholds at once. Raises on any failure so the
+    caller can fall back to per-threshold requests."""
+    client = Client(source="ecmwf")
+    params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
+    target = str(Path(tmpdir) / "combined.grib2")
+
+    _notify(progress_callback, 0.15, "Requesting latest ENS forecast (all 5 thresholds)...")
+    result = client.retrieve(
         stream="enfo",
         type="ep",
         step=step_labels,
-        param=param,
+        param=params,
         target=target,
     )
+    size_bytes = getattr(result, "size", None)
 
+    _notify(progress_callback, 0.65, "Decoding GRIB2 data...")
     ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
 
     grid_lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
     point = ds.sel(latitude=lat, longitude=grid_lon_query, method="nearest")
 
     run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
-
     grid_lat = float(point.latitude.values)
     grid_lon = float(point.longitude.values)
     if grid_lon > 180:
         grid_lon -= 360
 
-    var_name = list(ds.data_vars)[0]
-    step_hours_end = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
+    _notify(progress_callback, 0.8, "Extracting nearest grid point for each threshold...")
+    raw_by_threshold: dict[int, dict[int, float]] = {}
+    for threshold_mm in AVAILABLE_THRESHOLDS_MM:
+        var_name = _param_for(threshold_mm)
+        if var_name not in ds.data_vars:
+            raise KeyError(
+                f"{var_name} not found in combined dataset (has: {list(ds.data_vars)})"
+            )
+        raw_by_threshold[threshold_mm] = _extract_point_series(ds, var_name, point)
 
-    values_by_end_step = {}
-    for idx, end_h in enumerate(step_hours_end):
-        val = float(point[var_name].isel(step=idx).values)
-        values_by_end_step[int(end_h)] = round(val, 1)
+    return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
-    return run_time, grid_lat, grid_lon, values_by_end_step
+
+def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
+    """Fallback: one request per threshold (slower, but more forgiving)."""
+    client = Client(source="ecmwf")
+    run_time = grid_lat = grid_lon = None
+    raw_by_threshold: dict[int, dict[int, float]] = {}
+    size_bytes = 0
+
+    for i, threshold_mm in enumerate(AVAILABLE_THRESHOLDS_MM):
+        _notify(
+            progress_callback,
+            0.2 + 0.65 * (i / len(AVAILABLE_THRESHOLDS_MM)),
+            f"Fetching {threshold_mm} mm threshold ({i + 1}/{len(AVAILABLE_THRESHOLDS_MM)})...",
+        )
+        param = _param_for(threshold_mm)
+        target = str(Path(tmpdir) / f"{param}.grib2")
+        result = client.retrieve(
+            stream="enfo", type="ep", step=step_labels, param=param, target=target
+        )
+        size_bytes += getattr(result, "size", 0) or 0
+
+        ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+        grid_lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
+        point = ds.sel(latitude=lat, longitude=grid_lon_query, method="nearest")
+
+        if run_time is None:
+            run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+            grid_lat = float(point.latitude.values)
+            grid_lon = float(point.longitude.values)
+            if grid_lon > 180:
+                grid_lon -= 360
+
+        raw_by_threshold[threshold_mm] = _extract_point_series(ds, param, point)
+
+    return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
 
 def _aligned_end_steps(run_hour: int, step_labels: list[str]) -> list[int]:
@@ -106,8 +158,8 @@ def _dissemination_available_time(run_time):
     """Approximate when the full 15-day ENS probability product (Set III,
     derived products step 246-360) becomes available, per ECMWF's published
     dissemination schedule. 00Z -> ~08:01 UTC same day. 12Z -> ~20:01 UTC
-    same day. (06Z/18Z runs don't carry the full 15-day probability set;
-    same lag is used as a fallback estimate.)
+    same day. ECMWF's own docs describe this as "available between 7 and 9
+    hours after the forecast starting date and time", which this matches.
     """
     run_hour = run_time.hour
     if run_hour == 0:
@@ -118,7 +170,12 @@ def _dissemination_available_time(run_time):
         return run_time + timedelta(hours=8, minutes=1)
 
 
-def fetch_forecast_table(lat: float, lon: float, max_lead_days: int = 15) -> dict:
+def fetch_forecast_table(
+    lat: float,
+    lon: float,
+    max_lead_days: int = 15,
+    progress_callback: ProgressFn = None,
+) -> dict:
     """
     Fetch all thresholds for a location and return a structured result:
 
@@ -129,23 +186,35 @@ def fetch_forecast_table(lat: float, lon: float, max_lead_days: int = 15) -> dic
         "data": {1: {"0-24": 82.0, ...}, 5: {...}, ...},
         "available_since": datetime (UTC),
         "next_expected": datetime (UTC),
+        "downloaded_bytes": int | None,
+        "fetch_mode": "combined" | "separate",
     }
+
+    progress_callback, if given, is called as progress_callback(fraction, message)
+    at various points during the fetch (fraction in [0, 1]).
     """
     step_labels = _request_step_labels(max_lead_days)
-    client = Client(source="ecmwf")
 
-    run_time = None
-    grid_lat = grid_lon = None
-    raw_by_threshold: dict[int, dict[int, float]] = {}
+    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        for threshold_mm in AVAILABLE_THRESHOLDS_MM:
-            rt, glat, glon, values = _fetch_single_threshold(
-                lat, lon, threshold_mm, client, tmpdir, step_labels
+        try:
+            run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_combined(
+                lat, lon, step_labels, tmpdir, progress_callback
             )
-            if run_time is None:
-                run_time, grid_lat, grid_lon = rt, glat, glon
-            raw_by_threshold[threshold_mm] = values
+            fetch_mode = "combined"
+        except Exception:
+            _notify(
+                progress_callback,
+                0.2,
+                "Combined request failed, retrying per threshold...",
+            )
+            run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_separate(
+                lat, lon, step_labels, tmpdir, progress_callback
+            )
+            fetch_mode = "separate"
+
+    _notify(progress_callback, 0.9, "Computing aligned forecast windows...")
 
     run_hour = run_time.hour
     aligned_end_steps = _aligned_end_steps(run_hour, step_labels)
@@ -174,6 +243,8 @@ def fetch_forecast_table(lat: float, lon: float, max_lead_days: int = 15) -> dic
     next_run_time = run_time + timedelta(hours=12)
     next_expected = _dissemination_available_time(next_run_time)
 
+    _notify(progress_callback, 1.0, "Done")
+
     return {
         "run_time": run_time,
         "grid_lat": grid_lat,
@@ -182,4 +253,6 @@ def fetch_forecast_table(lat: float, lon: float, max_lead_days: int = 15) -> dic
         "data": data,
         "available_since": available_since,
         "next_expected": next_expected,
+        "downloaded_bytes": size_bytes,
+        "fetch_mode": fetch_mode,
     }
