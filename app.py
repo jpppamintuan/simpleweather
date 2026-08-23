@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-from ecmwf import AVAILABLE_THRESHOLDS_MM, fetch_exceedance_probabilities
+from ecmwf_client import AVAILABLE_THRESHOLDS_MM, fetch_exceedance_probabilities
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️")
 
