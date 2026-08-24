@@ -65,13 +65,22 @@ def _relative_luminance(r: int, g: int, b: int) -> float:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
 
-# Streamlit exposes its live theme colors as CSS custom properties on the
-# page. Using them directly (instead of detecting the theme in Python once
-# per script run) means the table updates immediately when the person
-# toggles light/dark mode, with no stale state.
-CARD_BG = "var(--background-color, #ffffff)"
-BASE_TEXT = "var(--text-color, #111111)"
-BORDER = "rgba(128,128,128,0.35)"
+def _theme_colors():
+    """Streamlit's official runtime theme-detection API (st.context.theme,
+    added 2025). This reflects the *actual* active theme per session and
+    updates on rerun -- unlike CSS custom properties, which are only
+    injected for real Streamlit components, not plain st.markdown HTML
+    (that was the bug in the previous version: the table always fell back
+    to its hardcoded light-mode default because those variables simply
+    don't exist in this context)."""
+    try:
+        is_dark = st.context.theme.type == "dark"
+    except Exception:
+        is_dark = False
+
+    if is_dark:
+        return {"card_bg": "#1e1e1e", "text": "#f5f5f5", "border": "rgba(255,255,255,0.18)"}
+    return {"card_bg": "#ffffff", "text": "#111111", "border": "rgba(0,0,0,0.12)"}
 
 
 def _fmt_ph(dt: datetime) -> str:
@@ -82,24 +91,26 @@ def _fmt_window(w: dict) -> str:
     return f"{_fmt_ph(w['start_utc'])}<br>to<br>{_fmt_ph(w['end_utc'])}"
 
 
-def _cell_text_color(threshold_luminance: float, alpha: float) -> str:
+def _cell_text_color(threshold_luminance: float, alpha: float, base_text: str) -> str:
     """Below a certain fill strength the tint is faint enough that the
     page's own text color still reads fine on it. Above that, pick black
     or white based on how bright the *threshold's* color is -- e.g. yellow
     (5mm) always needs dark text even at 100% fill, while maroon (50mm)
     always needs white text, regardless of the probability value."""
     if alpha < 0.35:
-        return BASE_TEXT
+        return base_text
     return "#111111" if threshold_luminance > 0.5 else "#ffffff"
 
 
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
+    theme = _theme_colors()
+    card_bg, base_text, border = theme["card_bg"], theme["text"], theme["border"]
 
     header_cells = "".join(
         f"<th style='padding:8px 12px;font-size:12px;white-space:nowrap;"
-        f"color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>{_fmt_window(w)}</th>"
+        f"color:{base_text};border-bottom:2px solid {border};'>{_fmt_window(w)}</th>"
         for w in windows
     )
 
@@ -113,34 +124,83 @@ def render_table_html(result: dict) -> str:
             val = data[threshold].get(w["label"])
             if val is None:
                 row_cells += (
-                    f"<td style='padding:8px 12px;text-align:center;color:{BASE_TEXT};"
-                    f"border-bottom:1px solid {BORDER};'>—</td>"
+                    f"<td style='padding:8px 12px;text-align:center;color:{base_text};"
+                    f"border-bottom:1px solid {border};'>—</td>"
                 )
                 continue
             alpha = max(0.0, min(1.0, val / 100))
             bg = f"rgba({r},{g},{b},{alpha:.2f})"
-            text_color = _cell_text_color(luminance, alpha)
+            text_color = _cell_text_color(luminance, alpha, base_text)
             row_cells += (
                 f"<td style='padding:8px 12px;text-align:center;"
                 f"background-color:{bg};color:{text_color};font-weight:600;"
-                f"border-bottom:1px solid {BORDER};'>{val:.0f}%</td>"
+                f"border-bottom:1px solid {border};'>{val:.0f}%</td>"
             )
         rows_html += (
             f"<tr><td style='padding:8px 12px;font-weight:700;white-space:nowrap;"
-            f"color:{BASE_TEXT};background-color:{color_hex}33;"
-            f"border-bottom:1px solid {BORDER};'>≥{threshold} mm</td>{row_cells}</tr>"
+            f"color:{base_text};background-color:{color_hex}33;"
+            f"border-bottom:1px solid {border};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
 
     return f"""
-    <div style="overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;">
+    <div style="overflow-x:auto;background-color:{card_bg};border-radius:8px;padding:4px;">
     <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">
       <thead><tr>
-        <th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};
-        border-bottom:2px solid {BORDER};'>Threshold</th>
+        <th style='padding:8px 12px;text-align:left;color:{base_text};
+        border-bottom:2px solid {border};'>Threshold</th>
         {header_cells}
       </tr></thead>
       <tbody>{rows_html}</tbody>
     </table>
+    </div>
+    """
+
+
+def _pick_headline_threshold(data: dict, window_label: str):
+    """Among the non-1mm thresholds, find the *largest* threshold (mm) whose
+    probability still exceeds 50% -- e.g. if 5mm=98% and 20mm=55%, prefer
+    showing 20mm (the more severe level that's still fairly likely) rather
+    than 5mm (which is largely redundant with the 1mm 'any rain' figure)."""
+    for threshold in (100, 50, 20, 5):
+        val = data.get(threshold, {}).get(window_label)
+        if val is not None and val > 50:
+            return threshold, val
+    return None
+
+
+def render_summary_card_html(result: dict) -> str:
+    windows = result["windows"]
+    data = result["data"]
+    if not windows:
+        return ""
+
+    theme = _theme_colors()
+    card_bg, base_text, border = theme["card_bg"], theme["text"], theme["border"]
+
+    w = windows[0]
+    date_label = w["start_utc"].astimezone(PH_TZ).strftime("%a, %d %b %Y")
+    val_1mm = data.get(1, {}).get(w["label"])
+    val_1mm_str = f"{val_1mm:.0f}%" if val_1mm is not None else "—"
+
+    headline = _pick_headline_threshold(data, w["label"])
+    third_html = ""
+    if headline:
+        t_mm, t_val = headline
+        third_html = f"""
+        <div style="height:1px;background:{border};margin:10px 0;"></div>
+        <div style="font-size:10pt;color:{base_text};">
+          {t_val:.0f}% chance of rain (&ge; {t_mm} mm)
+        </div>
+        """
+
+    return f"""
+    <div style="max-width:280px;background-color:{card_bg};border:1px solid {border};
+    border-radius:12px;padding:16px 20px;text-align:center;font-family:sans-serif;">
+      <div style="font-size:10pt;font-weight:600;color:{base_text};">{date_label}</div>
+      <div style="height:1px;background:{border};margin:10px 0;"></div>
+      <div style="font-size:16pt;font-weight:800;color:{base_text};line-height:1.15;">{val_1mm_str}</div>
+      <div style="font-size:10pt;color:{base_text};margin-top:2px;">chance of rain (&ge; 1 mm)</div>
+      {third_html}
     </div>
     """
 
@@ -152,7 +212,10 @@ with col1:
 with col2:
     lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-if st.button("Get forecast", type="primary"):
+get_forecast_clicked = st.button("Get forecast", type="primary")
+elapsed_placeholder = st.empty()
+
+if get_forecast_clicked:
     request_started_at = time.time()
     try:
         result, was_cached = get_forecast_with_progress(lat, lon, lead_days)
@@ -160,14 +223,21 @@ if st.button("Get forecast", type="primary"):
         st.error(f"Failed to fetch forecast: {e}")
         st.stop()
 
+    elapsed = time.time() - request_started_at
+    elapsed_placeholder.caption(
+        f"⏱️ Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
+    )
+
     if not result["windows"]:
         st.warning("No aligned 00 UTC windows available for this range.")
         st.stop()
 
-    if was_cached:
-        st.caption("⚡ Served from cache (fetched earlier this session).")
-    elif result.get("fetch_mode") == "separate":
+    if result.get("fetch_mode") == "separate" and not was_cached:
         st.caption("⚠️ Combined request wasn't available; fetched thresholds individually (slower).")
+
+    st.markdown(render_summary_card_html(result), unsafe_allow_html=True)
+
+    st.divider()
 
     # --- Run / location / grid info ---
     run_time = result["run_time"]
@@ -194,14 +264,11 @@ if st.button("Get forecast", type="primary"):
 
     st.caption(
         "\"Last updated\" and \"Next update\" are estimated from ECMWF's published "
-        "dissemination schedule, not a live timestamp from the server — see note below."
+        "dissemination schedule, not a live timestamp from the server."
     )
 
     st.subheader("Exceedance probability by threshold and 24h window (00 UTC – 00 UTC)")
     st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
-
-    elapsed = time.time() - request_started_at
-    st.caption(f"⏱️ Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else ""))
 else:
     st.info("Choose a location and click **Get forecast**.")
