@@ -30,7 +30,7 @@ AVAILABLE_THRESHOLDS_MM = [1, 5, 20, 50, 100]
 THRESHOLD_COLORS = {
     1: "#00BFFF",
     5: "#FFFF00",
-    20: "#FF8C00",
+    20: "#FFA500",
     50: "#FF0000",
     100: "#800080",
 }
