@@ -12,6 +12,16 @@ from ecmwf_client import (
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
 
+# Load the actual webfont Streamlit's own UI uses (Source Sans) so the
+# tables' font-family declaration has something real to point to, instead
+# of silently falling back to each browser's own default font.
+st.markdown(
+    '<link href="https://fonts.googleapis.com/css2?'
+    "family=Source+Sans+3:wght@400;600;700;800&display=swap\" "
+    'rel="stylesheet">',
+    unsafe_allow_html=True,
+)
+
 st.title("🌧️ Rainfall Exceedance Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
@@ -74,22 +84,32 @@ BASE_TEXT = "inherit"
 CARD_BG = "transparent"
 BORDER = "rgba(128,128,128,0.35)"
 
-# Neutral gray that low-probability cells blend toward. A cell's color is
-# pre-blended toward this and rendered as a SOLID (opaque) color, rather
-# than using real CSS opacity -- true opacity blends against whatever's
-# actually behind it, so the same "40% red" looks like a clean pastel on a
-# white page but a muddy, hard-to-read smear on a dark one. Pre-blending
-# ourselves means the result looks identical regardless of page theme.
-_NEUTRAL_BASE_RGB = (170, 170, 170)
+# Streamlit's default body font is Source Sans (Adobe's open-source
+# typeface). Just naming it in font-family isn't enough -- if the font
+# file isn't actually loaded, the browser silently falls back to its own
+# default (SF Pro on iOS, Arial on Windows), which was happening here. The
+# webfont is loaded explicitly via Google Fonts in the script below.
+FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
 
-# Streamlit's own default UI font (its "sans serif" theme option resolves
-# to this), so tables visually match the rest of the app instead of
-# falling back to the browser's generic sans-serif (usually Arial).
-FONT_STACK = "'Source Sans Pro', 'Source Sans 3', -apple-system, sans-serif"
+
+def _neutral_base_rgb() -> tuple[int, int, int]:
+    """Low-probability cells blend toward this color, rendered as a SOLID
+    (opaque) color rather than true CSS opacity -- true opacity blends
+    against whatever's actually behind it, so the same "40% red" looked
+    like a clean pastel on a white page but a muddy smear on a dark one.
+    White for light mode / black for dark mode gives the vivid look real
+    transparency would give on a matching background, without actually
+    depending on the (unknown) page background. Falls back to white if
+    theme detection isn't available."""
+    try:
+        is_dark = st.context.theme.type == "dark"
+    except Exception:
+        is_dark = False
+    return (0, 0, 0) if is_dark else (255, 255, 255)
 
 
 def _blend_toward_neutral(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
-    nr, ng, nb = _NEUTRAL_BASE_RGB
+    nr, ng, nb = _neutral_base_rgb()
     return (
         round(r * alpha + nr * (1 - alpha)),
         round(g * alpha + ng * (1 - alpha)),
