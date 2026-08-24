@@ -46,8 +46,21 @@ def _param_for(threshold_mm: int) -> str:
 
 
 def _request_step_labels(max_lead_days: int) -> list[str]:
-    """All 24h windows in 12h increments, e.g. '0-24', '12-36', ... '336-360'."""
-    n = (max_lead_days * 24 - 24) // 12 + 1
+    """All 24h windows in 12h increments, e.g. '0-24', '12-36', ... up to
+    just past max_lead_days*24 hours.
+
+    Requests a 12h buffer beyond the requested range. Reason: whether the
+    latest run is 00Z or 12Z changes which steps align to 00 UTC starts --
+    a 12Z run "loses" one aligned window near the end of the requested
+    range compared to a 00Z run, for the same max_lead_days. The buffer
+    ensures both parities have enough steps to produce the full requested
+    day count; fetch_forecast_table() then truncates to exactly
+    max_lead_days after aligning. Capped at 360h (ECMWF's max ENS step) --
+    requesting the full 15 days on a 12Z run may still fall one day short,
+    since there's no more data to buffer with at that point."""
+    target_hours = max_lead_days * 24
+    buffered_hours = min(target_hours + 12, 360)
+    n = (buffered_hours - 24) // 12 + 1
     return [f"{12 * i}-{12 * i + 24}" for i in range(n)]
 
 
@@ -230,6 +243,7 @@ def fetch_forecast_table(
             "start_utc": start_utc,
             "end_utc": end_utc,
         })
+    windows = windows[:max_lead_days]
 
     data = {
         threshold_mm: {
