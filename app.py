@@ -142,67 +142,132 @@ def render_table_html(result: dict) -> str:
             f"border-bottom:1px solid {border};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
 
-    return f"""
-    <div style="overflow-x:auto;background-color:{card_bg};border-radius:8px;padding:4px;">
-    <table style="border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;">
-      <thead><tr>
-        <th style='padding:8px 12px;text-align:left;color:{base_text};
-        border-bottom:2px solid {border};'>Threshold</th>
-        {header_cells}
-      </tr></thead>
-      <tbody>{rows_html}</tbody>
-    </table>
-    </div>
-    """
+    # NOTE: no leading whitespace on any line below -- st.markdown treats
+    # 4+ leading spaces as a Markdown code block, which silently breaks
+    # raw-HTML rendering (that was the root cause of a bug reported earlier).
+    return (
+        f"<div style=\"overflow-x:auto;background-color:{card_bg};border-radius:8px;padding:4px;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;\">"
+        f"<thead><tr>"
+        f"<th style='padding:8px 12px;text-align:left;color:{base_text};border-bottom:2px solid {border};'>Threshold</th>"
+        f"{header_cells}"
+        f"</tr></thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table>"
+        f"</div>"
+    )
 
 
 def _pick_headline_threshold(data: dict, window_label: str):
-    """Among the non-1mm thresholds, find the *largest* threshold (mm) whose
-    probability still exceeds 50% -- e.g. if 5mm=98% and 20mm=55%, prefer
-    showing 20mm (the more severe level that's still fairly likely) rather
-    than 5mm (which is largely redundant with the 1mm 'any rain' figure)."""
+    """Normally the headline figure is 1mm ('any rain'). Exception: if a
+    higher threshold has reached >=95% (i.e. it's about as certain as the
+    1mm figure would be), show that more severe threshold instead -- it's
+    more informative than a near-guaranteed 'any rain' number. Among
+    thresholds that qualify, the most severe (largest mm) one is used."""
     for threshold in (100, 50, 20, 5):
         val = data.get(threshold, {}).get(window_label)
-        if val is not None and val > 50:
+        if val is not None and val >= 95:
+            return threshold, val
+    val_1mm = data.get(1, {}).get(window_label)
+    if val_1mm is None:
+        return None
+    return 1, val_1mm
+
+
+def _pick_secondary_threshold(data: dict, window_label: str, headline_threshold: int):
+    """The next more severe threshold above the headline that still clears
+    50% -- e.g. if 5mm became the headline (>=95%), show the next threshold
+    above 5mm (checked 100 -> 50 -> 20, most severe first) that's >=50%."""
+    for threshold in (100, 50, 20, 5, 1):
+        if threshold <= headline_threshold:
+            continue
+        val = data.get(threshold, {}).get(window_label)
+        if val is not None and val >= 50:
             return threshold, val
     return None
 
 
-def render_summary_card_html(result: dict) -> str:
-    windows = result["windows"]
+def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
+    """Shared with the full table: background = threshold color at
+    opacity=value/100, text color chosen for contrast against that fill."""
+    theme = _theme_colors()
+    base_text = theme["text"]
+    if val is None:
+        return "background-color:transparent;", base_text
+    r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
+    alpha = max(0.0, min(1.0, val / 100))
+    bg = f"background-color:rgba({r},{g},{b},{alpha:.2f});"
+    luminance = _relative_luminance(r, g, b)
+    text_color = _cell_text_color(luminance, alpha, base_text)
+    return bg, text_color
+
+
+def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
+    windows = result["windows"][:num_days]
     data = result["data"]
     if not windows:
         return ""
 
     theme = _theme_colors()
-    card_bg, base_text, border = theme["card_bg"], theme["text"], theme["border"]
+    base_text, border = theme["text"], theme["border"]
 
-    w = windows[0]
-    date_label = w["start_utc"].astimezone(PH_TZ).strftime("%a, %d %b %Y")
-    val_1mm = data.get(1, {}).get(w["label"])
-    val_1mm_str = f"{val_1mm:.0f}%" if val_1mm is not None else "—"
+    header_cells = "".join(
+        f"<th style='padding:10px 16px;font-size:10pt;font-weight:600;text-align:center;"
+        f"color:{base_text};border-bottom:2px solid {border};'>"
+        f"{w['start_utc'].astimezone(PH_TZ).strftime('%a, %d %b')}</th>"
+        for w in windows
+    )
 
-    headline = _pick_headline_threshold(data, w["label"])
-    third_html = ""
-    if headline:
+    headline_cells = ""
+    secondary_cells = ""
+    for w in windows:
+        label = w["label"]
+        headline = _pick_headline_threshold(data, label)
+
+        if headline is None:
+            headline_cells += (
+                f"<td style='padding:14px 16px;text-align:center;color:{base_text};"
+                f"border-bottom:1px solid {border};'>—</td>"
+            )
+            secondary_cells += (
+                f"<td style='padding:10px 16px;text-align:center;color:{base_text};"
+                f"font-size:10pt;border-bottom:1px solid {border};'>—</td>"
+            )
+            continue
+
         t_mm, t_val = headline
-        third_html = f"""
-        <div style="height:1px;background:{border};margin:10px 0;"></div>
-        <div style="font-size:10pt;color:{base_text};">
-          {t_val:.0f}% chance of rain (&ge; {t_mm} mm)
-        </div>
-        """
+        bg, text_color = _cell_style(t_mm, t_val)
+        headline_cells += (
+            f"<td style='padding:14px 16px;text-align:center;{bg}"
+            f"border-bottom:1px solid {border};'>"
+            f"<div style=\"font-size:16pt;font-weight:800;color:{text_color};line-height:1.15;\">{t_val:.0f}%</div>"
+            f"<div style=\"font-size:10pt;font-weight:400;color:{text_color};margin-top:2px;\">chance of rain (&ge; {t_mm} mm)</div>"
+            f"</td>"
+        )
 
-    return f"""
-    <div style="max-width:280px;background-color:{card_bg};border:1px solid {border};
-    border-radius:12px;padding:16px 20px;text-align:center;font-family:sans-serif;">
-      <div style="font-size:10pt;font-weight:600;color:{base_text};">{date_label}</div>
-      <div style="height:1px;background:{border};margin:10px 0;"></div>
-      <div style="font-size:16pt;font-weight:800;color:{base_text};line-height:1.15;">{val_1mm_str}</div>
-      <div style="font-size:10pt;color:{base_text};margin-top:2px;">chance of rain (&ge; 1 mm)</div>
-      {third_html}
-    </div>
-    """
+        secondary = _pick_secondary_threshold(data, label, t_mm)
+        if secondary:
+            s_mm, s_val = secondary
+            s_bg, s_text_color = _cell_style(s_mm, s_val)
+            secondary_cells += (
+                f"<td style='padding:10px 16px;text-align:center;{s_bg}color:{s_text_color};"
+                f"font-size:10pt;border-bottom:1px solid {border};'>"
+                f"{s_val:.0f}% chance of rain (&ge; {s_mm} mm)</td>"
+            )
+        else:
+            secondary_cells += (
+                f"<td style='padding:10px 16px;text-align:center;color:{base_text};"
+                f"font-size:10pt;border-bottom:1px solid {border};'>—</td>"
+            )
+
+    return (
+        f"<div style=\"overflow-x:auto;border-radius:8px;padding:4px;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;font-family:sans-serif;\">"
+        f"<thead><tr>{header_cells}</tr></thead>"
+        f"<tbody><tr>{headline_cells}</tr><tr>{secondary_cells}</tr></tbody>"
+        f"</table>"
+        f"</div>"
+    )
 
 
 col1, col2 = st.columns([2, 1])
@@ -235,11 +300,7 @@ if get_forecast_clicked:
     if result.get("fetch_mode") == "separate" and not was_cached:
         st.caption("⚠️ Combined request wasn't available; fetched thresholds individually (slower).")
 
-    st.markdown(render_summary_card_html(result), unsafe_allow_html=True)
-
-    st.divider()
-
-    # --- Run / location / grid info ---
+    # --- Run / location / grid info (shown first, above both tables) ---
     run_time = result["run_time"]
     info_col1, info_col2 = st.columns(2)
     with info_col1:
@@ -267,7 +328,18 @@ if get_forecast_clicked:
         "dissemination schedule, not a live timestamp from the server."
     )
 
-    st.subheader("Exceedance probability by threshold and 24h window (00 UTC – 00 UTC)")
+    st.divider()
+
+    # --- 3-day forecast (essential info only) ---
+    st.subheader("3-day forecast")
+    st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
+    st.caption("All dates shown in UTC+8 (Philippine Time).")
+
+    st.divider()
+
+    # --- Full detailed table ---
+    num_days_shown = len(result["windows"])
+    st.subheader(f"Full {num_days_shown}-days forecast")
     st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
 else:
