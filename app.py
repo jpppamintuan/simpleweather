@@ -17,8 +17,8 @@ st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each t
 
 LOCATIONS = {
     "Guiguinto, Bulacan": (14.842279, 120.859681),
-    "Mandaluyong": (14.576975, 121.052521),
-    "Makati": (14.555539, 121.002918),
+    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
+    "Makati City, Metro Manila": (14.555539, 121.002918),
     "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
     "Bacoor, Cavite": (14.454261, 120.941266),
 }
@@ -61,40 +61,55 @@ def _hex_to_rgb(hex_color: str):
 
 def _relative_luminance(r: int, g: int, b: int) -> float:
     """Perceived brightness (0=black, 1=white). Used to decide whether a
-    threshold's color needs light or dark text on top of it."""
+    color needs light or dark text on top of it."""
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
 
-# Default text/background for cells that AREN'T deliberately colored by a
-# probability value: instead of trying to detect Streamlit's active theme
-# (two different approaches -- CSS custom properties, then st.context.theme
-# -- both proved unreliable across environments), just don't set an
-# explicit color at all. "inherit"/"transparent" let these elements pick
-# up whatever Streamlit is actually rendering around them, so they're
-# correct in light mode, dark mode, or any custom theme, with no detection
-# logic to go stale or misfire.
+# Default text/background for elements that AREN'T deliberately colored by
+# a probability value (date headers, "--" placeholders, borders): just
+# don't set an explicit color. "inherit"/"transparent" let these pick up
+# whatever Streamlit is actually rendering around them, so they're correct
+# in light mode, dark mode, or any custom theme, with no detection needed.
 BASE_TEXT = "inherit"
 CARD_BG = "transparent"
 BORDER = "rgba(128,128,128,0.35)"
 
+# Neutral gray that low-probability cells blend toward. A cell's color is
+# pre-blended toward this and rendered as a SOLID (opaque) color, rather
+# than using real CSS opacity -- true opacity blends against whatever's
+# actually behind it, so the same "40% red" looks like a clean pastel on a
+# white page but a muddy, hard-to-read smear on a dark one. Pre-blending
+# ourselves means the result looks identical regardless of page theme.
+_NEUTRAL_BASE_RGB = (170, 170, 170)
+
+# Streamlit's own default UI font (its "sans serif" theme option resolves
+# to this), so tables visually match the rest of the app instead of
+# falling back to the browser's generic sans-serif (usually Arial).
+FONT_STACK = "'Source Sans Pro', 'Source Sans 3', -apple-system, sans-serif"
+
+
+def _blend_toward_neutral(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
+    nr, ng, nb = _NEUTRAL_BASE_RGB
+    return (
+        round(r * alpha + nr * (1 - alpha)),
+        round(g * alpha + ng * (1 - alpha)),
+        round(b * alpha + nb * (1 - alpha)),
+    )
+
 
 def _fmt_ph(dt: datetime) -> str:
-    return dt.astimezone(PH_TZ).strftime("%a, %d %b %Y %I%p")
+    return dt.astimezone(PH_TZ).strftime("%a, %d %b %I%p")
 
 
 def _fmt_window(w: dict) -> str:
     return f"{_fmt_ph(w['start_utc'])}<br>to<br>{_fmt_ph(w['end_utc'])}"
 
 
-def _cell_text_color(threshold_luminance: float, alpha: float) -> str:
-    """Below a certain fill strength the tint is faint enough that the
-    page's own text color still reads fine on it. Above that, pick black
-    or white based on how bright the *threshold's* color is -- e.g. yellow
-    (5mm) always needs dark text even at 100% fill, while maroon (50mm)
-    always needs white text, regardless of the probability value."""
-    if alpha < 0.35:
-        return BASE_TEXT
-    return "#111111" if threshold_luminance > 0.5 else "#ffffff"
+def _cell_text_color(blended_luminance: float) -> str:
+    """Pick black or white text based on the *actual rendered* blended
+    color's brightness -- correct at every probability level now that the
+    background is a solid pre-blended color rather than true transparency."""
+    return "#111111" if blended_luminance > 0.5 else "#ffffff"
 
 
 def render_table_html(result: dict) -> str:
@@ -111,7 +126,6 @@ def render_table_html(result: dict) -> str:
     for threshold in AVAILABLE_THRESHOLDS_MM:
         color_hex = THRESHOLD_COLORS[threshold]
         r, g, b = _hex_to_rgb(color_hex)
-        luminance = _relative_luminance(r, g, b)
         row_cells = ""
         for w in windows:
             val = data[threshold].get(w["label"])
@@ -122,8 +136,9 @@ def render_table_html(result: dict) -> str:
                 )
                 continue
             alpha = max(0.0, min(1.0, val / 100))
-            bg = f"rgba({r},{g},{b},{alpha:.2f})"
-            text_color = _cell_text_color(luminance, alpha)
+            br, bg_g, bb = _blend_toward_neutral(r, g, b, alpha)
+            bg = f"rgb({br},{bg_g},{bb})"
+            text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
             row_cells += (
                 f"<td style='padding:8px 12px;text-align:center;"
                 f"background-color:{bg};color:{text_color};font-weight:600;"
@@ -140,7 +155,7 @@ def render_table_html(result: dict) -> str:
     # raw-HTML rendering (that was the root cause of a bug reported earlier).
     return (
         f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;font-family:sans-serif;font-size:13px;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;font-family:{FONT_STACK};font-size:13px;\">"
         f"<thead><tr>"
         f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Threshold</th>"
         f"{header_cells}"
@@ -186,15 +201,15 @@ def _pick_secondary_threshold(data: dict, window_label: str, headline_threshold:
 
 
 def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
-    """Shared with the full table: background = threshold color at
-    opacity=value/100, text color chosen for contrast against that fill."""
+    """Shared with the full table: solid pre-blended color by value,
+    text color chosen for contrast against the actual rendered color."""
     if val is None:
         return "background-color:transparent;", BASE_TEXT
     r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
     alpha = max(0.0, min(1.0, val / 100))
-    bg = f"background-color:rgba({r},{g},{b},{alpha:.2f});"
-    luminance = _relative_luminance(r, g, b)
-    text_color = _cell_text_color(luminance, alpha)
+    br, bg_g, bb = _blend_toward_neutral(r, g, b, alpha)
+    bg = f"background-color:rgb({br},{bg_g},{bb});"
+    text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
     return bg, text_color
 
 
@@ -255,7 +270,7 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
 
     return (
         f"<div style=\"overflow-x:auto;border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;font-family:sans-serif;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;font-family:{FONT_STACK};\">"
         f"<thead><tr>{header_cells}</tr></thead>"
         f"<tbody><tr>{headline_cells}</tr><tr>{secondary_cells}</tr></tbody>"
         f"</table>"
@@ -293,7 +308,22 @@ if get_forecast_clicked:
     if result.get("fetch_mode") == "separate" and not was_cached:
         st.caption("⚠️ Combined request wasn't available; fetched thresholds individually (slower).")
 
-    # --- Run / location / grid info (shown first, above both tables) ---
+    # --- 3-day summary (essential info only) ---
+    st.subheader(f"3-day summary for {location_name}")
+    st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
+    st.caption("All dates shown in UTC+8 (Philippine Time).")
+
+    st.divider()
+
+    # --- Full detailed table ---
+    num_days_shown = len(result["windows"])
+    st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
+    st.markdown(render_table_html(result), unsafe_allow_html=True)
+    st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
+
+    st.divider()
+
+    # --- Run / location / grid info (moved to the bottom) ---
     run_time = result["run_time"]
     info_col1, info_col2 = st.columns(2)
     with info_col1:
@@ -320,20 +350,5 @@ if get_forecast_clicked:
         "\"Last updated\" and \"Next update\" are estimated from ECMWF's published "
         "dissemination schedule, not a live timestamp from the server."
     )
-
-    st.divider()
-
-    # --- 3-day forecast (essential info only) ---
-    st.subheader("3-day forecast")
-    st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
-    st.caption("All dates shown in UTC+8 (Philippine Time).")
-
-    st.divider()
-
-    # --- Full detailed table ---
-    num_days_shown = len(result["windows"])
-    st.subheader(f"Full {num_days_shown}-days forecast")
-    st.markdown(render_table_html(result), unsafe_allow_html=True)
-    st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
 else:
     st.info("Choose a location and click **Get forecast**.")
