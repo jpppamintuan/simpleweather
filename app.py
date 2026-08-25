@@ -4,7 +4,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
-import streamlit.components.v1 as components
 
 from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
@@ -472,44 +471,7 @@ with col1:
 with col2:
     lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-button_col, refresh_col = st.columns([1, 1])
-with button_col:
-    get_forecast_clicked = st.button("Get forecast", type="primary")
-with refresh_col:
-    # Toggling Streamlit's light/dark mode doesn't trigger a Python rerun,
-    # so table colors (computed in Python, baked into static HTML) can't
-    # react to it live. This button doesn't do anything special itself --
-    # merely being clicked causes a rerun, and since rendering below always
-    # re-runs from session_state (not just on "Get forecast"), that's
-    # enough to recompute colors against whatever theme is active now.
-    refresh_clicked = st.button("🎨 Refresh colors for current theme")
-
-# Auto-poll workaround: since there's no way for Python to observe a theme
-# toggle directly, this periodically re-clicks the refresh button above
-# (every 15s) so colors self-correct within a few seconds of a toggle
-# instead of requiring a manual click. Runs inside a zero-height iframe;
-# st.markdown's unsafe_allow_html doesn't execute <script> tags at all
-# (React strips them), so this needs components.v1.html instead, which
-# renders in a real iframe where scripts do run. window.parent is used to
-# reach back into the main app's DOM, since the iframe is same-origin.
-components.html(
-    """
-    <script>
-    setInterval(function() {
-        try {
-            const buttons = window.parent.document.querySelectorAll('button');
-            for (const btn of buttons) {
-                if (btn.innerText && btn.innerText.includes('Refresh colors for current theme')) {
-                    btn.click();
-                    break;
-                }
-            }
-        } catch (e) {}
-    }, 15000);
-    </script>
-    """,
-    height=0,
-)
+get_forecast_clicked = st.button("Get forecast", type="primary")
 
 elapsed_placeholder = st.empty()
 
