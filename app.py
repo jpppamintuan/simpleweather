@@ -1,3 +1,4 @@
+import colorsys
 import time
 from datetime import datetime, timezone
 
@@ -35,18 +36,32 @@ LOCATIONS = {
 
 CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
 
+# Shared across ALL browser sessions on this running server process (unlike
+# st.session_state, which is per-session). This is what makes repeat
+# requests from *different* users/tabs instant instead of re-fetching.
+# Caveat: lives in memory only -- cleared on app reboot/redeploy/sleep, and
+# wouldn't be shared across multiple server replicas if this app were ever
+# scaled beyond a single instance (not a concern for the current setup).
+_GLOBAL_CACHE: dict = {}
+
 
 def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
-    """Session-level cache (per browser session) so repeat views of the same
-    location/range are instant, while a genuinely new fetch shows real
-    progress reported directly from inside fetch_forecast_table."""
-    cache = st.session_state.setdefault("_forecast_cache", {})
+    """Three-tier lookup: this session's own cache (fastest) -> the
+    cross-session global cache (any other user may have already fetched
+    this) -> a genuine fetch, with real progress reported from inside
+    fetch_forecast_table."""
     key = (lat, lon, lead_days)
     now = time.time()
 
-    cached = cache.get(key)
+    session_cache = st.session_state.setdefault("_forecast_cache", {})
+    cached = session_cache.get(key)
     if cached and (now - cached["ts"] < CACHE_TTL_SECONDS):
-        return cached["result"], True  # cache hit
+        return cached["result"], True
+
+    global_entry = _GLOBAL_CACHE.get(key)
+    if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
+        session_cache[key] = global_entry  # promote into this session too
+        return global_entry["result"], True
 
     progress = st.progress(0, text="Connecting to ECMWF Open Data...")
 
@@ -60,7 +75,9 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
         time.sleep(0.2)
         progress.empty()
 
-    cache[key] = {"ts": now, "result": result}
+    entry = {"ts": now, "result": result}
+    session_cache[key] = entry
+    _GLOBAL_CACHE[key] = entry
     return result, False
 
 
@@ -93,14 +110,11 @@ FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
 
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
-    """Low-probability cells blend toward this color, rendered as a SOLID
-    (opaque) color rather than true CSS opacity -- true opacity blends
-    against whatever's actually behind it, so the same "40% red" looked
-    like a clean pastel on a white page but a muddy smear on a dark one.
-    White for light mode / black for dark mode gives the vivid look real
-    transparency would give on a matching background, without actually
-    depending on the (unknown) page background. Falls back to white if
-    theme detection isn't available."""
+    """The <5% tier's color: white for light mode, black for dark mode.
+    Rendered as a SOLID (opaque) color rather than true CSS opacity -- true
+    opacity blends against whatever's actually behind it, so the same
+    color looked like a clean pastel on a white page but a muddy smear on
+    a dark one. Falls back to white if theme detection isn't available."""
     try:
         is_dark = st.context.theme.type == "dark"
     except Exception:
@@ -109,12 +123,71 @@ def _neutral_base_rgb() -> tuple[int, int, int]:
 
 
 def _blend_toward_neutral(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
+    """Standard tier color: scale toward the neutral (white/black) base.
+    This darkens/lightens while keeping saturation at 100%, which reads
+    fine for red, blue, purple, yellow -- but not orange, see below."""
     nr, ng, nb = _neutral_base_rgb()
     return (
         round(r * alpha + nr * (1 - alpha)),
         round(g * alpha + ng * (1 - alpha)),
         round(b * alpha + nb * (1 - alpha)),
     )
+
+
+def _desaturated_tier_rgb(r: int, g: int, b: int, target_saturation: float) -> tuple[int, int, int]:
+    """Alternate tier color: keep the hue and lightness, only reduce
+    saturation. Used for orange (20mm) instead of _blend_toward_neutral --
+    darkening pure orange toward black makes it read as "brown" (there's
+    no separate name for "dark orange" in common usage the way there is
+    for dark red/blue/purple). Desaturating toward a muted/pastel version
+    at roughly the same lightness avoids that entirely, and -- as a bonus
+    -- looks reasonable on both light and dark pages without needing to
+    know which one is active, since it isn't heading toward black or
+    white."""
+    h, l, _s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    nr, ng, nb = colorsys.hls_to_rgb(h, l, target_saturation)
+    return round(nr * 255), round(ng * 255), round(nb * 255)
+
+
+# Discrete color tiers instead of a continuous gradient -- easier to read
+# at a glance, like a legend, and sidesteps needing "good at every possible
+# opacity" colors. Boundaries match the requested scheme:
+#   <5%: neutral (white/black)   >=95%: pure base color
+#   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
+_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
+_TIER_SATURATION = {"tone3": 0.25, "tone2": 0.55, "tone1": 0.80}
+
+# Thresholds that use saturation-based tiers instead of the standard
+# lightness-based ones. Currently just 20mm/orange.
+_DESATURATE_THRESHOLDS = {20}
+
+
+def _tier_for_value(val: float) -> str:
+    v = round(val)  # use the *displayed* value so tier and label never disagree
+    if v < 5:
+        return "neutral"
+    elif v < 35:
+        return "tone3"
+    elif v < 65:
+        return "tone2"
+    elif v < 95:
+        return "tone1"
+    return "base"
+
+
+def _cell_rgb_for_value(threshold_mm: int, val: float) -> tuple[int, int, int]:
+    tier = _tier_for_value(val)
+    if tier == "neutral":
+        return _neutral_base_rgb()
+
+    r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
+    if tier == "base":
+        return r, g, b
+
+    if threshold_mm in _DESATURATE_THRESHOLDS:
+        return _desaturated_tier_rgb(r, g, b, _TIER_SATURATION[tier])
+
+    return _blend_toward_neutral(r, g, b, _TIER_FILL_ALPHA[tier])
 
 
 def _fmt_ph(dt: datetime) -> str:
@@ -145,7 +218,6 @@ def render_table_html(result: dict) -> str:
     rows_html = ""
     for threshold in AVAILABLE_THRESHOLDS_MM:
         color_hex = THRESHOLD_COLORS[threshold]
-        r, g, b = _hex_to_rgb(color_hex)
         row_cells = ""
         for w in windows:
             val = data[threshold].get(w["label"])
@@ -155,8 +227,7 @@ def render_table_html(result: dict) -> str:
                     f"border-bottom:1px solid {BORDER};'>—</td>"
                 )
                 continue
-            alpha = max(0.0, min(1.0, val / 100))
-            br, bg_g, bb = _blend_toward_neutral(r, g, b, alpha)
+            br, bg_g, bb = _cell_rgb_for_value(threshold, val)
             bg = f"rgb({br},{bg_g},{bb})"
             text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
             row_cells += (
@@ -221,13 +292,11 @@ def _pick_secondary_threshold(data: dict, window_label: str, headline_threshold:
 
 
 def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
-    """Shared with the full table: solid pre-blended color by value,
+    """Shared with the full table: same discrete-tier color by value,
     text color chosen for contrast against the actual rendered color."""
     if val is None:
         return "background-color:transparent;", BASE_TEXT
-    r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
-    alpha = max(0.0, min(1.0, val / 100))
-    br, bg_g, bb = _blend_toward_neutral(r, g, b, alpha)
+    br, bg_g, bb = _cell_rgb_for_value(threshold_mm, val)
     bg = f"background-color:rgb({br},{bg_g},{bb});"
     text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
     return bg, text_color
@@ -305,7 +374,18 @@ with col1:
 with col2:
     lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-get_forecast_clicked = st.button("Get forecast", type="primary")
+button_col, refresh_col = st.columns([1, 1])
+with button_col:
+    get_forecast_clicked = st.button("Get forecast", type="primary")
+with refresh_col:
+    # Toggling Streamlit's light/dark mode doesn't trigger a Python rerun,
+    # so table colors (computed in Python, baked into static HTML) can't
+    # react to it live. This button doesn't do anything special itself --
+    # merely being clicked causes a rerun, and since rendering below always
+    # re-runs from session_state (not just on "Get forecast"), that's
+    # enough to recompute colors against whatever theme is active now.
+    refresh_clicked = st.button("🎨 Refresh colors for current theme")
+
 elapsed_placeholder = st.empty()
 
 if get_forecast_clicked:
@@ -315,8 +395,23 @@ if get_forecast_clicked:
     except Exception as e:
         st.error(f"Failed to fetch forecast: {e}")
         st.stop()
-
     elapsed = time.time() - request_started_at
+
+    st.session_state["last_result"] = result
+    st.session_state["last_location_name"] = location_name
+    st.session_state["last_lat"] = lat
+    st.session_state["last_lon"] = lon
+    st.session_state["last_was_cached"] = was_cached
+    st.session_state["last_elapsed"] = elapsed
+
+if "last_result" in st.session_state:
+    result = st.session_state["last_result"]
+    location_name = st.session_state["last_location_name"]
+    lat = st.session_state["last_lat"]
+    lon = st.session_state["last_lon"]
+    was_cached = st.session_state["last_was_cached"]
+    elapsed = st.session_state["last_elapsed"]
+
     elapsed_placeholder.caption(
         f"⏱️ Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
     )
