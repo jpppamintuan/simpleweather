@@ -28,8 +28,8 @@ st.title("🌧️ Rainfall Exceedance Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
-    "Guiguinto, Bulacan": (14.842279, 120.859681),
     "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
+    "Guiguinto, Bulacan": (14.842279, 120.859681),
     "Makati City, Metro Manila": (14.555539, 121.002918),
     "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
     "Bacoor, Cavite": (14.454261, 120.941266),
