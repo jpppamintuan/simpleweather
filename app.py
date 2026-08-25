@@ -183,14 +183,17 @@ def _relative_luminance(r: int, g: int, b: int) -> float:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
 
-# Default text/background for elements that AREN'T deliberately colored by
-# a probability value (date headers, "--" placeholders, borders): just
-# don't set an explicit color. "inherit"/"transparent" let these pick up
-# whatever Streamlit is actually rendering around them, so they're correct
-# in light mode, dark mode, or any custom theme, with no detection needed.
-BASE_TEXT = "inherit"
-CARD_BG = "transparent"
-BORDER = "rgba(128,128,128,0.35)"
+# The tables are permanently styled as light mode, regardless of the app's
+# actual theme. Previously these used "inherit"/"transparent" to follow
+# Streamlit's live theme -- but since data-cell backgrounds can't do the
+# same trick (they're deliberately colored, not just "whatever's behind
+# them"), that led to a half-and-half look after a theme toggle: reactive
+# text/borders next to frozen cell colors. Fixing everything to explicit
+# light-mode values sidesteps that entirely.
+BASE_TEXT = "#111111"
+CARD_BG = "#ffffff"
+BORDER = "rgba(0,0,0,0.12)"
+
 
 # Streamlit's default body font is Source Sans (Adobe's open-source
 # typeface). Just naming it in font-family isn't enough -- if the font
@@ -201,19 +204,15 @@ FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
 
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
-    """The <5% tier's color: white for light mode, black for dark mode.
-    This is now the ONLY tier that varies by theme -- every other tier
-    (tone3/tone2/tone1/base) tints toward white regardless of theme, so
-    the same probability always renders the same color in both modes.
-    Rendered as a SOLID (opaque) color rather than true CSS opacity -- true
-    opacity blends against whatever's actually behind it, so the same
-    color looked like a clean pastel on a white page but a muddy smear on
-    a dark one. Falls back to white if theme detection isn't available."""
-    try:
-        is_dark = st.context.theme.type == "dark"
-    except Exception:
-        is_dark = False
-    return (0, 0, 0) if is_dark else (255, 255, 255)
+    """The <5% tier's color: always white now, in both light and dark mode.
+    This used to switch to black in dark mode, but that required Python to
+    know the current theme -- and since toggling the theme doesn't trigger
+    a script rerun, that color would freeze at whatever it was when the
+    tables were last rendered until something else caused a rerun (which,
+    with the refresh button removed, might be never). Every tier now uses
+    the exact same white-tint rule regardless of theme, so there's nothing
+    left that can go stale."""
+    return (255, 255, 255)
 
 
 def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
