@@ -1,8 +1,10 @@
-import colorsys
+import json
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
@@ -39,10 +41,99 @@ CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
 # Shared across ALL browser sessions on this running server process (unlike
 # st.session_state, which is per-session). This is what makes repeat
 # requests from *different* users/tabs instant instead of re-fetching.
-# Caveat: lives in memory only -- cleared on app reboot/redeploy/sleep, and
-# wouldn't be shared across multiple server replicas if this app were ever
-# scaled beyond a single instance (not a concern for the current setup).
 _GLOBAL_CACHE: dict = {}
+
+# Persisted to disk so cached forecasts survive an app sleep/restart, not
+# just this process's uptime -- Streamlit Community Cloud puts free-tier
+# apps to sleep after inactivity, which wipes any purely in-memory cache.
+# Caveat: this is a best-effort convenience, not guaranteed persistence --
+# a full redeploy (new git push) or the app moving to a different host
+# would still reset it, since it's a plain file next to the script, not an
+# external database.
+_CACHE_FILE = Path(__file__).parent / "forecast_cache.json"
+
+
+def _serialize_result(result: dict) -> dict:
+    def dt(x):
+        return x.isoformat() if x else None
+
+    return {
+        "run_time": dt(result["run_time"]),
+        "grid_lat": result["grid_lat"],
+        "grid_lon": result["grid_lon"],
+        "windows": [
+            {"label": w["label"], "end_step": w["end_step"],
+             "start_utc": dt(w["start_utc"]), "end_utc": dt(w["end_utc"])}
+            for w in result["windows"]
+        ],
+        "data": {str(k): v for k, v in result["data"].items()},
+        "available_since": dt(result["available_since"]),
+        "next_expected": dt(result["next_expected"]),
+        "downloaded_bytes": result.get("downloaded_bytes"),
+        "fetch_mode": result.get("fetch_mode"),
+    }
+
+
+def _deserialize_result(d: dict) -> dict:
+    def pdt(s):
+        return datetime.fromisoformat(s) if s else None
+
+    return {
+        "run_time": pdt(d["run_time"]),
+        "grid_lat": d["grid_lat"],
+        "grid_lon": d["grid_lon"],
+        "windows": [
+            {"label": w["label"], "end_step": w["end_step"],
+             "start_utc": pdt(w["start_utc"]), "end_utc": pdt(w["end_utc"])}
+            for w in d["windows"]
+        ],
+        "data": {int(k): v for k, v in d["data"].items()},
+        "available_since": pdt(d["available_since"]),
+        "next_expected": pdt(d["next_expected"]),
+        "downloaded_bytes": d.get("downloaded_bytes"),
+        "fetch_mode": d.get("fetch_mode"),
+    }
+
+
+def _cache_key_to_str(key: tuple) -> str:
+    lat, lon, lead_days = key
+    return f"{lat}|{lon}|{lead_days}"
+
+
+def _cache_key_from_str(s: str) -> tuple:
+    lat, lon, lead_days = s.split("|")
+    return (float(lat), float(lon), int(lead_days))
+
+
+def _load_disk_cache() -> None:
+    if not _CACHE_FILE.exists():
+        return
+    try:
+        raw = json.loads(_CACHE_FILE.read_text())
+        now = time.time()
+        for key_str, entry in raw.items():
+            if now - entry["ts"] >= CACHE_TTL_SECONDS:
+                continue  # skip stale entries rather than loading dead data
+            _GLOBAL_CACHE[_cache_key_from_str(key_str)] = {
+                "ts": entry["ts"],
+                "result": _deserialize_result(entry["result"]),
+            }
+    except Exception:
+        pass  # corrupt or unreadable cache file -- just start fresh
+
+
+def _save_disk_cache() -> None:
+    try:
+        raw = {
+            _cache_key_to_str(key): {"ts": entry["ts"], "result": _serialize_result(entry["result"])}
+            for key, entry in _GLOBAL_CACHE.items()
+        }
+        _CACHE_FILE.write_text(json.dumps(raw))
+    except Exception:
+        pass  # best-effort -- a failed write shouldn't crash the app
+
+
+_load_disk_cache()  # populate the in-memory cache from disk once, at startup
 
 
 def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
@@ -78,6 +169,7 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
     entry = {"ts": now, "result": result}
     session_cache[key] = entry
     _GLOBAL_CACHE[key] = entry
+    _save_disk_cache()
     return result, False
 
 
@@ -134,19 +226,22 @@ def _blend_toward_neutral(r: int, g: int, b: int, alpha: float) -> tuple[int, in
     )
 
 
-def _desaturated_tier_rgb(r: int, g: int, b: int, target_saturation: float) -> tuple[int, int, int]:
-    """Alternate tier color: keep the hue and lightness, only reduce
-    saturation. Used for orange (20mm) instead of _blend_toward_neutral --
-    darkening pure orange toward black makes it read as "brown" (there's
-    no separate name for "dark orange" in common usage the way there is
-    for dark red/blue/purple). Desaturating toward a muted/pastel version
-    at roughly the same lightness avoids that entirely, and -- as a bonus
-    -- looks reasonable on both light and dark pages without needing to
-    know which one is active, since it isn't heading toward black or
-    white."""
-    h, l, _s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-    nr, ng, nb = colorsys.hls_to_rgb(h, l, target_saturation)
-    return round(nr * 255), round(ng * 255), round(nb * 255)
+def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
+    """Alternate tier color: blend toward WHITE specifically (not the
+    theme-dependent neutral), regardless of light/dark mode. Used for
+    orange (20mm) -- holding lightness constant while reducing saturation
+    still read as brown in practice, so this goes the other direction:
+    stay light instead of getting darker or muddier. Trade-off: unlike the
+    other colors, an orange cell won't visually recede into a dark page
+    the way white/black-neutral cells do -- it'll always show as a bright
+    chip. Also used for orange's <5% tier (instead of the usual
+    theme-based neutral) so the row doesn't jump from black straight to a
+    pale tint right at the 5% boundary."""
+    return (
+        round(r * alpha + 255 * (1 - alpha)),
+        round(g * alpha + 255 * (1 - alpha)),
+        round(b * alpha + 255 * (1 - alpha)),
+    )
 
 
 # Discrete color tiers instead of a continuous gradient -- easier to read
@@ -154,12 +249,14 @@ def _desaturated_tier_rgb(r: int, g: int, b: int, target_saturation: float) -> t
 # opacity" colors. Boundaries match the requested scheme:
 #   <5%: neutral (white/black)   >=95%: pure base color
 #   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
-_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
-_TIER_SATURATION = {"tone3": 0.25, "tone2": 0.55, "tone1": 0.80}
+_TIER_FILL_ALPHA = {"neutral": 0.0, "tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
 
-# Thresholds that use saturation-based tiers instead of the standard
-# lightness-based ones. Currently just 20mm/orange.
-_DESATURATE_THRESHOLDS = {20}
+# Thresholds that tint toward white instead of the standard theme-based
+# neutral. Currently just 20mm/orange -- darkened or desaturated-at-fixed-
+# lightness orange both still read as "brown" (there's no separate name
+# for "dark orange" in common usage the way there is for dark red/blue/
+# purple, so any reduction in brightness tends to get relabeled brown).
+_TINT_WHITE_THRESHOLDS = {20}
 
 
 def _tier_for_value(val: float) -> str:
@@ -177,16 +274,17 @@ def _tier_for_value(val: float) -> str:
 
 def _cell_rgb_for_value(threshold_mm: int, val: float) -> tuple[int, int, int]:
     tier = _tier_for_value(val)
+    r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
+
+    if threshold_mm in _TINT_WHITE_THRESHOLDS:
+        if tier == "base":
+            return r, g, b
+        return _tint_toward_white_rgb(r, g, b, _TIER_FILL_ALPHA[tier])
+
     if tier == "neutral":
         return _neutral_base_rgb()
-
-    r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
     if tier == "base":
         return r, g, b
-
-    if threshold_mm in _DESATURATE_THRESHOLDS:
-        return _desaturated_tier_rgb(r, g, b, _TIER_SATURATION[tier])
-
     return _blend_toward_neutral(r, g, b, _TIER_FILL_ALPHA[tier])
 
 
@@ -385,6 +483,33 @@ with refresh_col:
     # re-runs from session_state (not just on "Get forecast"), that's
     # enough to recompute colors against whatever theme is active now.
     refresh_clicked = st.button("🎨 Refresh colors for current theme")
+
+# Auto-poll workaround: since there's no way for Python to observe a theme
+# toggle directly, this periodically re-clicks the refresh button above
+# (every 15s) so colors self-correct within a few seconds of a toggle
+# instead of requiring a manual click. Runs inside a zero-height iframe;
+# st.markdown's unsafe_allow_html doesn't execute <script> tags at all
+# (React strips them), so this needs components.v1.html instead, which
+# renders in a real iframe where scripts do run. window.parent is used to
+# reach back into the main app's DOM, since the iframe is same-origin.
+components.html(
+    """
+    <script>
+    setInterval(function() {
+        try {
+            const buttons = window.parent.document.querySelectorAll('button');
+            for (const btn of buttons) {
+                if (btn.innerText && btn.innerText.includes('Refresh colors for current theme')) {
+                    btn.click();
+                    break;
+                }
+            }
+        } catch (e) {}
+    }, 15000);
+    </script>
+    """,
+    height=0,
+)
 
 elapsed_placeholder = st.empty()
 
