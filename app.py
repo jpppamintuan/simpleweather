@@ -202,6 +202,9 @@ FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
     """The <5% tier's color: white for light mode, black for dark mode.
+    This is now the ONLY tier that varies by theme -- every other tier
+    (tone3/tone2/tone1/base) tints toward white regardless of theme, so
+    the same probability always renders the same color in both modes.
     Rendered as a SOLID (opaque) color rather than true CSS opacity -- true
     opacity blends against whatever's actually behind it, so the same
     color looked like a clean pastel on a white page but a muddy smear on
@@ -213,29 +216,14 @@ def _neutral_base_rgb() -> tuple[int, int, int]:
     return (0, 0, 0) if is_dark else (255, 255, 255)
 
 
-def _blend_toward_neutral(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
-    """Standard tier color: scale toward the neutral (white/black) base.
-    This darkens/lightens while keeping saturation at 100%, which reads
-    fine for red, blue, purple, yellow -- but not orange, see below."""
-    nr, ng, nb = _neutral_base_rgb()
-    return (
-        round(r * alpha + nr * (1 - alpha)),
-        round(g * alpha + ng * (1 - alpha)),
-        round(b * alpha + nb * (1 - alpha)),
-    )
-
-
 def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, int, int]:
-    """Alternate tier color: blend toward WHITE specifically (not the
-    theme-dependent neutral), regardless of light/dark mode. Used for
-    orange (20mm) -- holding lightness constant while reducing saturation
-    still read as brown in practice, so this goes the other direction:
-    stay light instead of getting darker or muddier. Trade-off: unlike the
-    other colors, an orange cell won't visually recede into a dark page
-    the way white/black-neutral cells do -- it'll always show as a bright
-    chip. Also used for orange's <5% tier (instead of the usual
-    theme-based neutral) so the row doesn't jump from black straight to a
-    pale tint right at the 5% boundary."""
+    """Every non-neutral, non-base tier blends toward WHITE, regardless of
+    theme -- keeps every color's tones identical between light and dark
+    mode. (This started as an orange-specific fix -- darkening pure orange
+    toward black read as "brown", with no separate name for "dark orange"
+    the way there is for dark red/blue/purple -- but applying it to every
+    color is simpler and gives one consistent rule instead of a
+    per-threshold special case.)"""
     return (
         round(r * alpha + 255 * (1 - alpha)),
         round(g * alpha + 255 * (1 - alpha)),
@@ -245,17 +233,12 @@ def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, i
 
 # Discrete color tiers instead of a continuous gradient -- easier to read
 # at a glance, like a legend, and sidesteps needing "good at every possible
-# opacity" colors. Boundaries match the requested scheme:
-#   <5%: neutral (white/black)   >=95%: pure base color
+# opacity" colors. Boundaries match ECMWF's own product visualization
+# convention:
+#   <5%: neutral (white/black, the only theme-dependent tier)
 #   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
-_TIER_FILL_ALPHA = {"neutral": 0.0, "tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
-
-# Thresholds that tint toward white instead of the standard theme-based
-# neutral. Currently just 20mm/orange -- darkened or desaturated-at-fixed-
-# lightness orange both still read as "brown" (there's no separate name
-# for "dark orange" in common usage the way there is for dark red/blue/
-# purple, so any reduction in brightness tends to get relabeled brown).
-_TINT_WHITE_THRESHOLDS = {20}
+#   >=95%: pure base color
+_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
 
 
 def _tier_for_value(val: float) -> str:
@@ -275,16 +258,11 @@ def _cell_rgb_for_value(threshold_mm: int, val: float) -> tuple[int, int, int]:
     tier = _tier_for_value(val)
     r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
 
-    if threshold_mm in _TINT_WHITE_THRESHOLDS:
-        if tier == "base":
-            return r, g, b
-        return _tint_toward_white_rgb(r, g, b, _TIER_FILL_ALPHA[tier])
-
     if tier == "neutral":
         return _neutral_base_rgb()
     if tier == "base":
         return r, g, b
-    return _blend_toward_neutral(r, g, b, _TIER_FILL_ALPHA[tier])
+    return _tint_toward_white_rgb(r, g, b, _TIER_FILL_ALPHA[tier])
 
 
 def _fmt_ph(dt: datetime) -> str:
@@ -377,13 +355,16 @@ def _pick_headline_threshold(data: dict, window_label: str):
 
 def _pick_secondary_threshold(data: dict, window_label: str, headline_threshold: int):
     """The next more severe threshold above the headline that still clears
-    50% -- e.g. if 5mm became the headline (>=95%), show the next threshold
-    above 5mm (checked 100 -> 50 -> 20, most severe first) that's >=50%."""
+    65% -- e.g. if 5mm became the headline (>=95%), show the next threshold
+    above 5mm (checked 100 -> 50 -> 20, most severe first) that's >=65%.
+    65% matches the tone1 color-tier boundary (the same breakpoints used
+    for the full table's cell coloring), so a threshold only shows up here
+    once it's visually in the "strong" tier, not just "medium"."""
     for threshold in (100, 50, 20, 5, 1):
         if threshold <= headline_threshold:
             continue
         val = data.get(threshold, {}).get(window_label)
-        if val is not None and round(val) >= 50:
+        if val is not None and round(val) >= 65:
             return threshold, val
     return None
 
