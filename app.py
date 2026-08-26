@@ -186,21 +186,22 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs
     progress_lock = threading.Lock()
     progress_state = {m: (0.0, "Waiting...") for m in to_fetch}
 
-    def render_progress():
-        with progress_lock:
-            fracs = [v[0] for v in progress_state.values()]
-            combined_frac = sum(fracs) / len(fracs) if fracs else 0.0
-            msg = "  |  ".join(f"{MODEL_LABELS[m]}: {progress_state[m][1]}" for m in to_fetch)
-        progress.progress(min(max(int(combined_frac * 100), 0), 100), text=msg)
-
     fetched = {}
     errors = {}
 
     def worker(m: str):
+        # Runs on a background thread. Must NOT call any Streamlit UI
+        # function (st.*, or methods on an element like `progress`) --
+        # those require a script-run context that background threads
+        # don't have by default, which silently breaks every fetch (this
+        # was the actual bug: even the single-model/ENS-only path went
+        # through this same threaded code, so it broke everything, not
+        # just AIFS). This callback only writes to a plain dict; the only
+        # place that touches the real `progress` element is the polling
+        # loop below, which runs on the main thread.
         def on_progress(frac: float, msg: str):
             with progress_lock:
                 progress_state[m] = (frac, msg)
-            render_progress()
 
         try:
             fetched[m] = fetch_forecast_table(
@@ -209,9 +210,18 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs
         except Exception as e:
             errors[m] = e
 
-    threads = [threading.Thread(target=worker, args=(m,)) for m in to_fetch]
+    threads = [threading.Thread(target=worker, args=(m,), daemon=True) for m in to_fetch]
     for t in threads:
         t.start()
+
+    while any(t.is_alive() for t in threads):
+        with progress_lock:
+            fracs = [v[0] for v in progress_state.values()]
+            combined_frac = sum(fracs) / len(fracs) if fracs else 0.0
+            msg = "  |  ".join(f"{MODEL_LABELS[m]}: {progress_state[m][1]}" for m in to_fetch)
+        progress.progress(min(max(int(combined_frac * 100), 0), 100), text=msg)
+        time.sleep(0.1)
+
     for t in threads:
         t.join()
 
@@ -532,7 +542,9 @@ if get_forecast_clicked:
     try:
         fetch_out = get_forecast_with_progress(lat, lon, lead_days, load_aifs)
     except Exception as e:
-        st.error(f"Failed to fetch forecast: {e}")
+        st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
+        with st.expander("Full error details"):
+            st.exception(e)
         st.stop()
     elapsed = time.time() - request_started_at
 
