@@ -28,8 +28,8 @@ st.title("🌧️ Rainfall Exceedance Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
-    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
     "Guiguinto, Bulacan": (14.842279, 120.859681),
+    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
     "Makati City, Metro Manila": (14.555539, 121.002918),
     "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
     "Bacoor, Cavite": (14.454261, 120.941266),
@@ -435,7 +435,7 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
             )
 
     return (
-        f"<div style=\"overflow-x:auto;border-radius:8px;padding:4px;\">"
+        f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
         f"<table style=\"border-collapse:collapse;width:100%;font-family:{FONT_STACK};\">"
         f"<thead><tr>{header_cells}</tr></thead>"
         f"<tbody><tr>{headline_cells}</tr><tr>{secondary_cells}</tr></tbody>"
