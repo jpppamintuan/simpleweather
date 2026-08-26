@@ -30,8 +30,8 @@ st.title("🌧️ Rainfall Exceedance Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
-    "Guiguinto, Bulacan": (14.842279, 120.859681),
     "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
+    "Guiguinto, Bulacan": (14.842279, 120.859681),
     "Makati City, Metro Manila": (14.555539, 121.002918),
     "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
     "Bacoor, Cavite": (14.454261, 120.941266),
@@ -395,7 +395,7 @@ def render_table_html(result: dict) -> str:
     # raw-HTML rendering (that was the root cause of a bug reported earlier).
     return (
         f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;font-family:{FONT_STACK};font-size:13px;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;table-layout:fixed;font-family:{FONT_STACK};font-size:13px;\">"
         f"<thead><tr>"
         f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Threshold</th>"
         f"{header_cells}"
@@ -511,7 +511,7 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
 
     return (
         f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;font-family:{FONT_STACK};\">"
+        f"<table style=\"border-collapse:collapse;width:100%;table-layout:fixed;font-family:{FONT_STACK};\">"
         f"<thead><tr>{header_cells}</tr></thead>"
         f"<tbody><tr>{headline_cells}</tr><tr>{secondary_cells}</tr></tbody>"
         f"</table>"
@@ -580,8 +580,8 @@ if "last_fetch_out" in st.session_state:
             st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
 
     if len(available_models) > 1:
-        selected_label = st.radio(
-            "Model", [MODEL_LABELS[m] for m in available_models], horizontal=True
+        selected_label = st.select_slider(
+            "Model", options=[MODEL_LABELS[m] for m in available_models]
         )
         label_to_model = {v: k for k, v in MODEL_LABELS.items()}
         selected_model = label_to_model[selected_label]
@@ -600,7 +600,7 @@ if "last_fetch_out" in st.session_state:
         st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
 
     # --- 3-day summary (essential info only) ---
-    st.subheader(f"3-day summary for {location_name} ({model_label})")
+    st.subheader(f"3-day summary for {location_name}")
     st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
     st.caption("All dates shown in UTC+8 (Philippine Time).")
 
@@ -608,7 +608,7 @@ if "last_fetch_out" in st.session_state:
 
     # --- Full detailed table ---
     num_days_shown = len(result["windows"])
-    st.subheader(f"Full {num_days_shown}-day forecast for {location_name} ({model_label})")
+    st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
     st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
