@@ -5,13 +5,19 @@ Uses the official `ecmwf-opendata` package to pull the ENS "probability"
 stream (enfo / type=ep), which contains precomputed probability-of-exceedance
 fields for 24h accumulated total precipitation: tpg1, tpg5, tpg10, tpg20,
 tpg25, tpg50, tpg100 (mm). These are fixed thresholds baked into the model
-output, computed from ECMWF's 50-member ensemble.
+output, computed from a 50-member ensemble.
+
+Supports two ECMWF ensemble models via the `model` parameter: "ifs" (the
+default physics-based ENS) and "aifs-ens" (ECMWF's newer AI-based
+ensemble). Both publish the same product structure and parameter names --
+only the Client's `model=` kwarg differs between them.
 
 All 5 thresholds used by the app (1/5/20/50/100 mm) are fetched in a single
-combined request (one file, one network round trip) rather than one request
-per threshold -- this is the main optimization over the earlier version.
-If the combined request fails for any reason, the client falls back to
-fetching thresholds one at a time so the app still works, just slower.
+combined request per model (one file, one network round trip) rather than
+one request per threshold -- this is the main optimization over the earlier
+version. If the combined request fails for any reason, the client falls
+back to fetching thresholds one at a time so the app still works, just
+slower.
 """
 
 from __future__ import annotations
@@ -34,6 +40,13 @@ THRESHOLD_COLORS = {
     50: "#FF0000",
     100: "#800080",
 }
+
+# ECMWF's physics-based ensemble (the original/default) vs. their newer
+# AI-based ensemble model. Both publish the same "ep" (probability) product
+# type with the same tpg1/tpg5/tpg20/tpg50/tpg100 parameter names -- the
+# only difference in the request is the `model=` kwarg on the Client.
+MODEL_LABELS = {"ifs": "ECMWF ENS", "aifs-ens": "AIFS ENS"}
+DEFAULT_MODEL = "ifs"
 
 PH_TZ = timezone(timedelta(hours=8))
 UTC = timezone.utc
@@ -78,14 +91,15 @@ def _extract_point_series(ds: xr.Dataset, var_name: str, point) -> dict[int, flo
     return values
 
 
-def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
+def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn, model: str):
     """Single request for all thresholds at once. Raises on any failure so the
     caller can fall back to per-threshold requests."""
-    client = Client(source="ecmwf")
+    client = Client(source="ecmwf", model=model)
     params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
     target = str(Path(tmpdir) / "combined.grib2")
 
-    _notify(progress_callback, 0.15, "Requesting latest ENS forecast (all 5 thresholds)...")
+    model_label = MODEL_LABELS.get(model, model)
+    _notify(progress_callback, 0.15, f"Requesting latest {model_label} forecast (all 5 thresholds)...")
     result = client.retrieve(
         stream="enfo",
         type="ep",
@@ -120,9 +134,9 @@ def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn
     return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
 
-def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
+def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn, model: str):
     """Fallback: one request per threshold (slower, but more forgiving)."""
-    client = Client(source="ecmwf")
+    client = Client(source="ecmwf", model=model)
     run_time = grid_lat = grid_lon = None
     raw_by_threshold: dict[int, dict[int, float]] = {}
     size_bytes = 0
@@ -188,6 +202,7 @@ def fetch_forecast_table(
     lon: float,
     max_lead_days: int = 15,
     progress_callback: ProgressFn = None,
+    model: str = DEFAULT_MODEL,
 ) -> dict:
     """
     Fetch all thresholds for a location and return a structured result:
@@ -201,19 +216,30 @@ def fetch_forecast_table(
         "next_expected": datetime (UTC),
         "downloaded_bytes": int | None,
         "fetch_mode": "combined" | "separate",
+        "model": str,
     }
 
     progress_callback, if given, is called as progress_callback(fraction, message)
     at various points during the fetch (fraction in [0, 1]).
+
+    model selects which ECMWF ensemble to query: "ifs" (the default
+    physics-based ENS) or "aifs-ens" (ECMWF's newer AI-based ensemble).
+    Note: available_since/next_expected are estimated from IFS's published
+    dissemination schedule regardless of which model is requested -- AIFS
+    runs on a different production pipeline with its own (undocumented,
+    as far as this app knows) timing, so those two fields are a rougher
+    estimate for AIFS than for IFS. Everything else (the actual forecast
+    data, run time, grid point) comes directly from the fetched file and
+    is exact either way.
     """
     step_labels = _request_step_labels(max_lead_days)
 
-    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
+    _notify(progress_callback, 0.05, f"Connecting to ECMWF Open Data ({MODEL_LABELS.get(model, model)})...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_combined(
-                lat, lon, step_labels, tmpdir, progress_callback
+                lat, lon, step_labels, tmpdir, progress_callback, model
             )
             fetch_mode = "combined"
         except Exception:
@@ -223,7 +249,7 @@ def fetch_forecast_table(
                 "Combined request failed, retrying per threshold...",
             )
             run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_separate(
-                lat, lon, step_labels, tmpdir, progress_callback
+                lat, lon, step_labels, tmpdir, progress_callback, model
             )
             fetch_mode = "separate"
 
@@ -269,4 +295,5 @@ def fetch_forecast_table(
         "next_expected": next_expected,
         "downloaded_bytes": size_bytes,
         "fetch_mode": fetch_mode,
+        "model": model,
     }
