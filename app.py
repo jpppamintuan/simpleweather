@@ -1,4 +1,5 @@
 import json
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +9,7 @@ import streamlit as st
 from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
     THRESHOLD_COLORS,
+    MODEL_LABELS,
     PH_TZ,
     fetch_forecast_table,
 )
@@ -70,6 +72,7 @@ def _serialize_result(result: dict) -> dict:
         "next_expected": dt(result["next_expected"]),
         "downloaded_bytes": result.get("downloaded_bytes"),
         "fetch_mode": result.get("fetch_mode"),
+        "model": result.get("model"),
     }
 
 
@@ -91,17 +94,18 @@ def _deserialize_result(d: dict) -> dict:
         "next_expected": pdt(d["next_expected"]),
         "downloaded_bytes": d.get("downloaded_bytes"),
         "fetch_mode": d.get("fetch_mode"),
+        "model": d.get("model"),
     }
 
 
 def _cache_key_to_str(key: tuple) -> str:
-    lat, lon, lead_days = key
-    return f"{lat}|{lon}|{lead_days}"
+    lat, lon, lead_days, model = key
+    return f"{lat}|{lon}|{lead_days}|{model}"
 
 
 def _cache_key_from_str(s: str) -> tuple:
-    lat, lon, lead_days = s.split("|")
-    return (float(lat), float(lon), int(lead_days))
+    lat, lon, lead_days, model = s.split("|")
+    return (float(lat), float(lon), int(lead_days), model)
 
 
 def _load_disk_cache() -> None:
@@ -135,41 +139,102 @@ def _save_disk_cache() -> None:
 _load_disk_cache()  # populate the in-memory cache from disk once, at startup
 
 
-def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
-    """Three-tier lookup: this session's own cache (fastest) -> the
-    cross-session global cache (any other user may have already fetched
-    this) -> a genuine fetch, with real progress reported from inside
-    fetch_forecast_table."""
-    key = (lat, lon, lead_days)
+def _cache_lookup(key: tuple):
     now = time.time()
-
     session_cache = st.session_state.setdefault("_forecast_cache", {})
     cached = session_cache.get(key)
     if cached and (now - cached["ts"] < CACHE_TTL_SECONDS):
-        return cached["result"], True
-
+        return cached["result"]
     global_entry = _GLOBAL_CACHE.get(key)
     if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
         session_cache[key] = global_entry  # promote into this session too
-        return global_entry["result"], True
+        return global_entry["result"]
+    return None
+
+
+def _cache_store(key: tuple, result: dict) -> None:
+    entry = {"ts": time.time(), "result": result}
+    st.session_state.setdefault("_forecast_cache", {})[key] = entry
+    _GLOBAL_CACHE[key] = entry
+
+
+def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs: bool):
+    """Fetches ENS, and AIFS too if load_aifs is set. Three optimizations
+    over a naive "just fetch both" approach:
+      1. Each model is cached independently (by lat/lon/lead_days/model),
+         so toggling "Load AIFS" after ENS is already cached only fetches
+         the new AIFS data, not both again.
+      2. When both models genuinely need fetching, they run concurrently
+         in separate threads -- wall time is ~max(ens_time, aifs_time)
+         instead of the sum, since these are I/O-bound network requests.
+      3. Reuses the existing single-request-per-model optimization (5
+         thresholds combined into 1 file) underneath, so worst case is 2
+         requests total (1 per model), not 10.
+
+    Returns {"ifs": (result, was_cached), "aifs-ens": (result_or_None, was_cached)}
+    -- the aifs-ens entry is only present if load_aifs was True.
+    """
+    models = ["ifs"] + (["aifs-ens"] if load_aifs else [])
+    keys = {m: (lat, lon, lead_days, m) for m in models}
+    cached_results = {m: _cache_lookup(keys[m]) for m in models}
+    to_fetch = [m for m in models if cached_results[m] is None]
+
+    if not to_fetch:
+        return {m: (cached_results[m], True) for m in models}
 
     progress = st.progress(0, text="Connecting to ECMWF Open Data...")
+    progress_lock = threading.Lock()
+    progress_state = {m: (0.0, "Waiting...") for m in to_fetch}
 
-    def on_progress(frac: float, msg: str):
-        progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
+    def render_progress():
+        with progress_lock:
+            fracs = [v[0] for v in progress_state.values()]
+            combined_frac = sum(fracs) / len(fracs) if fracs else 0.0
+            msg = "  |  ".join(f"{MODEL_LABELS[m]}: {progress_state[m][1]}" for m in to_fetch)
+        progress.progress(min(max(int(combined_frac * 100), 0), 100), text=msg)
 
-    try:
-        result = fetch_forecast_table(lat, lon, max_lead_days=lead_days, progress_callback=on_progress)
-    finally:
-        progress.progress(100, text="Done!")
-        time.sleep(0.2)
-        progress.empty()
+    fetched = {}
+    errors = {}
 
-    entry = {"ts": now, "result": result}
-    session_cache[key] = entry
-    _GLOBAL_CACHE[key] = entry
-    _save_disk_cache()
-    return result, False
+    def worker(m: str):
+        def on_progress(frac: float, msg: str):
+            with progress_lock:
+                progress_state[m] = (frac, msg)
+            render_progress()
+
+        try:
+            fetched[m] = fetch_forecast_table(
+                lat, lon, max_lead_days=lead_days, progress_callback=on_progress, model=m
+            )
+        except Exception as e:
+            errors[m] = e
+
+    threads = [threading.Thread(target=worker, args=(m,)) for m in to_fetch]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    progress.progress(100, text="Done!")
+    time.sleep(0.2)
+    progress.empty()
+
+    if "ifs" in to_fetch and "ifs" in errors:
+        raise errors["ifs"]  # ENS is required -- surface the failure
+
+    out = {}
+    for m in models:
+        if cached_results[m] is not None:
+            out[m] = (cached_results[m], True)
+        elif m in fetched:
+            _cache_store(keys[m], fetched[m])
+            out[m] = (fetched[m], False)
+        else:
+            out[m] = (None, False)  # AIFS failed -- app degrades to ENS-only, not a crash
+
+    if fetched:
+        _save_disk_cache()
+    return out
 
 
 def _hex_to_rgb(hex_color: str):
@@ -451,6 +516,13 @@ with col1:
 with col2:
     lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
+load_aifs = st.checkbox(
+    "Load AIFS",
+    help="Also fetch ECMWF's AI-based ensemble (AIFS ENS) alongside the standard ENS. "
+         "Roughly doubles the data fetched, though both run concurrently so it's not "
+         "twice the wait.",
+)
+
 get_forecast_clicked = st.button("Get forecast", type="primary")
 
 elapsed_placeholder = st.empty()
@@ -458,40 +530,65 @@ elapsed_placeholder = st.empty()
 if get_forecast_clicked:
     request_started_at = time.time()
     try:
-        result, was_cached = get_forecast_with_progress(lat, lon, lead_days)
+        fetch_out = get_forecast_with_progress(lat, lon, lead_days, load_aifs)
     except Exception as e:
         st.error(f"Failed to fetch forecast: {e}")
         st.stop()
     elapsed = time.time() - request_started_at
 
-    st.session_state["last_result"] = result
+    st.session_state["last_fetch_out"] = fetch_out
+    st.session_state["last_load_aifs"] = load_aifs
     st.session_state["last_location_name"] = location_name
     st.session_state["last_lat"] = lat
     st.session_state["last_lon"] = lon
-    st.session_state["last_was_cached"] = was_cached
     st.session_state["last_elapsed"] = elapsed
 
-if "last_result" in st.session_state:
-    result = st.session_state["last_result"]
+if "last_fetch_out" in st.session_state:
+    fetch_out = st.session_state["last_fetch_out"]
+    load_aifs_active = st.session_state["last_load_aifs"]
     location_name = st.session_state["last_location_name"]
     lat = st.session_state["last_lat"]
     lon = st.session_state["last_lon"]
-    was_cached = st.session_state["last_was_cached"]
     elapsed = st.session_state["last_elapsed"]
 
+    ens_result, ens_was_cached = fetch_out["ifs"]
+    aifs_result, aifs_was_cached = fetch_out.get("aifs-ens", (None, False))
+
+    any_fresh_fetch = not ens_was_cached or (load_aifs_active and not aifs_was_cached)
     elapsed_placeholder.caption(
-        f"⏱️ Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
+        f"⏱️ Loaded in {elapsed:.1f}s" + ("" if any_fresh_fetch else " (from cache)")
     )
+
+    # --- Model selector: only relevant once AIFS has actually loaded ---
+    available_models = ["ifs"]
+    if load_aifs_active:
+        if aifs_result is not None:
+            available_models.append("aifs-ens")
+        else:
+            st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
+
+    if len(available_models) > 1:
+        selected_label = st.radio(
+            "Model", [MODEL_LABELS[m] for m in available_models], horizontal=True
+        )
+        label_to_model = {v: k for k, v in MODEL_LABELS.items()}
+        selected_model = label_to_model[selected_label]
+    else:
+        selected_model = "ifs"
+
+    result = ens_result if selected_model == "ifs" else aifs_result
+    was_cached = ens_was_cached if selected_model == "ifs" else aifs_was_cached
+    model_label = MODEL_LABELS[selected_model]
 
     if not result["windows"]:
         st.warning("No aligned 00 UTC windows available for this range.")
         st.stop()
 
     if result.get("fetch_mode") == "separate" and not was_cached:
-        st.caption("⚠️ Combined request wasn't available; fetched thresholds individually (slower).")
+        st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
 
     # --- 3-day summary (essential info only) ---
-    st.subheader(f"3-day summary for {location_name}")
+    st.subheader(f"3-day summary for {location_name} ({model_label})")
     st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
     st.caption("All dates shown in UTC+8 (Philippine Time).")
 
@@ -499,9 +596,9 @@ if "last_result" in st.session_state:
 
     # --- Full detailed table ---
     num_days_shown = len(result["windows"])
-    st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
+    st.subheader(f"Full {num_days_shown}-day forecast for {location_name} ({model_label})")
     st.markdown(render_table_html(result), unsafe_allow_html=True)
-    st.caption("All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF ENS Open Data (CC BY 4.0).")
+    st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
     st.divider()
 
@@ -509,7 +606,7 @@ if "last_result" in st.session_state:
     run_time = result["run_time"]
     info_col1, info_col2 = st.columns(2)
     with info_col1:
-        st.markdown(f"**Model forecast run:** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
+        st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
         st.markdown(
             f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
             f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
@@ -528,9 +625,15 @@ if "last_result" in st.session_state:
         st.markdown(f"**Last updated (estimated):** {available_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8)")
         st.markdown(f"**Next update expected:** {next_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8) — {remaining_str}")
 
-    st.caption(
-        "\"Last updated\" and \"Next update\" are estimated from ECMWF's published "
+    schedule_note = (
+        "\"Last updated\" and \"Next update\" are estimated from ECMWF's published IFS "
         "dissemination schedule, not a live timestamp from the server."
     )
+    if selected_model == "aifs-ens":
+        schedule_note += (
+            " AIFS runs on a separate production pipeline with its own timing, so this "
+            "estimate is rougher for AIFS than for ENS."
+        )
+    st.caption(schedule_note)
 else:
     st.info("Choose a location and click **Get forecast**.")
