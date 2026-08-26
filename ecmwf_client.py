@@ -58,23 +58,32 @@ def _param_for(threshold_mm: int) -> str:
     return f"tpg{threshold_mm}"
 
 
-def _request_step_labels(max_lead_days: int) -> list[str]:
-    """All 24h windows in 12h increments, e.g. '0-24', '12-36', ... up to
-    just past max_lead_days*24 hours.
+def _request_step_labels(max_lead_days: int, increment_hours: int = 12) -> list[str]:
+    """All 24h windows in `increment_hours` increments, e.g. '0-24', '12-36',
+    ... up to just past max_lead_days*24 hours.
 
-    Requests a 12h buffer beyond the requested range. Reason: whether the
-    latest run is 00Z or 12Z changes which steps align to 00 UTC starts --
-    a 12Z run "loses" one aligned window near the end of the requested
-    range compared to a 00Z run, for the same max_lead_days. The buffer
-    ensures both parities have enough steps to produce the full requested
-    day count; fetch_forecast_table() then truncates to exactly
-    max_lead_days after aligning. Capped at 360h (ECMWF's max ENS step) --
-    requesting the full 15 days on a 12Z run may still fall one day short,
-    since there's no more data to buffer with at that point."""
+    Requests a buffer beyond the requested range, sized to guarantee enough
+    steps regardless of which hour the model's latest run falls on. For
+    12h increments (IFS, which only ever runs the full ep product at 00Z/
+    12Z in practice), a 12h buffer covers both parities. For 6h increments
+    (AIFS -- see below), a run could fall on 00/06/12/18Z, and the worst
+    case (06Z) needs an 18h buffer before the first 00-UTC-aligned window
+    even starts. General formula: buffer = 24 - increment_hours.
+
+    Why 6h increments exist at all: AIFS ENS's native output is 6-hourly
+    (vs. IFS's ep product, which ECMWF's own docs describe as spaced 12h
+    apart) and it runs 4x/day, not just 00Z/12Z. 12h-spaced steps can only
+    ever align to 00 UTC for a 00Z or 12Z run -- if AIFS's latest run is
+    06Z or 18Z, none of those steps land on a 00 UTC boundary at all,
+    which is what caused "no aligned windows" for AIFS. This is inferred
+    from AIFS's documented native resolution, not confirmed against the
+    live service, so it's the best available fix without direct testing.
+    Capped at 360h (ECMWF's max ENS step)."""
     target_hours = max_lead_days * 24
-    buffered_hours = min(target_hours + 12, 360)
-    n = (buffered_hours - 24) // 12 + 1
-    return [f"{12 * i}-{12 * i + 24}" for i in range(n)]
+    buffer_hours = 24 - increment_hours
+    buffered_hours = min(target_hours + buffer_hours, 360)
+    n = (buffered_hours - 24) // increment_hours + 1
+    return [f"{increment_hours * i}-{increment_hours * i + 24}" for i in range(n)]
 
 
 def _notify(progress_callback: ProgressFn, frac: float, msg: str) -> None:
@@ -232,7 +241,8 @@ def fetch_forecast_table(
     data, run time, grid point) comes directly from the fetched file and
     is exact either way.
     """
-    step_labels = _request_step_labels(max_lead_days)
+    step_increment = 6 if model == "aifs-ens" else 12
+    step_labels = _request_step_labels(max_lead_days, increment_hours=step_increment)
 
     _notify(progress_callback, 0.05, f"Connecting to ECMWF Open Data ({MODEL_LABELS.get(model, model)})...")
 
