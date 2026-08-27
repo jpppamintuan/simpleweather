@@ -107,8 +107,7 @@ def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn
     params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
     target = str(Path(tmpdir) / "combined.grib2")
 
-    model_label = MODEL_LABELS.get(model, model)
-    _notify(progress_callback, 0.15, f"Requesting latest {model_label} forecast (all 5 thresholds)...")
+    _notify(progress_callback, 0.15, "Requesting latest forecast (5 thresholds)...")
     result = client.retrieve(
         stream="enfo",
         type="ep",
@@ -179,13 +178,14 @@ def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn
     return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
 
-def _aligned_end_steps(run_hour: int, step_labels: list[str]) -> list[int]:
-    """Keep only windows whose *start* aligns with 00 UTC (i.e. skip the
-    12 UTC-to-12 UTC windows), returned as end-step hours (S1+24)."""
+def _aligned_end_steps(run_hour: int, step_labels: list[str], target_hour: int = 0) -> list[int]:
+    """Keep only windows whose *start* aligns with `target_hour` UTC
+    (default 00 UTC -- i.e. skip the 12 UTC-to-12 UTC windows for a 12h-
+    spaced IFS request), returned as end-step hours (S1+24)."""
     aligned = []
     for label in step_labels:
         s1 = int(label.split("-")[0])
-        if (run_hour + s1) % 24 == 0:
+        if (run_hour + s1 - target_hour) % 24 == 0:
             aligned.append(s1 + 24)
     return aligned
 
@@ -241,10 +241,9 @@ def fetch_forecast_table(
     data, run time, grid point) comes directly from the fetched file and
     is exact either way.
     """
-    step_increment = 6 if model == "aifs-ens" else 12
-    step_labels = _request_step_labels(max_lead_days, increment_hours=step_increment)
+    step_labels = _request_step_labels(max_lead_days, increment_hours=12)
 
-    _notify(progress_callback, 0.05, f"Connecting to ECMWF Open Data ({MODEL_LABELS.get(model, model)})...")
+    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
@@ -267,6 +266,16 @@ def fetch_forecast_table(
 
     run_hour = run_time.hour
     aligned_end_steps = _aligned_end_steps(run_hour, step_labels)
+    aligned_to_utc_midnight = True
+
+    if not aligned_end_steps:
+        # 12h-spaced steps from a 06Z or 18Z run can never land on a 00 UTC
+        # boundary (only 06/18 UTC ones) -- this happens for AIFS, which
+        # runs 4x/day, unlike IFS which only ever produces this product at
+        # 00Z/12Z. Rather than show nothing, align to the run's own hour
+        # instead of insisting on exactly midnight UTC.
+        aligned_end_steps = _aligned_end_steps(run_hour, step_labels, target_hour=run_hour)
+        aligned_to_utc_midnight = False
 
     windows = []
     for end_h in aligned_end_steps:
@@ -306,4 +315,5 @@ def fetch_forecast_table(
         "downloaded_bytes": size_bytes,
         "fetch_mode": fetch_mode,
         "model": model,
+        "aligned_to_utc_midnight": aligned_to_utc_midnight,
     }
