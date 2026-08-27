@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
@@ -312,7 +313,7 @@ def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, i
 #   <5%: neutral (white/black, the only theme-dependent tier)
 #   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
 #   >=95%: pure base color
-_TIER_FILL_ALPHA = {"tone3": 0.05, "tone2": 0.35, "tone1": 0.65}
+_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
 
 
 def _tier_for_value(val: float) -> str:
@@ -376,6 +377,103 @@ def _estimate_col_width_px(windows: list[dict]) -> int:
     char_width_px = 7.5  # generous estimate for ~12px Source Sans (proportional font)
     padding_px = 24  # 12px left + 12px right cell padding
     return int(longest_line * char_width_px) + padding_px
+
+
+def render_ribbon_chart_html(result: dict) -> str:
+    """Nested-area 'ribbon' chart: all 5 thresholds as overlapping filled
+    areas from 0 up to that day's probability, drawn in order from 1mm
+    (largest area, drawn first/underneath) to 100mm (smallest area, drawn
+    last/on top). This works cleanly here specifically because the
+    thresholds are monotonically nested -- P(>=1mm) is always >= P(>=5mm)
+    >= ... >= P(>=100mm) on any given day -- so the bands never cross and
+    naturally read as "shrinking severity, shrinking likelihood."
+
+    Rendered via components.v1.html (a real iframe), not st.markdown --
+    unlike the HTML tables elsewhere in this file, this needs actual
+    <script> execution (Chart.js), which st.markdown's unsafe_allow_html
+    silently strips. The iframe has its own isolated document, so the
+    color fills' transparency composites against a background we set
+    explicitly (white) rather than whatever Streamlit's live theme
+    happens to be -- sidesteps the whole light/dark inconsistency problem
+    the HTML tables had, without needing the solid-tier color system.
+    """
+    windows = result["windows"]
+    data = result["data"]
+    if not windows:
+        return ""
+
+    day_labels = [w["start_utc"].astimezone(PH_TZ).strftime("%a %d") for w in windows]
+
+    datasets = []
+    for threshold in AVAILABLE_THRESHOLDS_MM:
+        values = [data[threshold].get(w["label"]) or 0 for w in windows]
+        datasets.append({"label": f"{threshold}mm", "values": values, "color": THRESHOLD_COLORS[threshold]})
+
+    labels_json = json.dumps(day_labels)
+    datasets_json = json.dumps(datasets)
+
+    return f"""
+    <div style="background-color:#ffffff;padding:8px;">
+      <div style="position:relative;width:100%;height:340px;">
+        <canvas id="ribbonChart"></canvas>
+      </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script>
+    (function() {{
+      const labels = {labels_json};
+      const rawDatasets = {datasets_json};
+
+      function hexToRgba(hex, a) {{
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return "rgba(" + r + "," + g + "," + b + "," + a + ")";
+      }}
+
+      const datasets = rawDatasets.map(d => ({{
+        label: d.label,
+        data: d.values,
+        borderColor: d.color,
+        backgroundColor: hexToRgba(d.color, 0.55),
+        fill: "origin",
+        borderWidth: 1,
+        pointRadius: 0,
+        tension: 0.3,
+      }}));
+
+      new Chart(document.getElementById("ribbonChart"), {{
+        type: "line",
+        data: {{ labels: labels, datasets: datasets }},
+        options: {{
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {{
+            legend: {{
+              display: true,
+              position: "bottom",
+              labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }},
+            }},
+            tooltip: {{
+              callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y + "%" }},
+            }},
+          }},
+          scales: {{
+            y: {{
+              min: 0, max: 100,
+              ticks: {{ callback: (v) => v + "%", color: "#666666" }},
+              grid: {{ color: "#e5e5e5" }},
+            }},
+            x: {{
+              ticks: {{ color: "#666666", font: {{ size: 10 }} }},
+              grid: {{ display: false }},
+            }},
+          }},
+        }},
+      }});
+    }})();
+    </script>
+    """
 
 
 def render_table_html(result: dict) -> str:
@@ -653,6 +751,7 @@ if "last_fetch_out" in st.session_state:
     # --- Full detailed table ---
     num_days_shown = len(result["windows"])
     st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
+    components.html(render_ribbon_chart_html(result), height=380)
     st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
