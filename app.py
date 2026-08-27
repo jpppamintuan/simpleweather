@@ -436,6 +436,8 @@ def render_ribbon_chart_html(result: dict) -> str:
         data: d.values,
         borderColor: d.color,
         backgroundColor: hexToRgba(d.color, 0.55),
+        pointBackgroundColor: d.color,
+        pointBorderColor: d.color,
         fill: "origin",
         borderWidth: 1,
         pointRadius: 0,
@@ -449,6 +451,13 @@ def render_ribbon_chart_html(result: dict) -> str:
           responsive: true,
           maintainAspectRatio: false,
           plugins: {{
+            // Chart.js v4 ships a "colors" plugin that auto-assigns its
+            // own palette to datasets -- in some configurations this can
+            // override colors set explicitly per-dataset above, which is
+            // what caused the chart to ignore THRESHOLD_COLORS entirely
+            // and show an auto-generated blue-to-green progression
+            // instead. Disabling it outright guarantees our colors win.
+            colors: {{ enabled: false, forceOverride: false }},
             legend: {{
               display: true,
               position: "bottom",
