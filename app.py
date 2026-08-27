@@ -636,6 +636,13 @@ if "last_fetch_out" in st.session_state:
             f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
         )
 
+    if result.get("capped_to_day6"):
+        st.caption(
+            f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
+            f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
+            f"so it requests the range that's safe either way)."
+        )
+
     # --- 3-day summary (essential info only) ---
     st.subheader(f"3-day summary for {location_name}")
     st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
