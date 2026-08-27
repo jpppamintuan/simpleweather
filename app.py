@@ -354,6 +354,30 @@ def _cell_text_color(blended_luminance: float) -> str:
     return "#111111" if blended_luminance > 0.5 else "#ffffff"
 
 
+def _estimate_col_width_px(windows: list[dict]) -> int:
+    """table-layout:fixed makes every column equal width, but needs ONE
+    width value to apply to all of them -- this computes that value from
+    the actual longest line of text that will appear in any column
+    (usually a date header line, e.g. "Sun, 06 Sep 08AM"), rather than a
+    guessed flat number. That guess (90px) was too narrow for the header
+    text specifically, which is what caused the overlap on mobile.
+
+    Note: header text is multi-line (stacked via <br>), so it's the
+    longest SINGLE LINE within that stack that matters, not the full
+    concatenated string length.
+    """
+    candidates = ["Threshold", "≥100 mm", "100%"]  # widest label/value text
+    if windows:
+        sample_header = _fmt_window(windows[0])
+        candidates.extend(sample_header.split("<br>"))
+
+    longest_line = max(len(line) for line in candidates)
+
+    char_width_px = 7.5  # generous estimate for ~12px Source Sans (proportional font)
+    padding_px = 24  # 12px left + 12px right cell padding
+    return int(longest_line * char_width_px) + padding_px
+
+
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
@@ -390,13 +414,13 @@ def render_table_html(result: dict) -> str:
             f"border-bottom:1px solid {BORDER};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
 
-    # min-width scales with the number of columns so each stays at least
-    # readable-width. On a wide screen, width:100% just fills the
-    # container as before; on mobile, min-width wins once 100% of the
-    # viewport would be narrower than that, and the wrapper's
-    # overflow-x:auto kicks in -- horizontal scroll instead of cramming
-    # every column into the phone's width.
-    min_width_px = (len(windows) + 1) * 90  # +1 for the "Threshold" label column
+    # min-width scales with the number of columns AND the actual text
+    # width each needs, so on mobile the wrapper's overflow-x:auto kicks
+    # in for horizontal scroll instead of cramming/overlapping text, while
+    # table-layout:fixed still keeps every column exactly equal.
+    col_width_px = _estimate_col_width_px(windows)
+    min_width_px = (len(windows) + 1) * col_width_px  # +1 for the "Threshold" label column
+
 
     # NOTE: no leading whitespace on any line below -- st.markdown treats
     # 4+ leading spaces as a Markdown code block, which silently breaks
@@ -589,7 +613,7 @@ if "last_fetch_out" in st.session_state:
             st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
 
     if len(available_models) > 1:
-        show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}  (off = {MODEL_LABELS['ifs']})")
+        show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}")
         selected_model = "aifs-ens" if show_aifs else "ifs"
     else:
         selected_model = "ifs"
@@ -604,6 +628,13 @@ if "last_fetch_out" in st.session_state:
 
     if result.get("fetch_mode") == "separate" and not was_cached:
         st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
+
+    if not result.get("aligned_to_utc_midnight", True):
+        run_hour_str = f"{result['run_time'].hour:02d} UTC"
+        st.caption(
+            f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
+            f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
+        )
 
     # --- 3-day summary (essential info only) ---
     st.subheader(f"3-day summary for {location_name}")
