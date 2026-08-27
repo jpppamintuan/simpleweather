@@ -58,30 +58,28 @@ def _param_for(threshold_mm: int) -> str:
     return f"tpg{threshold_mm}"
 
 
-def _request_step_labels(max_lead_days: int, increment_hours: int = 12) -> list[str]:
+def _request_step_labels(max_lead_days: int, increment_hours: int = 12, max_step_hours: int = 360) -> list[str]:
     """All 24h windows in `increment_hours` increments, e.g. '0-24', '12-36',
-    ... up to just past max_lead_days*24 hours.
+    ... up to just past max_lead_days*24 hours, capped at max_step_hours.
 
     Requests a buffer beyond the requested range, sized to guarantee enough
-    steps regardless of which hour the model's latest run falls on. For
-    12h increments (IFS, which only ever runs the full ep product at 00Z/
-    12Z in practice), a 12h buffer covers both parities. For 6h increments
-    (AIFS -- see below), a run could fall on 00/06/12/18Z, and the worst
-    case (06Z) needs an 18h buffer before the first 00-UTC-aligned window
-    even starts. General formula: buffer = 24 - increment_hours.
+    steps regardless of which hour the model's latest run falls on -- 12h
+    spaced steps can only ever align to 00 UTC for a run at an even
+    12-hour offset (00Z/12Z), so a run at 06Z or 18Z needs the fallback
+    alignment in _aligned_end_steps() below rather than more buffer here.
+    General formula: buffer = 24 - increment_hours.
 
-    Why 6h increments exist at all: AIFS ENS's native output is 6-hourly
-    (vs. IFS's ep product, which ECMWF's own docs describe as spaced 12h
-    apart) and it runs 4x/day, not just 00Z/12Z. 12h-spaced steps can only
-    ever align to 00 UTC for a 00Z or 12Z run -- if AIFS's latest run is
-    06Z or 18Z, none of those steps land on a 00 UTC boundary at all,
-    which is what caused "no aligned windows" for AIFS. This is inferred
-    from AIFS's documented native resolution, not confirmed against the
-    live service, so it's the best available fix without direct testing.
-    Capped at 360h (ECMWF's max ENS step)."""
+    max_step_hours matters specifically for AIFS: per ECMWF's own
+    documentation, AIFS ENS publishes the ep product at 12h-spaced steps
+    for all four run times (00/06/12/18Z) -- same increment as IFS, not
+    the 6h I'd assumed in an earlier attempt at this fix. The actual
+    limitation is that 06Z and 18Z runs are capped at step 144 (day 6),
+    while 00Z/12Z runs go to the full step 360 (day 15). Requesting beyond
+    a run's actual cap is what caused "no aligned windows" -- the request
+    for out-of-range steps was failing silently rather than erroring."""
     target_hours = max_lead_days * 24
     buffer_hours = 24 - increment_hours
-    buffered_hours = min(target_hours + buffer_hours, 360)
+    buffered_hours = min(target_hours + buffer_hours, max_step_hours)
     n = (buffered_hours - 24) // increment_hours + 1
     return [f"{increment_hours * i}-{increment_hours * i + 24}" for i in range(n)]
 
@@ -241,7 +239,22 @@ def fetch_forecast_table(
     data, run time, grid point) comes directly from the fetched file and
     is exact either way.
     """
-    step_labels = _request_step_labels(max_lead_days, increment_hours=12)
+    if model == "aifs-ens":
+        # 06Z/18Z AIFS runs only publish up to step 144 (day 6); 00Z/12Z
+        # runs go to the full day 15 (step 360). We don't know which of
+        # the 4 the "latest" run will resolve to until after fetching, so
+        # request only the range that's safe regardless -- this is what
+        # was missing before: requesting the full 15-day range against a
+        # 06Z/18Z run (capped at day 6) asked for steps that don't exist
+        # for that run, which produced zero usable data rather than an
+        # error. Trade-off: AIFS is capped at 6 days here even on a
+        # 00Z/12Z run where more would technically be available.
+        effective_max_lead_days = min(max_lead_days, 6)
+        step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=144)
+        capped_to_day6 = max_lead_days > 6
+    else:
+        step_labels = _request_step_labels(max_lead_days, increment_hours=12)
+        capped_to_day6 = False
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
@@ -316,4 +329,5 @@ def fetch_forecast_table(
         "fetch_mode": fetch_mode,
         "model": model,
         "aligned_to_utc_midnight": aligned_to_utc_midnight,
+        "capped_to_day6": capped_to_day6,
     }
