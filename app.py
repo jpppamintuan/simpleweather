@@ -312,7 +312,7 @@ def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, i
 #   <5%: neutral (white/black, the only theme-dependent tier)
 #   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
 #   >=95%: pure base color
-_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
+_TIER_FILL_ALPHA = {"tone3": 0.05, "tone2": 0.35, "tone1": 0.65}
 
 
 def _tier_for_value(val: float) -> str:
