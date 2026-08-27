@@ -390,12 +390,21 @@ def render_table_html(result: dict) -> str:
             f"border-bottom:1px solid {BORDER};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
 
+    # min-width scales with the number of columns so each stays at least
+    # readable-width. On a wide screen, width:100% just fills the
+    # container as before; on mobile, min-width wins once 100% of the
+    # viewport would be narrower than that, and the wrapper's
+    # overflow-x:auto kicks in -- horizontal scroll instead of cramming
+    # every column into the phone's width.
+    min_width_px = (len(windows) + 1) * 90  # +1 for the "Threshold" label column
+
     # NOTE: no leading whitespace on any line below -- st.markdown treats
     # 4+ leading spaces as a Markdown code block, which silently breaks
     # raw-HTML rendering (that was the root cause of a bug reported earlier).
     return (
         f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;table-layout:fixed;font-family:{FONT_STACK};font-size:13px;\">"
+        f"<table style=\"border-collapse:collapse;width:100%;min-width:{min_width_px}px;"
+        f"table-layout:fixed;font-family:{FONT_STACK};font-size:13px;\">"
         f"<thead><tr>"
         f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Threshold</th>"
         f"{header_cells}"
@@ -580,11 +589,8 @@ if "last_fetch_out" in st.session_state:
             st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
 
     if len(available_models) > 1:
-        selected_label = st.select_slider(
-            "Model", options=[MODEL_LABELS[m] for m in available_models]
-        )
-        label_to_model = {v: k for k, v in MODEL_LABELS.items()}
-        selected_model = label_to_model[selected_label]
+        show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}  (off = {MODEL_LABELS['ifs']})")
+        selected_model = "aifs-ens" if show_aifs else "ifs"
     else:
         selected_model = "ifs"
 
