@@ -870,7 +870,7 @@ if "last_fetch_out" in st.session_state:
     st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
     show_graph = st.toggle("Show as graph")
     if show_graph:
-        components.html(render_ribbon_chart_html(result), height=380)
+        components.html(render_ribbon_chart_html(result), height=650)
     else:
         st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
