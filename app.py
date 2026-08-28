@@ -424,18 +424,19 @@ def render_ribbon_chart_html(result: dict) -> str:
       const labels = {labels_json};
       const rawDatasets = {datasets_json};
 
-      function hexToRgba(hex, a) {{
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        return "rgba(" + r + "," + g + "," + b + "," + a + ")";
-      }}
-
       const datasets = rawDatasets.map(d => ({{
         label: d.label,
         data: d.values,
         borderColor: d.color,
-        backgroundColor: hexToRgba(d.color, 0.55),
+        // Fully opaque, not semi-transparent. The thresholds are nested
+        // (5mm's filled area is always fully inside 1mm's), so with any
+        // alpha < 1 these overlapping regions genuinely alpha-blend
+        // together on the canvas -- e.g. blue-at-55%-under-yellow-at-55%
+        // composites to a light green, not "yellow over blue". Opaque
+        // fills simply overwrite what's beneath instead of blending with
+        // it, so each narrower band cleanly covers its own slice of the
+        // wider one -- correct distinct bands, no color mixing possible.
+        backgroundColor: d.color,
         pointBackgroundColor: d.color,
         pointBorderColor: d.color,
         fill: "origin",
