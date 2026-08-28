@@ -424,22 +424,23 @@ def render_ribbon_chart_html(result: dict) -> str:
       const labels = {labels_json};
       const rawDatasets = {datasets_json};
 
-      const datasets = rawDatasets.map(d => ({{
+      const datasets = rawDatasets.map((d, i) => ({{
         label: d.label,
         data: d.values,
         borderColor: d.color,
-        // Fully opaque, not semi-transparent. The thresholds are nested
-        // (5mm's filled area is always fully inside 1mm's), so with any
-        // alpha < 1 these overlapping regions genuinely alpha-blend
-        // together on the canvas -- e.g. blue-at-55%-under-yellow-at-55%
-        // composites to a light green, not "yellow over blue". Opaque
-        // fills simply overwrite what's beneath instead of blending with
-        // it, so each narrower band cleanly covers its own slice of the
-        // wider one -- correct distinct bands, no color mixing possible.
         backgroundColor: d.color,
         pointBackgroundColor: d.color,
         pointBorderColor: d.color,
-        fill: "origin",
+        // Each band fills the area between THIS curve and the NEXT one
+        // (1mm fills to the 5mm line, 5mm fills to the 20mm line, etc.),
+        // not "down to zero" for every dataset. Since the data is nested
+        // and descending, this is a well-defined, non-overlapping band
+        // for each threshold -- no dependence on paint/z-order at all,
+        // which is what broke the previous fill-to-origin-for-everything
+        // approach (whichever dataset actually painted last covered all
+        // the others, since its fill spanned the full 0-to-its-own-value
+        // range regardless of the others' smaller ranges).
+        fill: (i === rawDatasets.length - 1) ? "origin" : (i + 1),
         borderWidth: 1,
         pointRadius: 0,
         tension: 0.3,
