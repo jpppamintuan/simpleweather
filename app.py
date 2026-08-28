@@ -456,7 +456,7 @@ def render_ribbon_chart_html(result: dict) -> str:
     monotonically nested: P(>=1mm) is always >= P(>=5mm) >= ... >=
     P(>=100mm) on any given day, so adjacent bands never cross.
 
-    Colors use each threshold's tone1 (65%) shade rather than the pure
+    Colors use each threshold's tone2 (35%) shade rather than the pure
     base hex -- a large filled area in the fully saturated color reads as
     much more intense/harsh than the same hue used for a small table
     cell, so the softer 65% tone looks better at this scale while staying
@@ -478,7 +478,7 @@ def render_ribbon_chart_html(result: dict) -> str:
     datasets = []
     for threshold in AVAILABLE_THRESHOLDS_MM:
         values = [data[threshold].get(w["label"]) or 0 for w in windows]
-        r, g, b = _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[threshold]), _TIER_FILL_ALPHA["tone1"])
+        r, g, b = _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[threshold]), _TIER_FILL_ALPHA["tone2"])
         datasets.append({"label": f"{threshold}mm", "values": values, "color": f"rgb({r},{g},{b})"})
 
     tooltip_html_by_day = [_tooltip_html_for_window(w, data) for w in windows]
@@ -488,6 +488,8 @@ def render_ribbon_chart_html(result: dict) -> str:
     tooltips_json = json.dumps(tooltip_html_by_day)
 
     return f"""
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
     <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:340px;">
         <canvas id="ribbonChart"></canvas>
@@ -529,11 +531,30 @@ def render_ribbon_chart_html(result: dict) -> str:
         }}
         const dayIndex = tooltip.dataPoints[0].dataIndex;
         tooltipEl.innerHTML = tooltipHtmlByDay[dayIndex];
-        const rect = chart.canvas.getBoundingClientRect();
+        tooltipEl.style.transform = "none";  // positioned via explicit left/top below, not a centering transform
         tooltipEl.style.opacity = 1;
-        tooltipEl.style.left = (rect.left + window.pageXOffset + tooltip.caretX) + "px";
-        tooltipEl.style.top = (rect.top + window.pageYOffset + tooltip.caretY - 10) + "px";
-        tooltipEl.style.transform = "translate(-50%, -100%)";
+
+        const rect = chart.canvas.getBoundingClientRect();
+        const tooltipWidth = tooltipEl.offsetWidth;
+        const tooltipHeight = tooltipEl.offsetHeight;
+        // This iframe's own visible width/height, not the outer page's --
+        // components.html renders in an isolated iframe, so this is the
+        // actual boundary the tooltip must stay within.
+        const viewportWidth = document.documentElement.clientWidth;
+        const viewportHeight = document.documentElement.clientHeight;
+
+        let left = rect.left + window.pageXOffset + tooltip.caretX - tooltipWidth / 2;
+        left = Math.max(4, Math.min(left, viewportWidth - tooltipWidth - 4));
+
+        let top = rect.top + window.pageYOffset + tooltip.caretY - tooltipHeight - 10;
+        if (top < 4) {{
+          // not enough room above the point -- show it below instead
+          top = rect.top + window.pageYOffset + tooltip.caretY + 14;
+        }}
+        top = Math.min(top, viewportHeight - tooltipHeight - 4);
+
+        tooltipEl.style.left = left + "px";
+        tooltipEl.style.top = top + "px";
       }}
 
       new Chart(document.getElementById("ribbonChart"), {{
