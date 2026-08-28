@@ -437,13 +437,13 @@ def _tooltip_html_for_window(w: dict, data: dict) -> str:
     one colored row per threshold, single-column, matching the requested
     layout exactly."""
     header = (
-        f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;"
-        f"color:{BASE_TEXT};background-color:#ffffff;"
+        f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;font-family:{FONT_STACK};"
+        f"color:{BASE_TEXT};background-color:#ffffff;font-family:{FONT_STACK};"
         f"border-bottom:1px solid rgba(0,0,0,0.12);'>{_fmt_ph(w['start_utc'])} to {_fmt_ph(w['end_utc'])}</div>"
     )
     rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
     return (
-        f"<div style='min-width:210px;border-radius:6px;overflow:hidden;"
+        f"<div style='min-width:210px;border-radius:6px;overflow:visible;font-family:{FONT_STACK};"
         f"box-shadow:0 2px 8px rgba(0,0,0,0.25);font-family:{FONT_STACK};'>{header}{rows}</div>"
     )
 
@@ -478,7 +478,7 @@ def render_ribbon_chart_html(result: dict) -> str:
     datasets = []
     for threshold in AVAILABLE_THRESHOLDS_MM:
         values = [data[threshold].get(w["label"]) or 0 for w in windows]
-        r, g, b = _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[threshold]), _TIER_FILL_ALPHA["tone1"])
+        r, g, b = _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[threshold]), _TIER_FILL_ALPHA["tone2"])
         datasets.append({"label": f"{threshold}mm", "values": values, "color": f"rgb({r},{g},{b})"})
 
     tooltip_html_by_day = [_tooltip_html_for_window(w, data) for w in windows]
