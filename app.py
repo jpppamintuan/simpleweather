@@ -313,7 +313,7 @@ def _tint_toward_white_rgb(r: int, g: int, b: int, alpha: float) -> tuple[int, i
 #   <5%: neutral (white/black, the only theme-dependent tier)
 #   5-35% / 35-65% / 65-95%: tone3 / tone2 / tone1 (lightest -> strongest)
 #   >=95%: pure base color
-_TIER_FILL_ALPHA = {"tone3": 0.20, "tone2": 0.50, "tone1": 0.80}
+_TIER_FILL_ALPHA = {"tone3": 0.05, "tone2": 0.35, "tone1": 0.65}
 
 
 def _tier_for_value(val: float) -> str:
@@ -412,17 +412,96 @@ def render_ribbon_chart_html(result: dict) -> str:
     labels_json = json.dumps(day_labels)
     datasets_json = json.dumps(datasets)
 
+def _tooltip_row_html(threshold: int, val) -> str:
+    """One row of the hover/click tooltip balloon, colored identically to
+    the corresponding full-table cell (same _cell_rgb_for_value /
+    _cell_text_color functions), so the balloon and the table never show
+    conflicting colors for the same value."""
+    if val is None:
+        bg, text_color = "#ffffff", BASE_TEXT
+        text = "No data"
+    else:
+        r, g, b = _cell_rgb_for_value(threshold, val)
+        bg = f"rgb({r},{g},{b})"
+        text_color = _cell_text_color(_relative_luminance(r, g, b))
+        text = f"{val:.0f}% chance of rain (&ge;{threshold} mm)"
+    return (
+        f"<div style='padding:6px 10px;text-align:center;background-color:{bg};"
+        f"color:{text_color};font-weight:600;font-size:12px;"
+        f"border-bottom:1px solid rgba(0,0,0,0.12);'>{text}</div>"
+    )
+
+
+def _tooltip_html_for_window(w: dict, data: dict) -> str:
+    """The full 6-row balloon for one day: a header (the date range) plus
+    one colored row per threshold, single-column, matching the requested
+    layout exactly."""
+    header = (
+        f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;"
+        f"color:{BASE_TEXT};background-color:#ffffff;"
+        f"border-bottom:1px solid rgba(0,0,0,0.12);'>{_fmt_ph(w['start_utc'])} to {_fmt_ph(w['end_utc'])}</div>"
+    )
+    rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
+    return (
+        f"<div style='min-width:210px;border-radius:6px;overflow:hidden;"
+        f"box-shadow:0 2px 8px rgba(0,0,0,0.25);font-family:{FONT_STACK};'>{header}{rows}</div>"
+    )
+
+
+def render_ribbon_chart_html(result: dict) -> str:
+    """Nested-area 'ribbon' chart: all 5 thresholds as bands between
+    adjacent threshold curves (1mm's band fills to the 5mm line, 5mm's to
+    the 20mm line, etc., down to 100mm filling to zero) -- well-defined
+    regardless of paint order, since it works because the thresholds are
+    monotonically nested: P(>=1mm) is always >= P(>=5mm) >= ... >=
+    P(>=100mm) on any given day, so adjacent bands never cross.
+
+    Colors use each threshold's tone1 (65%) shade rather than the pure
+    base hex -- a large filled area in the fully saturated color reads as
+    much more intense/harsh than the same hue used for a small table
+    cell, so the softer 65% tone looks better at this scale while staying
+    clearly tied to the same threshold-color language as the tables.
+
+    Rendered via components.v1.html (a real iframe), not st.markdown --
+    unlike the HTML tables elsewhere in this file, this needs actual
+    <script> execution (Chart.js), which st.markdown's unsafe_allow_html
+    silently strips. The iframe has its own isolated document with an
+    explicit white background, so it isn't affected by Streamlit's theme.
+    """
+    windows = result["windows"]
+    data = result["data"]
+    if not windows:
+        return ""
+
+    day_labels = [w["start_utc"].astimezone(PH_TZ).strftime("%a %d") for w in windows]
+
+    datasets = []
+    for threshold in AVAILABLE_THRESHOLDS_MM:
+        values = [data[threshold].get(w["label"]) or 0 for w in windows]
+        r, g, b = _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[threshold]), _TIER_FILL_ALPHA["tone1"])
+        datasets.append({"label": f"{threshold}mm", "values": values, "color": f"rgb({r},{g},{b})"})
+
+    tooltip_html_by_day = [_tooltip_html_for_window(w, data) for w in windows]
+
+    labels_json = json.dumps(day_labels)
+    datasets_json = json.dumps(datasets)
+    tooltips_json = json.dumps(tooltip_html_by_day)
+
     return f"""
     <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:340px;">
         <canvas id="ribbonChart"></canvas>
       </div>
     </div>
+    <div id="ribbonTooltip" style="position:absolute;pointer-events:none;opacity:0;
+      transition:opacity 0.1s ease;z-index:100;top:0;left:0;"></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script>
     (function() {{
       const labels = {labels_json};
       const rawDatasets = {datasets_json};
+      const tooltipHtmlByDay = {tooltips_json};
+      const tooltipEl = document.getElementById("ribbonTooltip");
 
       const datasets = rawDatasets.map((d, i) => ({{
         label: d.label,
@@ -433,18 +512,29 @@ def render_ribbon_chart_html(result: dict) -> str:
         pointBorderColor: d.color,
         // Each band fills the area between THIS curve and the NEXT one
         // (1mm fills to the 5mm line, 5mm fills to the 20mm line, etc.),
-        // not "down to zero" for every dataset. Since the data is nested
-        // and descending, this is a well-defined, non-overlapping band
-        // for each threshold -- no dependence on paint/z-order at all,
-        // which is what broke the previous fill-to-origin-for-everything
-        // approach (whichever dataset actually painted last covered all
-        // the others, since its fill spanned the full 0-to-its-own-value
-        // range regardless of the others' smaller ranges).
+        // not "down to zero" for every dataset -- well-defined regardless
+        // of paint order, since the data is nested and descending.
         fill: (i === rawDatasets.length - 1) ? "origin" : (i + 1),
         borderWidth: 1,
         pointRadius: 0,
+        pointHoverRadius: 4,
         tension: 0.3,
       }}));
+
+      function showTooltip(context) {{
+        const {{ chart, tooltip }} = context;
+        if (tooltip.opacity === 0 || tooltip.dataPoints.length === 0) {{
+          tooltipEl.style.opacity = 0;
+          return;
+        }}
+        const dayIndex = tooltip.dataPoints[0].dataIndex;
+        tooltipEl.innerHTML = tooltipHtmlByDay[dayIndex];
+        const rect = chart.canvas.getBoundingClientRect();
+        tooltipEl.style.opacity = 1;
+        tooltipEl.style.left = (rect.left + window.pageXOffset + tooltip.caretX) + "px";
+        tooltipEl.style.top = (rect.top + window.pageYOffset + tooltip.caretY - 10) + "px";
+        tooltipEl.style.transform = "translate(-50%, -100%)";
+      }}
 
       new Chart(document.getElementById("ribbonChart"), {{
         type: "line",
@@ -452,22 +542,22 @@ def render_ribbon_chart_html(result: dict) -> str:
         options: {{
           responsive: true,
           maintainAspectRatio: false,
+          interaction: {{ mode: "index", intersect: false }},
           plugins: {{
-            // Chart.js v4 ships a "colors" plugin that auto-assigns its
-            // own palette to datasets -- in some configurations this can
-            // override colors set explicitly per-dataset above, which is
-            // what caused the chart to ignore THRESHOLD_COLORS entirely
-            // and show an auto-generated blue-to-green progression
-            // instead. Disabling it outright guarantees our colors win.
+            // Chart.js v4's built-in "colors" plugin auto-assigns its own
+            // palette and can override explicit per-dataset colors in
+            // some configs -- disabling it guarantees ours are used.
             colors: {{ enabled: false, forceOverride: false }},
             legend: {{
               display: true,
               position: "bottom",
               labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }},
             }},
-            tooltip: {{
-              callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y + "%" }},
-            }},
+            // Custom balloon tooltip (a real HTML table, not Chart.js's
+            // plain default) instead of the built-in renderer -- Chart.js
+            // supports this via the "external" callback, which hands us
+            // full control over the tooltip's DOM content.
+            tooltip: {{ enabled: false, external: showTooltip }},
           }},
           scales: {{
             y: {{
@@ -762,8 +852,11 @@ if "last_fetch_out" in st.session_state:
     # --- Full detailed table ---
     num_days_shown = len(result["windows"])
     st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
-    components.html(render_ribbon_chart_html(result), height=380)
-    st.markdown(render_table_html(result), unsafe_allow_html=True)
+    show_graph = st.toggle("Show as graph")
+    if show_graph:
+        components.html(render_ribbon_chart_html(result), height=380)
+    else:
+        st.markdown(render_table_html(result), unsafe_allow_html=True)
     st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
     st.divider()
