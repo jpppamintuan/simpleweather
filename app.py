@@ -143,6 +143,104 @@ def _save_disk_cache() -> None:
 _load_disk_cache()  # populate the in-memory cache from disk once, at startup
 
 
+# Separate cache for the percentile feature -- deliberately NOT sharing
+# _GLOBAL_CACHE/_serialize_result with the main forecast above. That
+# serializer assumes the main result's shape (windows/data/...); a
+# percentile result has a different shape entirely (days/stats/...). An
+# earlier version of this reused the same cache and functions, which
+# would crash (or silently mis-serialize) the moment a percentile result
+# actually got written to disk. Own dict, own file, own serializer avoids
+# that class of bug entirely rather than trying to make one serializer
+# handle both shapes.
+_PCT_GLOBAL_CACHE: dict = {}
+_PCT_CACHE_FILE = Path(__file__).parent / "percentile_cache.json"
+
+
+def _serialize_pct_result(result: dict) -> dict:
+    def dt(x):
+        return x.isoformat() if x else None
+
+    return {
+        "run_time": dt(result["run_time"]),
+        "grid_lat": result["grid_lat"],
+        "grid_lon": result["grid_lon"],
+        "days": [
+            {
+                "start_utc": dt(d["start_utc"]),
+                "end_utc": dt(d["end_utc"]),
+                "stats": d["stats"],
+                "member_values_mm": d["member_values_mm"],
+            }
+            for d in result["days"]
+        ],
+        "percentiles": result["percentiles"],
+        "downloaded_bytes": result.get("downloaded_bytes"),
+    }
+
+
+def _deserialize_pct_result(d: dict) -> dict:
+    def pdt(s):
+        return datetime.fromisoformat(s) if s else None
+
+    return {
+        "run_time": pdt(d["run_time"]),
+        "grid_lat": d["grid_lat"],
+        "grid_lon": d["grid_lon"],
+        "days": [
+            {
+                "start_utc": pdt(day["start_utc"]),
+                "end_utc": pdt(day["end_utc"]),
+                "stats": day["stats"],
+                "member_values_mm": day["member_values_mm"],
+            }
+            for day in d["days"]
+        ],
+        "percentiles": d["percentiles"],
+        "downloaded_bytes": d.get("downloaded_bytes"),
+    }
+
+
+def _pct_cache_key_to_str(key: tuple) -> str:
+    lat, lon, lead_days = key
+    return f"{lat}|{lon}|{lead_days}"
+
+
+def _pct_cache_key_from_str(s: str) -> tuple:
+    lat, lon, lead_days = s.split("|")
+    return (float(lat), float(lon), int(lead_days))
+
+
+def _load_pct_disk_cache() -> None:
+    if not _PCT_CACHE_FILE.exists():
+        return
+    try:
+        raw = json.loads(_PCT_CACHE_FILE.read_text())
+        now = time.time()
+        for key_str, entry in raw.items():
+            if now - entry["ts"] >= CACHE_TTL_SECONDS:
+                continue
+            _PCT_GLOBAL_CACHE[_pct_cache_key_from_str(key_str)] = {
+                "ts": entry["ts"],
+                "result": _deserialize_pct_result(entry["result"]),
+            }
+    except Exception:
+        pass
+
+
+def _save_pct_disk_cache() -> None:
+    try:
+        raw = {
+            _pct_cache_key_to_str(key): {"ts": entry["ts"], "result": _serialize_pct_result(entry["result"])}
+            for key, entry in _PCT_GLOBAL_CACHE.items()
+        }
+        _PCT_CACHE_FILE.write_text(json.dumps(raw))
+    except Exception:
+        pass
+
+
+_load_pct_disk_cache()
+
+
 def _cache_lookup(key: tuple):
     now = time.time()
     session_cache = st.session_state.setdefault("_forecast_cache", {})
@@ -564,26 +662,41 @@ def render_ribbon_chart_html(result: dict) -> str:
 
 
 def render_percentile_chart_html(pct_result: dict) -> str:
-    """P10-P90 shaded band + median line for the raw-ensemble percentile
-    feature. Reuses the same patterns already validated for the main
-    ribbon chart: font loaded inside this iframe's own document (it's a
-    separate document from the main page), Chart.js's auto "colors"
-    plugin disabled, and fill-between-adjacent-datasets (P90's fill
-    target is "+1", i.e. the next dataset in the array = P10) rather than
-    relying on paint order."""
+    """Nested P10/P25-P75/P90 bands + median line for the raw-ensemble
+    percentile feature. Uses the same fill-between-adjacent-datasets
+    technique proven on the main ribbon chart (each dataset fills to the
+    NEXT dataset's line, not to a shared baseline) -- this data is
+    monotonic the same way (P10 <= P25 <= median <= P75 <= P90 always),
+    so the same trick avoids the alpha-blending-produces-wrong-colors bug
+    that approach was built to fix in the first place: P90 fills to P75
+    (light outer band), P75 fills to P25 (darker inner/interquartile
+    band), P25 fills to P10 (light outer band), P10 and Median are plain
+    lines with no further fill.
+    """
     days = pct_result["days"]
     if not days:
         return ""
 
     day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d") for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
+    p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
+    p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
     p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
     median = [d["stats"]["median"] for d in days]
 
     labels_json = json.dumps(day_labels)
     p10_json = json.dumps(p10)
+    p25_json = json.dumps(p25)
+    p75_json = json.dumps(p75)
     p90_json = json.dumps(p90)
     median_json = json.dumps(median)
+
+    # P25/P75 keep the original P10/P90 shade; P10/P90 become lighter,
+    # since they now bound the outer (less central) bands.
+    inner_border = "rgba(0,123,255,0.4)"
+    inner_fill = "rgba(0,123,255,0.15)"
+    outer_border = "rgba(0,123,255,0.2)"
+    outer_fill = "rgba(0,123,255,0.07)"
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -598,6 +711,8 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     (function() {{
       const labels = {labels_json};
       const p10 = {p10_json};
+      const p25 = {p25_json};
+      const p75 = {p75_json};
       const p90 = {p90_json};
       const median = {median_json};
 
@@ -606,11 +721,17 @@ def render_percentile_chart_html(pct_result: dict) -> str:
         data: {{
           labels: labels,
           datasets: [
-            {{ label: "P90", data: p90, borderColor: "rgba(0,123,255,0.4)",
-               backgroundColor: "rgba(0,123,255,0.15)", fill: "+1",
+            {{ label: "P90", data: p90, borderColor: "{outer_border}",
+               backgroundColor: "{outer_fill}", fill: "+1",
                pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "P10", data: p10, borderColor: "rgba(0,123,255,0.4)",
-               backgroundColor: "rgba(0,123,255,0.15)", fill: false,
+            {{ label: "P75", data: p75, borderColor: "{inner_border}",
+               backgroundColor: "{inner_fill}", fill: "+1",
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "P25", data: p25, borderColor: "{inner_border}",
+               backgroundColor: "{outer_fill}", fill: "+1",
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "P10", data: p10, borderColor: "{outer_border}",
+               backgroundColor: "{outer_fill}", fill: false,
                pointRadius: 0, tension: 0.3, borderWidth: 1 }},
             {{ label: "Median", data: median, borderColor: "#0056b3",
                backgroundColor: "#0056b3", fill: false,
@@ -979,9 +1100,9 @@ pct_clicked = st.button("Get percentile forecast", key="pct_button")
 pct_elapsed_placeholder = st.empty()
 
 if pct_clicked:
-    pct_key = (pct_lat, pct_lon, pct_lead_days, "tp_percentile")
+    pct_key = (pct_lat, pct_lon, pct_lead_days)
     pct_now = time.time()
-    pct_session_cache = st.session_state.setdefault("_forecast_cache", {})
+    pct_session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
     pct_cached_entry = pct_session_cache.get(pct_key)
 
     if pct_cached_entry and (pct_now - pct_cached_entry["ts"] < CACHE_TTL_SECONDS):
@@ -989,33 +1110,40 @@ if pct_clicked:
         pct_was_cached = True
         pct_elapsed = 0.0
     else:
-        pct_was_cached = False
-        pct_request_started_at = time.time()
-        pct_progress = st.progress(0, text="Connecting to ECMWF Open Data...")
+        pct_global_entry = _PCT_GLOBAL_CACHE.get(pct_key)
+        if pct_global_entry and (pct_now - pct_global_entry["ts"] < CACHE_TTL_SECONDS):
+            pct_result = pct_global_entry["result"]
+            pct_session_cache[pct_key] = pct_global_entry  # promote into this session too
+            pct_was_cached = True
+            pct_elapsed = 0.0
+        else:
+            pct_was_cached = False
+            pct_request_started_at = time.time()
+            pct_progress = st.progress(0, text="Connecting to ECMWF Open Data...")
 
-        def pct_on_progress(frac: float, msg: str):
-            pct_progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
+            def pct_on_progress(frac: float, msg: str):
+                pct_progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
 
-        try:
-            pct_result = fetch_percentile_rainfall(
-                pct_lat, pct_lon, max_lead_days=pct_lead_days, progress_callback=pct_on_progress
-            )
-        except Exception as e:
+            try:
+                pct_result = fetch_percentile_rainfall(
+                    pct_lat, pct_lon, max_lead_days=pct_lead_days, progress_callback=pct_on_progress
+                )
+            except Exception as e:
+                pct_progress.empty()
+                st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
+                with st.expander("Full error details"):
+                    st.exception(e)
+                st.stop()
+
+            pct_progress.progress(100, text="Done!")
+            time.sleep(0.2)
             pct_progress.empty()
-            st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
-            with st.expander("Full error details"):
-                st.exception(e)
-            st.stop()
+            pct_elapsed = time.time() - pct_request_started_at
 
-        pct_progress.progress(100, text="Done!")
-        time.sleep(0.2)
-        pct_progress.empty()
-        pct_elapsed = time.time() - pct_request_started_at
-
-        pct_entry = {"ts": pct_now, "result": pct_result}
-        pct_session_cache[pct_key] = pct_entry
-        _GLOBAL_CACHE[pct_key] = pct_entry
-        _save_disk_cache()
+            pct_entry = {"ts": pct_now, "result": pct_result}
+            pct_session_cache[pct_key] = pct_entry
+            _PCT_GLOBAL_CACHE[pct_key] = pct_entry
+            _save_pct_disk_cache()
 
     st.session_state["last_pct_result"] = pct_result
     st.session_state["last_pct_location_name"] = pct_location_name
@@ -1055,14 +1183,6 @@ if "last_pct_result" in st.session_state:
     }
     pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
     st.dataframe(pct_df, use_container_width=True)
-
-    csv_bytes = pct_df.to_csv().encode("utf-8")
-    st.download_button(
-        "Download CSV",
-        data=csv_bytes,
-        file_name=f"percentile_rainfall_{pct_location_name.replace(', ', '_').replace(' ', '_')}.csv",
-        mime="text/csv",
-    )
 
     downloaded = pct_result.get("downloaded_bytes")
     if downloaded:
