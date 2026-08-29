@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -12,7 +13,9 @@ from ecmwf_client import (
     THRESHOLD_COLORS,
     MODEL_LABELS,
     PH_TZ,
+    DEFAULT_PERCENTILES,
     fetch_forecast_table,
+    fetch_percentile_rainfall,
 )
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
@@ -379,39 +382,6 @@ def _estimate_col_width_px(windows: list[dict]) -> int:
     return int(longest_line * char_width_px) + padding_px
 
 
-def render_ribbon_chart_html(result: dict) -> str:
-    """Nested-area 'ribbon' chart: all 5 thresholds as overlapping filled
-    areas from 0 up to that day's probability, drawn in order from 1mm
-    (largest area, drawn first/underneath) to 100mm (smallest area, drawn
-    last/on top). This works cleanly here specifically because the
-    thresholds are monotonically nested -- P(>=1mm) is always >= P(>=5mm)
-    >= ... >= P(>=100mm) on any given day -- so the bands never cross and
-    naturally read as "shrinking severity, shrinking likelihood."
-
-    Rendered via components.v1.html (a real iframe), not st.markdown --
-    unlike the HTML tables elsewhere in this file, this needs actual
-    <script> execution (Chart.js), which st.markdown's unsafe_allow_html
-    silently strips. The iframe has its own isolated document, so the
-    color fills' transparency composites against a background we set
-    explicitly (white) rather than whatever Streamlit's live theme
-    happens to be -- sidesteps the whole light/dark inconsistency problem
-    the HTML tables had, without needing the solid-tier color system.
-    """
-    windows = result["windows"]
-    data = result["data"]
-    if not windows:
-        return ""
-
-    day_labels = [w["start_utc"].astimezone(PH_TZ).strftime("%a %d") for w in windows]
-
-    datasets = []
-    for threshold in AVAILABLE_THRESHOLDS_MM:
-        values = [data[threshold].get(w["label"]) or 0 for w in windows]
-        datasets.append({"label": f"{threshold}mm", "values": values, "color": THRESHOLD_COLORS[threshold]})
-
-    labels_json = json.dumps(day_labels)
-    datasets_json = json.dumps(datasets)
-
 def _tooltip_row_html(threshold: int, val) -> str:
     """One row of the hover/click tooltip balloon, colored identically to
     the corresponding full-table cell (same _cell_rgb_for_value /
@@ -588,6 +558,80 @@ def render_ribbon_chart_html(result: dict) -> str:
 
       // Default to day 1 as soon as the chart is ready, before any hover.
       panelEl.innerHTML = dayDetailHtmlByDay[0];
+    }})();
+    </script>
+    """
+
+
+def render_percentile_chart_html(pct_result: dict) -> str:
+    """P10-P90 shaded band + median line for the raw-ensemble percentile
+    feature. Reuses the same patterns already validated for the main
+    ribbon chart: font loaded inside this iframe's own document (it's a
+    separate document from the main page), Chart.js's auto "colors"
+    plugin disabled, and fill-between-adjacent-datasets (P90's fill
+    target is "+1", i.e. the next dataset in the array = P10) rather than
+    relying on paint order."""
+    days = pct_result["days"]
+    if not days:
+        return ""
+
+    day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d") for d in days]
+    p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
+    p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
+    median = [d["stats"]["median"] for d in days]
+
+    labels_json = json.dumps(day_labels)
+    p10_json = json.dumps(p10)
+    p90_json = json.dumps(p90)
+    median_json = json.dumps(median)
+
+    return f"""
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
+    <div style="background-color:#ffffff;padding:8px;">
+      <div style="position:relative;width:100%;height:300px;">
+        <canvas id="pctChart"></canvas>
+      </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script>
+    (function() {{
+      const labels = {labels_json};
+      const p10 = {p10_json};
+      const p90 = {p90_json};
+      const median = {median_json};
+
+      new Chart(document.getElementById("pctChart"), {{
+        type: "line",
+        data: {{
+          labels: labels,
+          datasets: [
+            {{ label: "P90", data: p90, borderColor: "rgba(0,123,255,0.4)",
+               backgroundColor: "rgba(0,123,255,0.15)", fill: "+1",
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "P10", data: p10, borderColor: "rgba(0,123,255,0.4)",
+               backgroundColor: "rgba(0,123,255,0.15)", fill: false,
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "Median", data: median, borderColor: "#0056b3",
+               backgroundColor: "#0056b3", fill: false,
+               pointRadius: 3, tension: 0.3, borderWidth: 2 }},
+          ],
+        }},
+        options: {{
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {{
+            colors: {{ enabled: false, forceOverride: false }},
+            legend: {{ display: true, position: "bottom",
+              labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }} }},
+            tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + " mm" }} }},
+          }},
+          scales: {{
+            y: {{ min: 0, ticks: {{ callback: (v) => v + " mm", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
+            x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }} }}, grid: {{ display: false }} }},
+          }},
+        }},
+      }});
     }})();
     </script>
     """
@@ -912,3 +956,120 @@ if "last_fetch_out" in st.session_state:
     st.caption(schedule_note)
 else:
     st.info("Choose a location and click **Get forecast**.")
+
+
+st.divider()
+st.header("🧪 Percentile Rainfall (experimental)")
+st.caption(
+    "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
+    "percentiles locally, instead of using ECMWF's precomputed threshold "
+    "probabilities like the tables above. This gives actual mm amounts (not "
+    "just chance of exceeding a fixed threshold) but is a much heavier fetch -- "
+    "expect noticeably longer load times than the main forecast."
+)
+
+pct_col1, pct_col2 = st.columns([2, 1])
+with pct_col1:
+    pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
+    pct_lat, pct_lon = LOCATIONS[pct_location_name]
+with pct_col2:
+    pct_lead_days = st.slider("Days", min_value=1, max_value=10, value=5, key="pct_lead_days")
+
+pct_clicked = st.button("Get percentile forecast", key="pct_button")
+pct_elapsed_placeholder = st.empty()
+
+if pct_clicked:
+    pct_key = (pct_lat, pct_lon, pct_lead_days, "tp_percentile")
+    pct_now = time.time()
+    pct_session_cache = st.session_state.setdefault("_forecast_cache", {})
+    pct_cached_entry = pct_session_cache.get(pct_key)
+
+    if pct_cached_entry and (pct_now - pct_cached_entry["ts"] < CACHE_TTL_SECONDS):
+        pct_result = pct_cached_entry["result"]
+        pct_was_cached = True
+        pct_elapsed = 0.0
+    else:
+        pct_was_cached = False
+        pct_request_started_at = time.time()
+        pct_progress = st.progress(0, text="Connecting to ECMWF Open Data...")
+
+        def pct_on_progress(frac: float, msg: str):
+            pct_progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
+
+        try:
+            pct_result = fetch_percentile_rainfall(
+                pct_lat, pct_lon, max_lead_days=pct_lead_days, progress_callback=pct_on_progress
+            )
+        except Exception as e:
+            pct_progress.empty()
+            st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
+            with st.expander("Full error details"):
+                st.exception(e)
+            st.stop()
+
+        pct_progress.progress(100, text="Done!")
+        time.sleep(0.2)
+        pct_progress.empty()
+        pct_elapsed = time.time() - pct_request_started_at
+
+        pct_entry = {"ts": pct_now, "result": pct_result}
+        pct_session_cache[pct_key] = pct_entry
+        _GLOBAL_CACHE[pct_key] = pct_entry
+        _save_disk_cache()
+
+    st.session_state["last_pct_result"] = pct_result
+    st.session_state["last_pct_location_name"] = pct_location_name
+    st.session_state["last_pct_was_cached"] = pct_was_cached
+    st.session_state["last_pct_elapsed"] = pct_elapsed
+
+if "last_pct_result" in st.session_state:
+    pct_result = st.session_state["last_pct_result"]
+    pct_location_name = st.session_state["last_pct_location_name"]
+    pct_was_cached = st.session_state["last_pct_was_cached"]
+    pct_elapsed = st.session_state["last_pct_elapsed"]
+
+    pct_elapsed_placeholder.caption(
+        f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
+    )
+
+    pct_days = pct_result["days"]
+    pct_percentiles = pct_result["percentiles"]
+    pct_run_time = pct_result["run_time"]
+
+    st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
+    st.caption(
+        "Day periods below start from the model run's own time, not forced to 00 UTC "
+        "the way the tables above are -- a simplification for this first version."
+    )
+
+    st.subheader(f"Percentile rainfall for {pct_location_name}")
+    components.html(render_percentile_chart_html(pct_result), height=380)
+
+    stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+    stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+    day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b") for d in pct_days]
+
+    table_data = {
+        day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+        for i, d in enumerate(pct_days)
+    }
+    pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+    st.dataframe(pct_df, use_container_width=True)
+
+    csv_bytes = pct_df.to_csv().encode("utf-8")
+    st.download_button(
+        "Download CSV",
+        data=csv_bytes,
+        file_name=f"percentile_rainfall_{pct_location_name.replace(', ', '_').replace(' ', '_')}.csv",
+        mime="text/csv",
+    )
+
+    downloaded = pct_result.get("downloaded_bytes")
+    if downloaded:
+        size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
+        st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation).")
+else:
+    st.info(
+        "Choose a location and click **Get percentile forecast** to see mm-based rainfall "
+        "percentiles (this will take noticeably longer than the main forecast above)."
+    )
