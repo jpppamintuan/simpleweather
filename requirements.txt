@@ -1,4 +1,4 @@
-streamlit>=1.35
+streamlit>=1.36
 ecmwf-opendata>=0.3.19
 xarray>=2024.3
 cfgrib>=0.9.14
