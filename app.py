@@ -30,7 +30,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.title("🌧️ Rainfall Exceedance Forecast")
+st.title("🌧️ Probabilistic Rainfall Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
@@ -241,7 +241,99 @@ def _save_pct_disk_cache() -> None:
 _load_pct_disk_cache()
 
 
+def _find_pct_superset_entry(cache_dict: dict, lat: float, lon: float, requested_lead_days: int, now: float):
+    """Same idea as _find_superset_entry, for the percentile cache (which
+    has no model dimension -- just lat/lon/lead_days)."""
+    candidates = []
+    for key, entry in cache_dict.items():
+        k_lat, k_lon, k_lead_days = key
+        if k_lat == lat and k_lon == lon and k_lead_days >= requested_lead_days:
+            if now - entry["ts"] < CACHE_TTL_SECONDS:
+                candidates.append((k_lead_days, entry))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])
+    return candidates[0][1]
+
+
+def _truncate_pct_result(result: dict, lead_days: int) -> dict:
+    truncated = dict(result)
+    truncated["days"] = result["days"][:lead_days]
+    return truncated
+
+
+def get_percentile_forecast_with_progress(lat: float, lon: float, lead_days: int):
+    """Three-tier lookup (session -> cross-session -> superset-trim ->
+    fresh fetch), mirroring get_forecast_with_progress() for the main
+    forecast. Returns (result, was_cached)."""
+    key = (lat, lon, lead_days)
+    now = time.time()
+    session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
+
+    cached = session_cache.get(key)
+    if cached and (now - cached["ts"] < CACHE_TTL_SECONDS):
+        return cached["result"], True
+
+    global_entry = _PCT_GLOBAL_CACHE.get(key)
+    if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
+        session_cache[key] = global_entry
+        return global_entry["result"], True
+
+    superset = (
+        _find_pct_superset_entry(session_cache, lat, lon, lead_days, now)
+        or _find_pct_superset_entry(_PCT_GLOBAL_CACHE, lat, lon, lead_days, now)
+    )
+    if superset:
+        trimmed = _truncate_pct_result(superset["result"], lead_days)
+        entry = {"ts": now, "result": trimmed}
+        session_cache[key] = entry
+        _PCT_GLOBAL_CACHE[key] = entry
+        return trimmed, True
+
+    progress = st.progress(0, text="Connecting to ECMWF Open Data...")
+
+    def on_progress(frac: float, msg: str):
+        progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
+
+    try:
+        result = fetch_percentile_rainfall(lat, lon, max_lead_days=lead_days, progress_callback=on_progress)
+    finally:
+        progress.progress(100, text="Done!")
+        time.sleep(0.2)
+        progress.empty()
+
+    entry = {"ts": now, "result": result}
+    session_cache[key] = entry
+    _PCT_GLOBAL_CACHE[key] = entry
+    _save_pct_disk_cache()
+    return result, False
+
+
+def _find_superset_entry(cache_dict: dict, lat: float, lon: float, model: str, requested_lead_days: int, now: float):
+    """A cache entry for MORE days than requested still contains everything
+    a shorter request needs -- e.g. a cached 5-day fetch already has days
+    1-3 of a 3-day request. Finds the smallest cached lead_days that's
+    still >= what's requested, for the same location+model."""
+    candidates = []
+    for key, entry in cache_dict.items():
+        k_lat, k_lon, k_lead_days, k_model = key
+        if k_lat == lat and k_lon == lon and k_model == model and k_lead_days >= requested_lead_days:
+            if now - entry["ts"] < CACHE_TTL_SECONDS:
+                candidates.append((k_lead_days, entry))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[0])  # smallest sufficient lead_days first
+    return candidates[0][1]
+
+
+def _truncate_threshold_result(result: dict, lead_days: int) -> dict:
+    truncated = dict(result)
+    truncated["windows"] = result["windows"][:lead_days]
+    return truncated
+
+
 def _cache_lookup(key: tuple):
+    lat, lon, lead_days, model = key
     now = time.time()
     session_cache = st.session_state.setdefault("_forecast_cache", {})
     cached = session_cache.get(key)
@@ -251,6 +343,15 @@ def _cache_lookup(key: tuple):
     if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
         session_cache[key] = global_entry  # promote into this session too
         return global_entry["result"]
+
+    superset = (
+        _find_superset_entry(session_cache, lat, lon, model, lead_days, now)
+        or _find_superset_entry(_GLOBAL_CACHE, lat, lon, model, lead_days, now)
+    )
+    if superset:
+        trimmed = _truncate_threshold_result(superset["result"], lead_days)
+        _cache_store(key, trimmed)  # remember this exact shorter request too, for next time
+        return trimmed
     return None
 
 
@@ -695,8 +796,8 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     # since they now bound the outer (less central) bands.
     inner_border = "rgba(0,123,255,0.4)"
     inner_fill = "rgba(0,123,255,0.15)"
-    outer_border = "rgba(0,123,255,0.2)"
-    outer_fill = "rgba(0,123,255,0.07)"
+    outer_border = "rgba(0,123,255,0.12)"
+    outer_fill = "rgba(0,123,255,0.04)"
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -932,264 +1033,249 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
     )
 
 
-col1, col2 = st.columns([2, 1])
-with col1:
-    location_name = st.selectbox("Location", list(LOCATIONS.keys()))
-    lat, lon = LOCATIONS[location_name]
-with col2:
-    lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-load_aifs = st.checkbox(
-    "Load AIFS",
-    help="Also fetch ECMWF's AI-based ensemble (AIFS ENS) alongside the standard ENS. "
-         "Roughly doubles the data fetched, though both run concurrently so it's not "
-         "twice the wait.",
+if "view_mode" not in st.session_state:
+    st.session_state["view_mode"] = "Threshold Forecast"
+
+_selected_mode = st.segmented_control(
+    "View",
+    ["Threshold Forecast", "Percentile Rainfall Forecast"],
+    default=st.session_state["view_mode"],
 )
+if _selected_mode is not None:
+    st.session_state["view_mode"] = _selected_mode
+view_mode = st.session_state["view_mode"]
 
-get_forecast_clicked = st.button("Get forecast", type="primary")
+if view_mode == "Threshold Forecast":
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        location_name = st.selectbox("Location", list(LOCATIONS.keys()))
+        lat, lon = LOCATIONS[location_name]
+    with col2:
+        lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-elapsed_placeholder = st.empty()
-
-if get_forecast_clicked:
-    request_started_at = time.time()
-    try:
-        fetch_out = get_forecast_with_progress(lat, lon, lead_days, load_aifs)
-    except Exception as e:
-        st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
-        with st.expander("Full error details"):
-            st.exception(e)
-        st.stop()
-    elapsed = time.time() - request_started_at
-
-    st.session_state["last_fetch_out"] = fetch_out
-    st.session_state["last_load_aifs"] = load_aifs
-    st.session_state["last_location_name"] = location_name
-    st.session_state["last_lat"] = lat
-    st.session_state["last_lon"] = lon
-    st.session_state["last_elapsed"] = elapsed
-
-if "last_fetch_out" in st.session_state:
-    fetch_out = st.session_state["last_fetch_out"]
-    load_aifs_active = st.session_state["last_load_aifs"]
-    location_name = st.session_state["last_location_name"]
-    lat = st.session_state["last_lat"]
-    lon = st.session_state["last_lon"]
-    elapsed = st.session_state["last_elapsed"]
-
-    ens_result, ens_was_cached = fetch_out["ifs"]
-    aifs_result, aifs_was_cached = fetch_out.get("aifs-ens", (None, False))
-
-    any_fresh_fetch = not ens_was_cached or (load_aifs_active and not aifs_was_cached)
-    elapsed_placeholder.caption(
-        f"⏱️ Loaded in {elapsed:.1f}s" + ("" if any_fresh_fetch else " (from cache)")
+    load_aifs = st.checkbox(
+        "Load AIFS",
+        help="Also fetch ECMWF's AI-based ensemble (AIFS ENS) alongside the standard ENS. "
+             "Roughly doubles the data fetched, though both run concurrently so it's not "
+             "twice the wait.",
     )
 
-    # --- Model selector: only relevant once AIFS has actually loaded ---
-    available_models = ["ifs"]
-    if load_aifs_active:
-        if aifs_result is not None:
-            available_models.append("aifs-ens")
+    get_forecast_clicked = st.button("Get forecast", type="primary")
+
+    elapsed_placeholder = st.empty()
+
+    if get_forecast_clicked:
+        request_started_at = time.time()
+        try:
+            fetch_out = get_forecast_with_progress(lat, lon, lead_days, load_aifs)
+        except Exception as e:
+            st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
+            with st.expander("Full error details"):
+                st.exception(e)
+            st.stop()
+        elapsed = time.time() - request_started_at
+
+        st.session_state["last_fetch_out"] = fetch_out
+        st.session_state["last_load_aifs"] = load_aifs
+        st.session_state["last_location_name"] = location_name
+        st.session_state["last_lat"] = lat
+        st.session_state["last_lon"] = lon
+        st.session_state["last_elapsed"] = elapsed
+
+    if "last_fetch_out" in st.session_state:
+        fetch_out = st.session_state["last_fetch_out"]
+        load_aifs_active = st.session_state["last_load_aifs"]
+        location_name = st.session_state["last_location_name"]
+        lat = st.session_state["last_lat"]
+        lon = st.session_state["last_lon"]
+        elapsed = st.session_state["last_elapsed"]
+
+        ens_result, ens_was_cached = fetch_out["ifs"]
+        aifs_result, aifs_was_cached = fetch_out.get("aifs-ens", (None, False))
+
+        any_fresh_fetch = not ens_was_cached or (load_aifs_active and not aifs_was_cached)
+        elapsed_placeholder.caption(
+            f"⏱️ Loaded in {elapsed:.1f}s" + ("" if any_fresh_fetch else " (from cache)")
+        )
+
+        # --- Model selector: only relevant once AIFS has actually loaded ---
+        available_models = ["ifs"]
+        if load_aifs_active:
+            if aifs_result is not None:
+                available_models.append("aifs-ens")
+            else:
+                st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
+
+        if len(available_models) > 1:
+            show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}")
+            selected_model = "aifs-ens" if show_aifs else "ifs"
         else:
-            st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
+            selected_model = "ifs"
 
-    if len(available_models) > 1:
-        show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}")
-        selected_model = "aifs-ens" if show_aifs else "ifs"
-    else:
-        selected_model = "ifs"
+        result = ens_result if selected_model == "ifs" else aifs_result
+        was_cached = ens_was_cached if selected_model == "ifs" else aifs_was_cached
+        model_label = MODEL_LABELS[selected_model]
 
-    result = ens_result if selected_model == "ifs" else aifs_result
-    was_cached = ens_was_cached if selected_model == "ifs" else aifs_was_cached
-    model_label = MODEL_LABELS[selected_model]
+        if not result["windows"]:
+            st.warning("No aligned 00 UTC windows available for this range.")
+            st.stop()
 
-    if not result["windows"]:
-        st.warning("No aligned 00 UTC windows available for this range.")
-        st.stop()
+        if result.get("fetch_mode") == "separate" and not was_cached:
+            st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
 
-    if result.get("fetch_mode") == "separate" and not was_cached:
-        st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
+        if not result.get("aligned_to_utc_midnight", True):
+            run_hour_str = f"{result['run_time'].hour:02d} UTC"
+            st.caption(
+                f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
+                f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
+            )
 
-    if not result.get("aligned_to_utc_midnight", True):
-        run_hour_str = f"{result['run_time'].hour:02d} UTC"
-        st.caption(
-            f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
-            f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
-        )
+        if result.get("capped_to_day6"):
+            st.caption(
+                f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
+                f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
+                f"so it requests the range that's safe either way)."
+            )
 
-    if result.get("capped_to_day6"):
-        st.caption(
-            f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
-            f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
-            f"so it requests the range that's safe either way)."
-        )
+        # --- 3-day summary (essential info only) ---
+        st.subheader(f"3-day summary for {location_name}")
+        st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
+        st.caption("All dates shown in UTC+8 (Philippine Time).")
 
-    # --- 3-day summary (essential info only) ---
-    st.subheader(f"3-day summary for {location_name}")
-    st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
-    st.caption("All dates shown in UTC+8 (Philippine Time).")
+        st.divider()
 
-    st.divider()
-
-    # --- Full detailed table ---
-    num_days_shown = len(result["windows"])
-    st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
-    show_graph = st.toggle("Show as graph")
-    if show_graph:
-        components.html(render_ribbon_chart_html(result), height=650)
-    else:
-        st.markdown(render_table_html(result), unsafe_allow_html=True)
-    st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
-
-    st.divider()
-
-    # --- Run / location / grid info (moved to the bottom) ---
-    run_time = result["run_time"]
-    info_col1, info_col2 = st.columns(2)
-    with info_col1:
-        st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
-        st.markdown(
-            f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
-            f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
-        )
-    with info_col2:
-        now_utc = datetime.now(timezone.utc)
-        available_ph = result["available_since"].astimezone(PH_TZ)
-        next_ph = result["next_expected"].astimezone(PH_TZ)
-        remaining = result["next_expected"] - now_utc
-        if remaining.total_seconds() > 0:
-            hrs = int(remaining.total_seconds() // 3600)
-            mins = int((remaining.total_seconds() % 3600) // 60)
-            remaining_str = f"in ~{hrs}h {mins}m"
+        # --- Full detailed table ---
+        num_days_shown = len(result["windows"])
+        st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
+        show_graph = st.toggle("Show as graph")
+        if show_graph:
+            components.html(render_ribbon_chart_html(result), height=650)
         else:
-            remaining_str = "due any time now"
-        st.markdown(f"**Last updated (estimated):** {available_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8)")
-        st.markdown(f"**Next update expected:** {next_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8) — {remaining_str}")
+            st.markdown(render_table_html(result), unsafe_allow_html=True)
+        st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
-    schedule_note = (
-        "\"Last updated\" and \"Next update\" are estimated from ECMWF's published IFS "
-        "dissemination schedule, not a live timestamp from the server."
-    )
-    if selected_model == "aifs-ens":
-        schedule_note += (
-            " AIFS runs on a separate production pipeline with its own timing, so this "
-            "estimate is rougher for AIFS than for ENS."
+        st.divider()
+
+        # --- Run / location / grid info (moved to the bottom) ---
+        run_time = result["run_time"]
+        info_col1, info_col2 = st.columns(2)
+        with info_col1:
+            st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
+            st.markdown(
+                f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
+                f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
+            )
+        with info_col2:
+            now_utc = datetime.now(timezone.utc)
+            available_ph = result["available_since"].astimezone(PH_TZ)
+            next_ph = result["next_expected"].astimezone(PH_TZ)
+            remaining = result["next_expected"] - now_utc
+            if remaining.total_seconds() > 0:
+                hrs = int(remaining.total_seconds() // 3600)
+                mins = int((remaining.total_seconds() % 3600) // 60)
+                remaining_str = f"in ~{hrs}h {mins}m"
+            else:
+                remaining_str = "due any time now"
+            st.markdown(f"**Last updated (estimated):** {available_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8)")
+            st.markdown(f"**Next update expected:** {next_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8) — {remaining_str}")
+
+        schedule_note = (
+            "\"Last updated\" and \"Next update\" are estimated from ECMWF's published IFS "
+            "dissemination schedule, not a live timestamp from the server."
         )
-    st.caption(schedule_note)
-else:
-    st.info("Choose a location and click **Get forecast**.")
-
-
-st.divider()
-st.header("🧪 Percentile Rainfall (experimental)")
-st.caption(
-    "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
-    "percentiles locally, instead of using ECMWF's precomputed threshold "
-    "probabilities like the tables above. This gives actual mm amounts (not "
-    "just chance of exceeding a fixed threshold) but is a much heavier fetch -- "
-    "expect noticeably longer load times than the main forecast."
-)
-
-pct_col1, pct_col2 = st.columns([2, 1])
-with pct_col1:
-    pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
-    pct_lat, pct_lon = LOCATIONS[pct_location_name]
-with pct_col2:
-    pct_lead_days = st.slider("Days", min_value=1, max_value=10, value=5, key="pct_lead_days")
-
-pct_clicked = st.button("Get percentile forecast", key="pct_button")
-pct_elapsed_placeholder = st.empty()
-
-if pct_clicked:
-    pct_key = (pct_lat, pct_lon, pct_lead_days)
-    pct_now = time.time()
-    pct_session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
-    pct_cached_entry = pct_session_cache.get(pct_key)
-
-    if pct_cached_entry and (pct_now - pct_cached_entry["ts"] < CACHE_TTL_SECONDS):
-        pct_result = pct_cached_entry["result"]
-        pct_was_cached = True
-        pct_elapsed = 0.0
+        if selected_model == "aifs-ens":
+            schedule_note += (
+                " AIFS runs on a separate production pipeline with its own timing, so this "
+                "estimate is rougher for AIFS than for ENS."
+            )
+        st.caption(schedule_note)
     else:
-        pct_global_entry = _PCT_GLOBAL_CACHE.get(pct_key)
-        if pct_global_entry and (pct_now - pct_global_entry["ts"] < CACHE_TTL_SECONDS):
-            pct_result = pct_global_entry["result"]
-            pct_session_cache[pct_key] = pct_global_entry  # promote into this session too
-            pct_was_cached = True
-            pct_elapsed = 0.0
-        else:
-            pct_was_cached = False
-            pct_request_started_at = time.time()
-            pct_progress = st.progress(0, text="Connecting to ECMWF Open Data...")
+        st.info("Choose a location and click **Get forecast**.")
 
-            def pct_on_progress(frac: float, msg: str):
-                pct_progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
 
-            try:
-                pct_result = fetch_percentile_rainfall(
-                    pct_lat, pct_lon, max_lead_days=pct_lead_days, progress_callback=pct_on_progress
-                )
-            except Exception as e:
-                pct_progress.empty()
-                st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
-                with st.expander("Full error details"):
-                    st.exception(e)
-                st.stop()
-
-            pct_progress.progress(100, text="Done!")
-            time.sleep(0.2)
-            pct_progress.empty()
-            pct_elapsed = time.time() - pct_request_started_at
-
-            pct_entry = {"ts": pct_now, "result": pct_result}
-            pct_session_cache[pct_key] = pct_entry
-            _PCT_GLOBAL_CACHE[pct_key] = pct_entry
-            _save_pct_disk_cache()
-
-    st.session_state["last_pct_result"] = pct_result
-    st.session_state["last_pct_location_name"] = pct_location_name
-    st.session_state["last_pct_was_cached"] = pct_was_cached
-    st.session_state["last_pct_elapsed"] = pct_elapsed
-
-if "last_pct_result" in st.session_state:
-    pct_result = st.session_state["last_pct_result"]
-    pct_location_name = st.session_state["last_pct_location_name"]
-    pct_was_cached = st.session_state["last_pct_was_cached"]
-    pct_elapsed = st.session_state["last_pct_elapsed"]
-
-    pct_elapsed_placeholder.caption(
-        f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
-    )
-
-    pct_days = pct_result["days"]
-    pct_percentiles = pct_result["percentiles"]
-    pct_run_time = pct_result["run_time"]
-
-    st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
+elif view_mode == "Percentile Rainfall Forecast":
     st.caption(
-        "Day periods below start from the model run's own time, not forced to 00 UTC "
-        "the way the tables above are -- a simplification for this first version."
+        "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
+        "percentiles locally, instead of using ECMWF's precomputed threshold "
+        "probabilities. This gives actual mm amounts (not just chance of exceeding "
+        "a fixed threshold) but is a much heavier fetch -- expect noticeably longer "
+        "load times than the threshold forecast."
+    )
+    st.caption(
+        "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
+        "percentiles locally, instead of using ECMWF's precomputed threshold "
+        "probabilities like the tables above. This gives actual mm amounts (not "
+        "just chance of exceeding a fixed threshold) but is a much heavier fetch -- "
+        "expect noticeably longer load times than the main forecast."
     )
 
-    st.subheader(f"Percentile rainfall for {pct_location_name}")
-    components.html(render_percentile_chart_html(pct_result), height=380)
+    pct_col1, pct_col2 = st.columns([2, 1])
+    with pct_col1:
+        pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
+        pct_lat, pct_lon = LOCATIONS[pct_location_name]
+    with pct_col2:
+        pct_lead_days = st.slider("Days", min_value=1, max_value=10, value=5, key="pct_lead_days")
 
-    stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-    stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-    day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b") for d in pct_days]
+    pct_clicked = st.button("Get percentile forecast", key="pct_button")
+    pct_elapsed_placeholder = st.empty()
 
-    table_data = {
-        day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-        for i, d in enumerate(pct_days)
-    }
-    pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-    st.dataframe(pct_df, use_container_width=True)
+    if pct_clicked:
+        pct_request_started_at = time.time()
+        try:
+            pct_result, pct_was_cached = get_percentile_forecast_with_progress(pct_lat, pct_lon, pct_lead_days)
+        except Exception as e:
+            st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
+            with st.expander("Full error details"):
+                st.exception(e)
+            st.stop()
+        pct_elapsed = time.time() - pct_request_started_at
 
-    downloaded = pct_result.get("downloaded_bytes")
-    if downloaded:
-        size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
-        st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation).")
-else:
-    st.info(
-        "Choose a location and click **Get percentile forecast** to see mm-based rainfall "
-        "percentiles (this will take noticeably longer than the main forecast above)."
-    )
+        st.session_state["last_pct_result"] = pct_result
+        st.session_state["last_pct_location_name"] = pct_location_name
+        st.session_state["last_pct_was_cached"] = pct_was_cached
+        st.session_state["last_pct_elapsed"] = pct_elapsed
+
+    if "last_pct_result" in st.session_state:
+        pct_result = st.session_state["last_pct_result"]
+        pct_location_name = st.session_state["last_pct_location_name"]
+        pct_was_cached = st.session_state["last_pct_was_cached"]
+        pct_elapsed = st.session_state["last_pct_elapsed"]
+
+        pct_elapsed_placeholder.caption(
+            f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
+        )
+
+        pct_days = pct_result["days"]
+        pct_percentiles = pct_result["percentiles"]
+        pct_run_time = pct_result["run_time"]
+
+        st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
+        st.caption(
+            "Day periods below start from the model run's own time, not forced to 00 UTC "
+            "the way the tables above are -- a simplification for this first version."
+        )
+
+        st.subheader(f"Percentile rainfall for {pct_location_name}")
+        components.html(render_percentile_chart_html(pct_result), height=380)
+
+        stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+        stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b") for d in pct_days]
+
+        table_data = {
+            day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+            for i, d in enumerate(pct_days)
+        }
+        pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+        st.dataframe(pct_df, use_container_width=True)
+
+        downloaded = pct_result.get("downloaded_bytes")
+        if downloaded:
+            size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
+            st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation).")
+    else:
+        st.info(
+            "Choose a location and click **Get percentile forecast** to see mm-based rainfall "
+            "percentiles (this will take noticeably longer than the main forecast above)."
+        )
