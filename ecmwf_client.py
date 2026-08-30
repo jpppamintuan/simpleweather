@@ -340,13 +340,14 @@ DEFAULT_PERCENTILES = [10, 25, 50, 75, 90]
 def fetch_percentile_rainfall(
     lat: float,
     lon: float,
-    max_lead_days: int = 5,
+    max_lead_hours: int = 72,
+    period_hours: int = 6,
     percentiles: list[int] = None,
     progress_callback: ProgressFn = None,
 ) -> dict:
     """
     Fetches raw total precipitation (tp) from all 50 ENS perturbed members
-    (stream=enfo, type=pf) and computes daily-accumulation percentiles
+    (stream=enfo, type=pf) and computes accumulation-period percentiles
     locally, since there's no server-side product for arbitrary
     percentiles the way there is for fixed-threshold exceedance (`ep`).
 
@@ -355,28 +356,38 @@ def fetch_percentile_rainfall(
     for the same date range. Expect substantially longer load times --
     this is why it's a separate, opt-in feature rather than part of the
     main tables. tp is a cumulative value (total since forecast start),
-    so each day's rainfall = tp at day-end minus tp at day-start, computed
-    per member, then percentiles/mean/median are taken across the 50
-    resulting daily values.
+    so each period's rainfall = tp at period-end minus tp at period-start,
+    computed per member, then percentiles/mean/median are taken across
+    the 50 resulting values.
+
+    max_lead_hours is hard-capped at 72 for now -- 6-hourly steps that far
+    out are safely within ECMWF's documented step availability for type=pf
+    (0-144h by 3h, for all four run times), so this isn't pushing into any
+    step-availability edge case the way the earlier day-6 AIFS cap was;
+    it's just a deliberate scope limit for this first version, not a
+    server-side constraint. Raise it later by changing the default/cap
+    here once the shorter-range version has been validated.
 
     Simplifications versus fetch_forecast_table() above, deliberate for
-    this first version: no forcing of 00-UTC-aligned daily boundaries --
-    "Day 1" here is simply the first 24h after whatever run gets fetched,
-    labeled with its actual timestamp rather than assumed to start at
-    midnight UTC. Also uses cfgrib/xarray like the rest of this module
-    (decoding the whole downloaded file before extracting one point)
-    rather than streaming/discarding per GRIB message the way a maximally
-    memory-efficient implementation would -- simpler and consistent with
-    the rest of this codebase, at the cost of holding more in memory
-    briefly during decode. Worth revisiting if this becomes a bottleneck
-    in practice.
+    this first version: no forcing of 00-UTC-aligned period boundaries --
+    the first period is simply the first `period_hours` after whatever
+    run gets fetched, labeled with its actual timestamp rather than
+    assumed to start at midnight UTC. Also uses cfgrib/xarray like the
+    rest of this module (decoding the whole downloaded file before
+    extracting one point) rather than streaming/discarding per GRIB
+    message the way a maximally memory-efficient implementation would --
+    simpler and consistent with the rest of this codebase, at the cost of
+    holding more in memory briefly during decode. Worth revisiting if
+    this becomes a bottleneck in practice.
     """
     if percentiles is None:
         percentiles = DEFAULT_PERCENTILES
 
+    max_lead_hours = min(max_lead_hours, 72)  # hard cap, see docstring
+
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
-    steps = list(range(0, max_lead_days * 24 + 1, 24))  # 0, 24, 48, ..., need N+1 points for N days
+    steps = list(range(0, max_lead_hours + 1, period_hours))  # 0, 6, 12, ..., need N+1 points for N periods
 
     client = Client(source="ecmwf")
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -404,13 +415,13 @@ def fetch_percentile_rainfall(
         if grid_lon > 180:
             grid_lon -= 360
 
-        _notify(progress_callback, 0.85, "Computing daily totals and percentiles...")
+        _notify(progress_callback, 0.85, "Computing period totals and percentiles...")
         var_name = list(ds.data_vars)[0]  # 'tp'
         step_hours = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
         order = np.argsort(step_hours)
         sorted_step_hours = step_hours[order]
 
-        days = []
+        periods = []
         for d in range(len(sorted_step_hours) - 1):
             start_idx = int(order[d])
             end_idx = int(order[d + 1])
@@ -422,17 +433,17 @@ def fetch_percentile_rainfall(
             # assuming a fixed axis order via raw positional indexing.
             start_vals_mm = point[var_name].isel(step=start_idx).values * 1000.0
             end_vals_mm = point[var_name].isel(step=end_idx).values * 1000.0
-            daily_mm = np.clip(end_vals_mm - start_vals_mm, 0, None)  # guard tiny negative float noise
+            period_mm = np.clip(end_vals_mm - start_vals_mm, 0, None)  # guard tiny negative float noise
 
-            stats = {"mean": float(np.mean(daily_mm)), "median": float(np.median(daily_mm))}
+            stats = {"mean": float(np.mean(period_mm)), "median": float(np.median(period_mm))}
             for p in percentiles:
-                stats[f"p{p}"] = float(np.percentile(daily_mm, p))
+                stats[f"p{p}"] = float(np.percentile(period_mm, p))
 
-            days.append({
+            periods.append({
                 "start_utc": run_time + timedelta(hours=start_h),
                 "end_utc": run_time + timedelta(hours=end_h),
                 "stats": stats,
-                "member_values_mm": daily_mm.tolist(),
+                "member_values_mm": period_mm.tolist(),
             })
 
     _notify(progress_callback, 1.0, "Done")
@@ -441,7 +452,8 @@ def fetch_percentile_rainfall(
         "run_time": run_time,
         "grid_lat": grid_lat,
         "grid_lon": grid_lon,
-        "days": days,
+        "days": periods,
+        "period_hours": period_hours,
         "percentiles": percentiles,
         "downloaded_bytes": size_bytes,
     }
