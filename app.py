@@ -241,32 +241,38 @@ def _save_pct_disk_cache() -> None:
 _load_pct_disk_cache()
 
 
-def _find_pct_superset_entry(cache_dict: dict, lat: float, lon: float, requested_lead_days: int, now: float):
+def _find_pct_superset_entry(cache_dict: dict, lat: float, lon: float, requested_lead_hours: int, now: float):
     """Same idea as _find_superset_entry, for the percentile cache (which
-    has no model dimension -- just lat/lon/lead_days)."""
+    has no model dimension -- just lat/lon/lead_hours)."""
     candidates = []
     for key, entry in cache_dict.items():
-        k_lat, k_lon, k_lead_days = key
-        if k_lat == lat and k_lon == lon and k_lead_days >= requested_lead_days:
+        k_lat, k_lon, k_lead_hours = key
+        if k_lat == lat and k_lon == lon and k_lead_hours >= requested_lead_hours:
             if now - entry["ts"] < CACHE_TTL_SECONDS:
-                candidates.append((k_lead_days, entry))
+                candidates.append((k_lead_hours, entry))
     if not candidates:
         return None
     candidates.sort(key=lambda x: x[0])
     return candidates[0][1]
 
 
-def _truncate_pct_result(result: dict, lead_days: int) -> dict:
+def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
+    # Each entry in "days" is one period_hours-long period (6h by default),
+    # NOT one calendar day -- slicing by lead_hours directly would keep
+    # the wrong number of entries (e.g. lead_hours=24 should keep the
+    # first 4 six-hour periods, not the first 24 entries).
+    period_hours = result.get("period_hours", 6)
+    num_periods = lead_hours // period_hours
     truncated = dict(result)
-    truncated["days"] = result["days"][:lead_days]
+    truncated["days"] = result["days"][:num_periods]
     return truncated
 
 
-def get_percentile_forecast_with_progress(lat: float, lon: float, lead_days: int):
+def get_percentile_forecast_with_progress(lat: float, lon: float, lead_hours: int):
     """Three-tier lookup (session -> cross-session -> superset-trim ->
     fresh fetch), mirroring get_forecast_with_progress() for the main
     forecast. Returns (result, was_cached)."""
-    key = (lat, lon, lead_days)
+    key = (lat, lon, lead_hours)
     now = time.time()
     session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
 
@@ -280,11 +286,11 @@ def get_percentile_forecast_with_progress(lat: float, lon: float, lead_days: int
         return global_entry["result"], True
 
     superset = (
-        _find_pct_superset_entry(session_cache, lat, lon, lead_days, now)
-        or _find_pct_superset_entry(_PCT_GLOBAL_CACHE, lat, lon, lead_days, now)
+        _find_pct_superset_entry(session_cache, lat, lon, lead_hours, now)
+        or _find_pct_superset_entry(_PCT_GLOBAL_CACHE, lat, lon, lead_hours, now)
     )
     if superset:
-        trimmed = _truncate_pct_result(superset["result"], lead_days)
+        trimmed = _truncate_pct_result(superset["result"], lead_hours)
         entry = {"ts": now, "result": trimmed}
         session_cache[key] = entry
         _PCT_GLOBAL_CACHE[key] = entry
@@ -296,7 +302,7 @@ def get_percentile_forecast_with_progress(lat: float, lon: float, lead_days: int
         progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
 
     try:
-        result = fetch_percentile_rainfall(lat, lon, max_lead_days=lead_days, progress_callback=on_progress)
+        result = fetch_percentile_rainfall(lat, lon, max_lead_hours=lead_hours, progress_callback=on_progress)
     finally:
         progress.progress(100, text="Done!")
         time.sleep(0.2)
@@ -778,7 +784,10 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     if not days:
         return ""
 
-    day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d") for d in days]
+    # Day-only labels ("Fri 28") are ambiguous now that each period is 6h
+    # rather than 24h -- multiple periods land on the same calendar day.
+    # Showing each period's start time (e.g. "Fri 28, 12PM") disambiguates.
+    day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
     p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
     p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
@@ -1215,7 +1224,9 @@ elif view_mode == "Percentile Rainfall Forecast":
         pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
         pct_lat, pct_lon = LOCATIONS[pct_location_name]
     with pct_col2:
-        pct_lead_days = st.slider("Days", min_value=1, max_value=10, value=5, key="pct_lead_days")
+        pct_lead_hours = st.slider(
+            "Forecast range (hours)", min_value=6, max_value=72, value=72, step=6, key="pct_lead_hours"
+        )
 
     pct_clicked = st.button("Get percentile forecast", key="pct_button")
     pct_elapsed_placeholder = st.empty()
@@ -1223,7 +1234,7 @@ elif view_mode == "Percentile Rainfall Forecast":
     if pct_clicked:
         pct_request_started_at = time.time()
         try:
-            pct_result, pct_was_cached = get_percentile_forecast_with_progress(pct_lat, pct_lon, pct_lead_days)
+            pct_result, pct_was_cached = get_percentile_forecast_with_progress(pct_lat, pct_lon, pct_lead_hours)
         except Exception as e:
             st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
             with st.expander("Full error details"):
@@ -1249,11 +1260,13 @@ elif view_mode == "Percentile Rainfall Forecast":
         pct_days = pct_result["days"]
         pct_percentiles = pct_result["percentiles"]
         pct_run_time = pct_result["run_time"]
+        pct_period_hours = pct_result.get("period_hours", 6)
 
         st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
         st.caption(
-            "Day periods below start from the model run's own time, not forced to 00 UTC "
-            "the way the tables above are -- a simplification for this first version."
+            f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
+            f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
+            f"for this first version. Limited to 72 hours ahead for now."
         )
 
         st.subheader(f"Percentile rainfall for {pct_location_name}")
@@ -1261,7 +1274,7 @@ elif view_mode == "Percentile Rainfall Forecast":
 
         stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
         stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b") for d in pct_days]
+        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
 
         table_data = {
             day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
