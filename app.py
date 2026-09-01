@@ -14,8 +14,10 @@ from ecmwf_client import (
     MODEL_LABELS,
     PH_TZ,
     DEFAULT_PERCENTILES,
+    AVAILABLE_PERIOD_HOURS,
     fetch_forecast_table,
     fetch_percentile_rainfall,
+    aggregate_percentile_bins,
 )
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
@@ -146,12 +148,18 @@ _load_disk_cache()  # populate the in-memory cache from disk once, at startup
 # Separate cache for the percentile feature -- deliberately NOT sharing
 # _GLOBAL_CACHE/_serialize_result with the main forecast above. That
 # serializer assumes the main result's shape (windows/data/...); a
-# percentile result has a different shape entirely (days/stats/...). An
-# earlier version of this reused the same cache and functions, which
-# would crash (or silently mis-serialize) the moment a percentile result
-# actually got written to disk. Own dict, own file, own serializer avoids
-# that class of bug entirely rather than trying to make one serializer
-# handle both shapes.
+# percentile result has a different shape entirely (bins/...). An earlier
+# version of this reused the same cache and functions, which would crash
+# (or silently mis-serialize) the moment a percentile result actually got
+# written to disk. Own dict, own file, own serializer avoids that class of
+# bug entirely rather than trying to make one serializer handle both
+# shapes.
+#
+# What's cached here is the RAW 3-hourly per-member bins, not any
+# particular aggregation of them -- the time-step slider in the UI
+# (3h/6h/12h/24h) re-aggregates this same cached data on every rerun via
+# aggregate_percentile_bins(), so changing it never touches this cache or
+# the network.
 _PCT_GLOBAL_CACHE: dict = {}
 _PCT_CACHE_FILE = Path(__file__).parent / "percentile_cache.json"
 
@@ -164,16 +172,15 @@ def _serialize_pct_result(result: dict) -> dict:
         "run_time": dt(result["run_time"]),
         "grid_lat": result["grid_lat"],
         "grid_lon": result["grid_lon"],
-        "days": [
+        "bins": [
             {
-                "start_utc": dt(d["start_utc"]),
-                "end_utc": dt(d["end_utc"]),
-                "stats": d["stats"],
-                "member_values_mm": d["member_values_mm"],
+                "start_utc": dt(b["start_utc"]),
+                "end_utc": dt(b["end_utc"]),
+                "member_values_mm": b["member_values_mm"],
             }
-            for d in result["days"]
+            for b in result["bins"]
         ],
-        "percentiles": result["percentiles"],
+        "bin_hours": result["bin_hours"],
         "downloaded_bytes": result.get("downloaded_bytes"),
     }
 
@@ -186,28 +193,27 @@ def _deserialize_pct_result(d: dict) -> dict:
         "run_time": pdt(d["run_time"]),
         "grid_lat": d["grid_lat"],
         "grid_lon": d["grid_lon"],
-        "days": [
+        "bins": [
             {
-                "start_utc": pdt(day["start_utc"]),
-                "end_utc": pdt(day["end_utc"]),
-                "stats": day["stats"],
-                "member_values_mm": day["member_values_mm"],
+                "start_utc": pdt(b["start_utc"]),
+                "end_utc": pdt(b["end_utc"]),
+                "member_values_mm": b["member_values_mm"],
             }
-            for day in d["days"]
+            for b in d["bins"]
         ],
-        "percentiles": d["percentiles"],
+        "bin_hours": d["bin_hours"],
         "downloaded_bytes": d.get("downloaded_bytes"),
     }
 
 
 def _pct_cache_key_to_str(key: tuple) -> str:
-    lat, lon, lead_days = key
-    return f"{lat}|{lon}|{lead_days}"
+    lat, lon, lead_hours = key
+    return f"{lat}|{lon}|{lead_hours}"
 
 
 def _pct_cache_key_from_str(s: str) -> tuple:
-    lat, lon, lead_days = s.split("|")
-    return (float(lat), float(lon), int(lead_days))
+    lat, lon, lead_hours = s.split("|")
+    return (float(lat), float(lon), int(lead_hours))
 
 
 def _load_pct_disk_cache() -> None:
@@ -257,21 +263,25 @@ def _find_pct_superset_entry(cache_dict: dict, lat: float, lon: float, requested
 
 
 def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
-    # Each entry in "days" is one period_hours-long period (6h by default),
-    # NOT one calendar day -- slicing by lead_hours directly would keep
-    # the wrong number of entries (e.g. lead_hours=24 should keep the
-    # first 4 six-hour periods, not the first 24 entries).
-    period_hours = result.get("period_hours", 6)
-    num_periods = lead_hours // period_hours
+    # Bins are always bin_hours long (3h -- ECMWF's native accumulation
+    # granularity for this product through step 144), so slice by
+    # count-of-bins, not by calendar days or by any particular
+    # aggregation period.
+    bin_hours = result["bin_hours"]
+    num_bins = lead_hours // bin_hours
     truncated = dict(result)
-    truncated["days"] = result["days"][:num_periods]
+    truncated["bins"] = result["bins"][:num_bins]
     return truncated
 
 
-def get_percentile_forecast_with_progress(lat: float, lon: float, lead_hours: int):
+def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     """Three-tier lookup (session -> cross-session -> superset-trim ->
     fresh fetch), mirroring get_forecast_with_progress() for the main
-    forecast. Returns (result, was_cached)."""
+    forecast. Returns the RAW 3-hourly bins result (result, was_cached) --
+    NOT aggregated to any particular time step. Call
+    aggregate_percentile_bins() on the result to get displayable
+    period_hours-long periods; that step is cheap and can be redone on
+    every rerun without coming back here."""
     key = (lat, lon, lead_hours)
     now = time.time()
     session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
@@ -784,9 +794,10 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     if not days:
         return ""
 
-    # Day-only labels ("Fri 28") are ambiguous now that each period is 6h
-    # rather than 24h -- multiple periods land on the same calendar day.
-    # Showing each period's start time (e.g. "Fri 28, 12PM") disambiguates.
+    # Day-only labels ("Fri 28") are ambiguous when each period is
+    # shorter than 24h -- multiple periods can land on the same calendar
+    # day. Showing each period's start time (e.g. "Fri 28, 12PM")
+    # disambiguates; harmless when period_hours == 24 too.
     day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
     p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
@@ -1207,16 +1218,9 @@ elif view_mode == "Percentile Rainfall Forecast":
     st.caption(
         "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
         "percentiles locally, instead of using ECMWF's precomputed threshold "
-        "probabilities. This gives actual mm amounts (not just chance of exceeding "
-        "a fixed threshold) but is a much heavier fetch -- expect noticeably longer "
-        "load times than the threshold forecast."
-    )
-    st.caption(
-        "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
-        "percentiles locally, instead of using ECMWF's precomputed threshold "
         "probabilities like the tables above. This gives actual mm amounts (not "
         "just chance of exceeding a fixed threshold) but is a much heavier fetch -- "
-        "expect noticeably longer load times than the main forecast."
+        "expect noticeably longer load times than the main forecast above."
     )
 
     pct_col1, pct_col2 = st.columns([2, 1])
@@ -1234,7 +1238,7 @@ elif view_mode == "Percentile Rainfall Forecast":
     if pct_clicked:
         pct_request_started_at = time.time()
         try:
-            pct_result, pct_was_cached = get_percentile_forecast_with_progress(pct_lat, pct_lon, pct_lead_hours)
+            pct_raw_result, pct_was_cached = get_percentile_raw_with_progress(pct_lat, pct_lon, pct_lead_hours)
         except Exception as e:
             st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
             with st.expander("Full error details"):
@@ -1242,13 +1246,13 @@ elif view_mode == "Percentile Rainfall Forecast":
             st.stop()
         pct_elapsed = time.time() - pct_request_started_at
 
-        st.session_state["last_pct_result"] = pct_result
+        st.session_state["last_pct_raw_result"] = pct_raw_result
         st.session_state["last_pct_location_name"] = pct_location_name
         st.session_state["last_pct_was_cached"] = pct_was_cached
         st.session_state["last_pct_elapsed"] = pct_elapsed
 
-    if "last_pct_result" in st.session_state:
-        pct_result = st.session_state["last_pct_result"]
+    if "last_pct_raw_result" in st.session_state:
+        pct_raw_result = st.session_state["last_pct_raw_result"]
         pct_location_name = st.session_state["last_pct_location_name"]
         pct_was_cached = st.session_state["last_pct_was_cached"]
         pct_elapsed = st.session_state["last_pct_elapsed"]
@@ -1257,10 +1261,38 @@ elif view_mode == "Percentile Rainfall Forecast":
             f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
         )
 
+        # --- Time-step control: purely a local recompute, never refetches.
+        # aggregate_percentile_bins() sums the already-downloaded 3-hourly
+        # per-member bins into whichever period the person picks here, so
+        # moving this control is instant even though the underlying fetch
+        # above can take a while.
+        period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
+        if "pct_period_hours" not in st.session_state:
+            st.session_state["pct_period_hours"] = 6
+        selected_period_label = st.segmented_control(
+            "Time step",
+            list(period_labels.values()),
+            default=period_labels[st.session_state["pct_period_hours"]],
+            key="pct_period_control",
+        )
+        if selected_period_label is not None:
+            st.session_state["pct_period_hours"] = next(
+                h for h, label in period_labels.items() if label == selected_period_label
+            )
+        pct_period_hours = st.session_state["pct_period_hours"]
+
+        pct_result = aggregate_percentile_bins(pct_raw_result, period_hours=pct_period_hours)
         pct_days = pct_result["days"]
+
+        if not pct_days:
+            st.warning(
+                f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
+                f"range -- try a longer range or a shorter time step."
+            )
+            st.stop()
+
         pct_percentiles = pct_result["percentiles"]
         pct_run_time = pct_result["run_time"]
-        pct_period_hours = pct_result.get("period_hours", 6)
 
         st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
         st.caption(
@@ -1286,7 +1318,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         downloaded = pct_result.get("downloaded_bytes")
         if downloaded:
             size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
-            st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation).")
+            st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation, 3-hourly).")
     else:
         st.info(
             "Choose a location and click **Get percentile forecast** to see mm-based rainfall "
