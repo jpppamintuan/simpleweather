@@ -1,0 +1,39 @@
+name: Ingest ECMWF forecast data
+
+on:
+  schedule:
+    # ECMWF's IFS ENS probability/dissemination product is typically
+    # available ~7-9h after each run: 00Z -> ~08:01 UTC, 12Z -> ~20:01 UTC
+    # (see _dissemination_available_time() in ecmwf_client.py, which this
+    # mirrors). A ~15min buffer is added past that so the run doesn't race
+    # the publish. Cron times below are in UTC.
+    - cron: "15 8 * * *"
+    - cron: "15 20 * * *"
+  workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab, e.g. to test setup
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies (eccodes, for GRIB decoding)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libeccodes0 libeccodes-tools
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-ingest.txt
+
+      - name: Run ingestion
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
+        run: python ingest.py
