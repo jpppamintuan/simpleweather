@@ -161,7 +161,12 @@ _load_disk_cache()  # populate the in-memory cache from disk once, at startup
 # aggregate_percentile_bins(), so changing it never touches this cache or
 # the network.
 _PCT_GLOBAL_CACHE: dict = {}
-_PCT_CACHE_FILE = Path(__file__).parent / "percentile_cache.json"
+# Filename bumped to v2: the bin computation itself changed (a bug fix --
+# bins were briefly cumulative-since-start instead of per-period amounts),
+# so any percentile_cache.json left over from before this fix holds wrong
+# values. Using a new filename means that stale file is simply never read,
+# instead of silently serving bad cached numbers for up to CACHE_TTL_SECONDS.
+_PCT_CACHE_FILE = Path(__file__).parent / "percentile_cache_v2.json"
 
 
 def _serialize_pct_result(result: dict) -> dict:
