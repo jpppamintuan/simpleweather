@@ -335,64 +335,99 @@ def fetch_forecast_table(
 
 
 DEFAULT_PERCENTILES = [10, 25, 50, 75, 90]
+PERCENTILE_BIN_HOURS = 3  # ECMWF's native accumulation granularity for this product, through step 144
+AVAILABLE_PERIOD_HOURS = [3, 6, 12, 24]
 
 
 def fetch_percentile_rainfall(
     lat: float,
     lon: float,
     max_lead_hours: int = 72,
-    period_hours: int = 6,
-    percentiles: list[int] = None,
     progress_callback: ProgressFn = None,
 ) -> dict:
     """
     Fetches raw total precipitation (tp) from all 50 ENS perturbed members
-    (stream=enfo, type=pf) and computes accumulation-period percentiles
-    locally, since there's no server-side product for arbitrary
-    percentiles the way there is for fixed-threshold exceedance (`ep`).
+    (stream=enfo, type=pf) at EVERY native 3-hourly step, and returns each
+    step's value as its own self-contained 3-hour precipitation bin.
 
-    This is a fundamentally heavier fetch than the rest of this module:
-    50 individual member fields instead of one small precomputed product,
-    for the same date range. Expect substantially longer load times --
-    this is why it's a separate, opt-in feature rather than part of the
-    main tables. tp is a cumulative value (total since forecast start),
-    so each period's rainfall = tp at period-end minus tp at period-start,
-    computed per member, then percentiles/mean/median are taken across
-    the 50 resulting values.
+    ACCUMULATION CONVENTION -- this is the important part. ECMWF's
+    accumulated fields (tp included) are aggregated "up to step Y,
+    starting at the previous available step X" -- NOT cumulative from the
+    start of the forecast. Since tp is natively produced at 3-hourly
+    resolution through step 144, every returned field already represents
+    exactly the 3 hours since the prior native step, regardless of which
+    steps are actually requested. Concretely, this means:
 
-    max_lead_hours is hard-capped at 72 for now -- 6-hourly steps that far
+      - Skipping steps (e.g. requesting only step=6, 12, ... to get
+        "6-hourly data" directly) does NOT give a 6-hour total. It
+        silently returns whatever 3-hour slice ECMWF encoded for that
+        step, mislabeled as if it covered the full 6 hours.
+      - The only correct approach is to request every 3-hourly step and
+        treat each one as an independent, self-contained bin -- no
+        diffing against a neighboring step needed or wanted.
+
+    Longer periods (6h/12h/24h) are built afterwards by SUMMING consecutive
+    3-hour bins, member-by-member -- see aggregate_percentile_bins() below,
+    which does this as a pure in-memory computation with no re-fetch. This
+    is what lets the UI offer an adjustable time-step control that responds
+    instantly instead of hitting the network again.
+
+    This is a fundamentally heavier fetch than the threshold-forecast
+    tables above: 50 individual member fields per step instead of one
+    small precomputed product, and now at 3-hourly resolution instead of
+    6-hourly, so roughly double the steps of an earlier version of this
+    function. Expect noticeably longer load times -- this is why it's a
+    separate, opt-in feature.
+
+    max_lead_hours is hard-capped at 72 for now -- 3-hourly steps that far
     out are safely within ECMWF's documented step availability for type=pf
     (0-144h by 3h, for all four run times), so this isn't pushing into any
-    step-availability edge case the way the earlier day-6 AIFS cap was;
-    it's just a deliberate scope limit for this first version, not a
-    server-side constraint. Raise it later by changing the default/cap
-    here once the shorter-range version has been validated.
+    step-availability edge case; it's a deliberate scope limit for this
+    first version, not a server-side constraint.
 
-    Simplifications versus fetch_forecast_table() above, deliberate for
-    this first version: no forcing of 00-UTC-aligned period boundaries --
-    the first period is simply the first `period_hours` after whatever
-    run gets fetched, labeled with its actual timestamp rather than
-    assumed to start at midnight UTC. Also uses cfgrib/xarray like the
-    rest of this module (decoding the whole downloaded file before
-    extracting one point) rather than streaming/discarding per GRIB
-    message the way a maximally memory-efficient implementation would --
-    simpler and consistent with the rest of this codebase, at the cost of
-    holding more in memory briefly during decode. Worth revisiting if
-    this becomes a bottleneck in practice.
+    Simplifications, deliberate for this first version: no forcing of
+    00-UTC-aligned bin boundaries -- the first bin simply covers the first
+    3 hours after whatever run gets fetched, labeled with its actual
+    timestamp rather than assumed to start at midnight UTC. Also uses
+    cfgrib/xarray like the rest of this module (decoding the whole
+    downloaded file before extracting one point) rather than
+    streaming/discarding per GRIB message the way a maximally
+    memory-efficient implementation would -- simpler and consistent with
+    the rest of this codebase, at the cost of holding more in memory
+    briefly during decode. Worth revisiting if this becomes a bottleneck
+    in practice.
+
+    Returns:
+    {
+        "run_time": datetime (UTC),
+        "grid_lat": float, "grid_lon": float,
+        "bins": [
+            {"start_utc": dt, "end_utc": dt, "member_values_mm": [50 floats]},
+            ...  # one entry per 3-hour bin, in chronological order
+        ],
+        "bin_hours": 3,
+        "downloaded_bytes": int | None,
+    }
     """
-    if percentiles is None:
-        percentiles = DEFAULT_PERCENTILES
-
     max_lead_hours = min(max_lead_hours, 72)  # hard cap, see docstring
+    bin_hours = PERCENTILE_BIN_HOURS
+
+    # Every native 3-hourly step, each one its own self-contained bin --
+    # deliberately NOT skipping any steps (see accumulation-convention
+    # note in the docstring above for why that would silently corrupt
+    # the data).
+    steps = list(range(bin_hours, max_lead_hours + 1, bin_hours))
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
-
-    steps = list(range(0, max_lead_hours + 1, period_hours))  # 0, 6, 12, ..., need N+1 points for N periods
 
     client = Client(source="ecmwf")
     with tempfile.TemporaryDirectory() as tmpdir:
         target = str(Path(tmpdir) / "tp_members.grib2")
-        _notify(progress_callback, 0.15, f"Requesting {len(steps)} steps x 50 ensemble members (this is the slow part)...")
+        _notify(
+            progress_callback,
+            0.15,
+            f"Requesting {len(steps)} steps x 50 ensemble members (this is the slow part)...",
+        )
         result = client.retrieve(
             stream="enfo",
             type="pf",
@@ -415,35 +450,27 @@ def fetch_percentile_rainfall(
         if grid_lon > 180:
             grid_lon -= 360
 
-        _notify(progress_callback, 0.85, "Computing period totals and percentiles...")
+        _notify(progress_callback, 0.85, "Reading per-member 3-hour totals...")
         var_name = list(ds.data_vars)[0]  # 'tp'
         step_hours = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
+        # .isel(step=idx) keeps this correct regardless of how cfgrib
+        # orders the "number"/"step" dimensions internally, rather than
+        # assuming a fixed axis order via raw positional indexing.
         order = np.argsort(step_hours)
-        sorted_step_hours = step_hours[order]
 
-        periods = []
-        for d in range(len(sorted_step_hours) - 1):
-            start_idx = int(order[d])
-            end_idx = int(order[d + 1])
-            start_h = int(sorted_step_hours[d])
-            end_h = int(sorted_step_hours[d + 1])
+        bins = []
+        for idx in order:
+            idx = int(idx)
+            end_h = int(step_hours[idx])
+            start_h = end_h - bin_hours
 
-            # .isel(step=idx) keeps this correct regardless of how cfgrib
-            # orders the "number"/"step" dimensions internally, rather than
-            # assuming a fixed axis order via raw positional indexing.
-            start_vals_mm = point[var_name].isel(step=start_idx).values * 1000.0
-            end_vals_mm = point[var_name].isel(step=end_idx).values * 1000.0
-            period_mm = np.clip(end_vals_mm - start_vals_mm, 0, None)  # guard tiny negative float noise
+            vals_mm = point[var_name].isel(step=idx).values * 1000.0
+            vals_mm = np.clip(vals_mm, 0, None)  # guard tiny negative float noise
 
-            stats = {"mean": float(np.mean(period_mm)), "median": float(np.median(period_mm))}
-            for p in percentiles:
-                stats[f"p{p}"] = float(np.percentile(period_mm, p))
-
-            periods.append({
+            bins.append({
                 "start_utc": run_time + timedelta(hours=start_h),
                 "end_utc": run_time + timedelta(hours=end_h),
-                "stats": stats,
-                "member_values_mm": period_mm.tolist(),
+                "member_values_mm": vals_mm.tolist(),
             })
 
     _notify(progress_callback, 1.0, "Done")
@@ -452,8 +479,79 @@ def fetch_percentile_rainfall(
         "run_time": run_time,
         "grid_lat": grid_lat,
         "grid_lon": grid_lon,
+        "bins": bins,
+        "bin_hours": bin_hours,
+        "downloaded_bytes": size_bytes,
+    }
+
+
+def aggregate_percentile_bins(
+    raw_result: dict,
+    period_hours: int = 6,
+    percentiles: list[int] = None,
+) -> dict:
+    """
+    Groups the raw 3-hour bins from fetch_percentile_rainfall() into
+    period_hours-long periods (must be a whole multiple of the raw bin
+    size -- 3/6/12/24h are all valid) by SUMMING consecutive bins
+    member-by-member, then computes mean/median/percentile stats on the
+    summed per-member totals.
+
+    Pure in-memory computation, no network access -- safe and cheap to
+    call on every rerun, e.g. every time the person moves a time-step
+    slider, against an already-fetched/cached raw_result.
+
+    Only complete periods are returned: if the raw bin count isn't evenly
+    divisible by (period_hours / bin_hours), the leftover trailing bins
+    are dropped rather than shown as a partial/misleading period.
+
+    Returns the same shape the app's rendering/table code has always
+    expected:
+    {
+        "run_time": datetime (UTC),
+        "grid_lat": float, "grid_lon": float,
+        "days": [
+            {"start_utc": dt, "end_utc": dt, "stats": {...}, "member_values_mm": [...]},
+            ...
+        ],
+        "period_hours": int,
+        "percentiles": list[int],
+        "downloaded_bytes": int | None,
+    }
+    """
+    if percentiles is None:
+        percentiles = DEFAULT_PERCENTILES
+
+    bin_hours = raw_result["bin_hours"]
+    if period_hours % bin_hours != 0:
+        raise ValueError(f"period_hours ({period_hours}) must be a multiple of {bin_hours}")
+
+    bins_per_period = period_hours // bin_hours
+    raw_bins = raw_result["bins"]
+    num_periods = len(raw_bins) // bins_per_period
+
+    periods = []
+    for p in range(num_periods):
+        group = raw_bins[p * bins_per_period: (p + 1) * bins_per_period]
+        summed_mm = np.sum([b["member_values_mm"] for b in group], axis=0)
+
+        stats = {"mean": float(np.mean(summed_mm)), "median": float(np.median(summed_mm))}
+        for pct in percentiles:
+            stats[f"p{pct}"] = float(np.percentile(summed_mm, pct))
+
+        periods.append({
+            "start_utc": group[0]["start_utc"],
+            "end_utc": group[-1]["end_utc"],
+            "stats": stats,
+            "member_values_mm": summed_mm.tolist(),
+        })
+
+    return {
+        "run_time": raw_result["run_time"],
+        "grid_lat": raw_result["grid_lat"],
+        "grid_lon": raw_result["grid_lon"],
         "days": periods,
         "period_hours": period_hours,
         "percentiles": percentiles,
-        "downloaded_bytes": size_bytes,
+        "downloaded_bytes": raw_result.get("downloaded_bytes"),
     }
