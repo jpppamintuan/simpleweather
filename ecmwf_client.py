@@ -347,24 +347,33 @@ def fetch_percentile_rainfall(
 ) -> dict:
     """
     Fetches raw total precipitation (tp) from all 50 ENS perturbed members
-    (stream=enfo, type=pf) at EVERY native 3-hourly step, and returns each
-    step's value as its own self-contained 3-hour precipitation bin.
+    (stream=enfo, type=pf) at EVERY native 3-hourly step, and returns the
+    per-member precipitation that fell during each individual 3-hour bin.
 
-    ACCUMULATION CONVENTION -- this is the important part. ECMWF's
-    accumulated fields (tp included) are aggregated "up to step Y,
-    starting at the previous available step X" -- NOT cumulative from the
-    start of the forecast. Since tp is natively produced at 3-hourly
-    resolution through step 144, every returned field already represents
-    exactly the 3 hours since the prior native step, regardless of which
-    steps are actually requested. Concretely, this means:
+    ACCUMULATION CONVENTION -- this is the important part, and confirmed
+    empirically (an earlier version of this function got it backwards --
+    see below). Each requested step's tp field is CUMULATIVE from the
+    start of the forecast (step 0), not a self-contained "since the
+    previous step" value. So step=6 holds total precip for 0-6h, step=9
+    holds total precip for 0-9h, and so on -- each one strictly >= the
+    last. That means:
 
       - Skipping steps (e.g. requesting only step=6, 12, ... to get
-        "6-hourly data" directly) does NOT give a 6-hour total. It
-        silently returns whatever 3-hour slice ECMWF encoded for that
-        step, mislabeled as if it covered the full 6 hours.
-      - The only correct approach is to request every 3-hourly step and
-        treat each one as an independent, self-contained bin -- no
-        diffing against a neighboring step needed or wanted.
+        "6-hourly data" directly) DOES still give a technically-valid
+        cumulative value at each of those steps, but if you only request
+        the coarser steps, the ecmwf-opendata client can end up
+        subsetting/aligning to whatever's available at that spacing in a
+        way that doesn't line up cleanly across all 5 threshold-style
+        windows this app needs -- requesting every native 3-hourly step
+        sidesteps that entirely and is what's used here.
+      - To get the precip for an individual 3-hour bin, DIFF each step's
+        cumulative value against the previous step's cumulative value
+        (step=0's implicit value is 0, so the first bin is just step=3's
+        value as-is). An earlier version of this function used the raw
+        per-step values directly with no diffing, which produced
+        constantly-increasing "totals so far" instead of per-period
+        rainfall -- that was the bug; this version diffs consecutive
+        cumulative values to recover the true per-bin amount.
 
     Longer periods (6h/12h/24h) are built afterwards by SUMMING consecutive
     3-hour bins, member-by-member -- see aggregate_percentile_bins() below,
@@ -412,11 +421,12 @@ def fetch_percentile_rainfall(
     max_lead_hours = min(max_lead_hours, 72)  # hard cap, see docstring
     bin_hours = PERCENTILE_BIN_HOURS
 
-    # Every native 3-hourly step, each one its own self-contained bin --
-    # deliberately NOT skipping any steps (see accumulation-convention
-    # note in the docstring above for why that would silently corrupt
-    # the data).
-    steps = list(range(bin_hours, max_lead_hours + 1, bin_hours))
+    # Every native 3-hourly step INCLUDING step=0 -- step=0 is needed as
+    # the diffing baseline for the first bin (see accumulation-convention
+    # note in the docstring above). Deliberately not skipping any steps
+    # in between either, since tp is cumulative-from-start and diffing
+    # only works correctly against the immediately preceding step.
+    steps = list(range(0, max_lead_hours + 1, bin_hours))
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
@@ -450,7 +460,7 @@ def fetch_percentile_rainfall(
         if grid_lon > 180:
             grid_lon -= 360
 
-        _notify(progress_callback, 0.85, "Reading per-member 3-hour totals...")
+        _notify(progress_callback, 0.85, "Computing per-member 3-hour totals...")
         var_name = list(ds.data_vars)[0]  # 'tp'
         step_hours = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
         # .isel(step=idx) keeps this correct regardless of how cfgrib
@@ -459,18 +469,28 @@ def fetch_percentile_rainfall(
         order = np.argsort(step_hours)
 
         bins = []
+        prev_cumulative_mm = None  # step=0's implicit cumulative value is 0
         for idx in order:
             idx = int(idx)
             end_h = int(step_hours[idx])
             start_h = end_h - bin_hours
 
-            vals_mm = point[var_name].isel(step=idx).values * 1000.0
-            vals_mm = np.clip(vals_mm, 0, None)  # guard tiny negative float noise
+            cumulative_mm = point[var_name].isel(step=idx).values * 1000.0
+
+            if end_h == 0:
+                # This is the step=0 baseline itself -- not a bin, just
+                # establishes the starting point for the first diff.
+                prev_cumulative_mm = cumulative_mm
+                continue
+
+            period_vals_mm = cumulative_mm - prev_cumulative_mm
+            period_vals_mm = np.clip(period_vals_mm, 0, None)  # guard tiny negative float noise
+            prev_cumulative_mm = cumulative_mm
 
             bins.append({
                 "start_utc": run_time + timedelta(hours=start_h),
                 "end_utc": run_time + timedelta(hours=end_h),
-                "member_values_mm": vals_mm.tolist(),
+                "member_values_mm": period_vals_mm.tolist(),
             })
 
     _notify(progress_callback, 1.0, "Done")
