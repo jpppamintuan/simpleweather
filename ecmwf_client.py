@@ -575,3 +575,134 @@ def aggregate_percentile_bins(
         "percentiles": percentiles,
         "downloaded_bytes": raw_result.get("downloaded_bytes"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Grid-fetch functions -- used by the scheduled ingestion job (ingest.py),
+# NOT by the live Streamlit app.
+#
+# Everything above this point fetches then immediately narrows to a single
+# nearest-neighbor point via .sel(..., method="nearest") -- fine for "show
+# me this one location live," wrong for ingestion, which needs to store a
+# whole region so a future query layer (a Cloudflare Worker, see project
+# plan) can look up ANY point within it, not just today's 5 hardcoded
+# locations. These functions return cropped xarray Datasets instead of
+# point dicts, ready to write to Zarr.
+# ---------------------------------------------------------------------------
+
+
+def _crop_to_bbox(ds: xr.Dataset, bbox: dict) -> xr.Dataset:
+    """Crops a decoded ECMWF dataset to a lat/lon box, handling the 0-360
+    vs -180-180 longitude convention ECMWF's grids use (same normalization
+    the point-extraction functions above already do)."""
+    lon_min, lon_max = bbox["lon_min"], bbox["lon_max"]
+    if float(ds.longitude.max()) > 180:
+        lon_min, lon_max = lon_min % 360, lon_max % 360
+    lat_slice = slice(bbox["lat_max"], bbox["lat_min"])  # ECMWF grids run north-to-south
+    return ds.sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
+
+
+def fetch_threshold_grid(
+    bbox: dict,
+    max_lead_days: int = 15,
+    model: str = DEFAULT_MODEL,
+    progress_callback: ProgressFn = None,
+) -> xr.Dataset:
+    """
+    Ingestion counterpart to fetch_forecast_table(): fetches the same
+    precomputed threshold-exceedance product (the 5 combined thresholds),
+    but returns the CROPPED GRID over `bbox` instead of a single
+    nearest-neighbor point.
+
+    bbox: {"lat_min":, "lat_max":, "lon_min":, "lon_max":} in degrees,
+    longitude in -180..180 (converted internally if the source grid uses
+    0..360).
+
+    Deliberately does NOT do the 24h-window alignment fetch_forecast_table()
+    does (aligning 12h-spaced steps to 00 UTC boundaries etc.) -- that's a
+    display/query concern, kept out of ingestion the same way percentile
+    aggregation was kept out of fetch_percentile_rainfall() above. The
+    returned dataset's "step" dimension is the raw request steps in hours;
+    whatever reads this later (the Worker, in Phase 2) does that alignment
+    at query time.
+    """
+    step_labels = _request_step_labels(max_lead_days, increment_hours=12)
+    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        client = Client(source="ecmwf", model=model)
+        params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
+        target = str(Path(tmpdir) / "combined.grib2")
+
+        _notify(progress_callback, 0.15, "Requesting latest forecast (5 thresholds, full grid)...")
+        client.retrieve(stream="enfo", type="ep", step=step_labels, param=params, target=target)
+
+        _notify(progress_callback, 0.6, "Decoding GRIB2 data...")
+        ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+
+        run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+
+        _notify(progress_callback, 0.8, "Cropping to bounding box...")
+        ds = _crop_to_bbox(ds, bbox).load()  # .load() -- resolve into memory before the tmpdir is deleted
+
+    ds.attrs["run_time"] = run_time.isoformat()
+    ds.attrs["model"] = model
+    _notify(progress_callback, 1.0, "Done")
+    return ds
+
+
+def fetch_percentile_grid(
+    bbox: dict,
+    max_lead_hours: int = 72,
+    progress_callback: ProgressFn = None,
+) -> xr.Dataset:
+    """
+    Ingestion counterpart to fetch_percentile_rainfall(): fetches raw tp
+    from all 50 members at every native 3-hourly step, diffs consecutive
+    cumulative steps into true per-3-hour-bin amounts (same accumulation
+    logic as fetch_percentile_rainfall() -- see that docstring for why
+    diffing against the previous step is required), and returns the
+    CROPPED GRID over `bbox` with a "step" dimension of 3-hour bins,
+    instead of collapsing straight to one point's percentile statistics.
+
+    Storing per-member values (not already-computed percentiles) is
+    deliberate: percentiles for an arbitrary future query point get
+    computed on demand by whatever reads this (the Worker, in Phase 2),
+    the same way aggregate_percentile_bins() does it today for the live
+    app -- ingestion's job is just getting the raw numbers stored.
+    """
+    max_lead_hours = min(max_lead_hours, 72)
+    bin_hours = PERCENTILE_BIN_HOURS
+    steps = list(range(0, max_lead_hours + 1, bin_hours))
+
+    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        client = Client(source="ecmwf")
+        target = str(Path(tmpdir) / "tp_members.grib2")
+        _notify(progress_callback, 0.15, f"Requesting {len(steps)} steps x 50 members (full grid)...")
+        client.retrieve(
+            stream="enfo", type="pf", param="tp", step=steps, number=list(range(1, 51)), target=target
+        )
+
+        _notify(progress_callback, 0.6, "Decoding GRIB2 data...")
+        ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+
+        run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+
+        _notify(progress_callback, 0.75, "Cropping to bounding box...")
+        ds = _crop_to_bbox(ds, bbox)
+
+        _notify(progress_callback, 0.85, "Computing per-member 3-hour totals...")
+        var_name = list(ds.data_vars)[0]  # 'tp', cumulative-since-forecast-start
+        ds = ds.sortby("step")
+        tp_mm = ds[var_name] * 1000.0
+        period_mm = tp_mm.diff(dim="step")  # each entry = precip during that specific 3h bin
+        period_mm = period_mm.clip(min=0)  # guard tiny negative float noise
+
+        ds_out = period_mm.to_dataset(name="precip_3h_mm").load()
+
+    ds_out.attrs["run_time"] = run_time.isoformat()
+    ds_out.attrs["bin_hours"] = bin_hours
+    _notify(progress_callback, 1.0, "Done")
+    return ds_out
