@@ -55,7 +55,23 @@ PERCENTILE_ZARR_PATH = OUTPUT_DIR / "ifs" / "percentile_latest.zarr"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
 # First-guess chunk sizes -- see module docstring.
-LATLON_CHUNK = 10  # grid points per chunk, each dimension
+# Chunk size for lat/lon, in grid points. Deliberately large enough to
+# exceed any realistic bbox grid size, so _write_zarr_locally's min(request,
+# actual_size) logic collapses this to ONE chunk per dimension -- i.e. one
+# chunk per data variable overall, not many small tiles.
+#
+# This was originally set to 10 (small tiles), reasoning ahead to Phase 2's
+# point-query Worker, which only needs to fetch the one tile containing a
+# queried point. That reasoning was premature: right now, in Phase 1, the
+# only consumer is the Streamlit app, which reads the ENTIRE small grid
+# eagerly every time (github_data_source.py) -- and fine-grained tiling
+# only hurts that pattern, since reading "everything" then means fetching
+# every tile as its own separate HTTP request. With a 71x51 grid split into
+# 10x10 tiles, that was ~48 chunks x 5 threshold variables = ~240 individual
+# HTTP requests, which is exactly what made loads take ~25s instead of the
+# few seconds a single request per variable should take. One chunk per
+# variable now; revisit tiling if/when Phase 2's Worker actually needs it.
+LATLON_CHUNK = 10_000
 
 
 def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = None) -> None:
@@ -106,7 +122,7 @@ def ingest_percentile_data() -> str | None:
     print("[percentile] Fetching IFS ENS raw-member percentile grid...")
     ds = fetch_percentile_grid(
         bbox=PH_BBOX,
-        max_lead_hours=72,
+        max_lead_hours=120,
         progress_callback=lambda frac, msg: print(f"[percentile] {frac:.0%} {msg}"),
     )
     print(f"[percentile] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
