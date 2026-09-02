@@ -407,12 +407,16 @@ def _cache_store(key: tuple, result: dict) -> None:
 
 
 def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs: bool):
-    """Fetches ENS, and AIFS too if load_aifs is set. Three optimizations
-    over a naive "just fetch both" approach:
+    """Fetches ENS, and AIFS too if load_aifs is set (the app always
+    passes True now, so both models load together -- the model SELECTOR
+    in the UI just switches which already-fetched result is displayed,
+    it doesn't trigger a new fetch). Three optimizations over a naive
+    "just fetch both" approach:
       1. Each model is cached independently (by lat/lon/lead_days/model),
-         so toggling "Load AIFS" after ENS is already cached only fetches
-         the new AIFS data, not both again.
-      2. When both models genuinely need fetching, they run concurrently
+         and each is tried against the GitHub-hosted store before falling
+         back to a live fetch -- so a model that's already cached or
+         already in the store costs nothing extra.
+      2. When a model genuinely needs a live fetch, both run concurrently
          in separate threads -- wall time is ~max(ens_time, aifs_time)
          instead of the sum, since these are I/O-bound network requests.
       3. Reuses the existing single-request-per-model optimization (5
@@ -426,24 +430,24 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs
     keys = {m: (lat, lon, lead_days, m) for m in models}
     cached_results = {m: _cache_lookup(keys[m]) for m in models}
 
-    # Fast path for IFS: the scheduled ingestion job may already have this
-    # data sitting in the GitHub data branch -- a few-second HTTP read
-    # instead of the ~500s live ECMWF fetch below. AIFS isn't ingested
-    # (Phase 1 scope is IFS-only), so it always goes through the live path.
-    # Fails soft on any problem, so falling through to live fetch is safe.
-    if cached_results["ifs"] is None:
+    # Fast path: try the GitHub-hosted store for each model not already
+    # cached. Both IFS and AIFS threshold data are ingested now, so this
+    # applies per-model -- a model with no (or stale) stored data simply
+    # falls through to the live fetch below, independent of the other.
+    for m in models:
+        if cached_results[m] is not None:
+            continue
         try:
-            store_ds = github_data_source.load_threshold_grid()
+            store_ds = github_data_source.load_threshold_grid(model=m)
             store_result = (
                 read_threshold_result_from_store(store_ds, lat, lon, lead_days)
                 if store_ds is not None else None
             )
         except Exception:
             store_result = None
-
         if store_result is not None:
-            cached_results["ifs"] = store_result
-            _cache_store(keys["ifs"], store_result)
+            cached_results[m] = store_result
+            _cache_store(keys[m], store_result)
 
     to_fetch = [m for m in models if cached_results[m] is None]
 
@@ -1123,13 +1127,6 @@ if view_mode == "Threshold Forecast":
     with col2:
         lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-    load_aifs = st.checkbox(
-        "Load AIFS",
-        help="Also fetch ECMWF's AI-based ensemble (AIFS ENS) alongside the standard ENS. "
-             "Roughly doubles the data fetched, though both run concurrently so it's not "
-             "twice the wait.",
-    )
-
     get_forecast_clicked = st.button("Get forecast", type="primary")
 
     elapsed_placeholder = st.empty()
@@ -1137,7 +1134,15 @@ if view_mode == "Threshold Forecast":
     if get_forecast_clicked:
         request_started_at = time.time()
         try:
-            fetch_out = get_forecast_with_progress(lat, lon, lead_days, load_aifs)
+            # Always fetch both models -- with both ingested and served
+            # from the store, this is normally just as fast as fetching
+            # one. The one place this costs something is the rare live-
+            # fetch fallback (store missing/stale for a model): fetching
+            # both there takes max(ens_time, aifs_time) instead of just
+            # ens_time, since they still run concurrently -- a real but
+            # bounded cost, traded for a simpler "always both are there
+            # to switch between" UI.
+            fetch_out = get_forecast_with_progress(lat, lon, lead_days, True)
         except Exception as e:
             st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
             with st.expander("Full error details"):
@@ -1146,7 +1151,6 @@ if view_mode == "Threshold Forecast":
         elapsed = time.time() - request_started_at
 
         st.session_state["last_fetch_out"] = fetch_out
-        st.session_state["last_load_aifs"] = load_aifs
         st.session_state["last_location_name"] = location_name
         st.session_state["last_lat"] = lat
         st.session_state["last_lon"] = lon
@@ -1154,7 +1158,6 @@ if view_mode == "Threshold Forecast":
 
     if "last_fetch_out" in st.session_state:
         fetch_out = st.session_state["last_fetch_out"]
-        load_aifs_active = st.session_state["last_load_aifs"]
         location_name = st.session_state["last_location_name"]
         lat = st.session_state["last_lat"]
         lon = st.session_state["last_lon"]
@@ -1163,24 +1166,39 @@ if view_mode == "Threshold Forecast":
         ens_result, ens_was_cached = fetch_out["ifs"]
         aifs_result, aifs_was_cached = fetch_out.get("aifs-ens", (None, False))
 
-        any_fresh_fetch = not ens_was_cached or (load_aifs_active and not aifs_was_cached)
+        any_fresh_fetch = not ens_was_cached or not aifs_was_cached
         elapsed_placeholder.caption(
             f"⏱️ Loaded in {elapsed:.1f}s" + ("" if any_fresh_fetch else " (from cache)")
         )
 
-        # --- Model selector: only relevant once AIFS has actually loaded ---
+        # --- Model selector, styled like the View mode control above:
+        # canonical choice lives in session_state, the widget just
+        # reflects/updates it. ---
         available_models = ["ifs"]
-        if load_aifs_active:
-            if aifs_result is not None:
-                available_models.append("aifs-ens")
-            else:
-                st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
+        if aifs_result is not None:
+            available_models.append("aifs-ens")
+        else:
+            st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
+
+        if "threshold_model" not in st.session_state:
+            st.session_state["threshold_model"] = "ifs"
 
         if len(available_models) > 1:
-            show_aifs = st.toggle(f"Show {MODEL_LABELS['aifs-ens']}")
-            selected_model = "aifs-ens" if show_aifs else "ifs"
-        else:
-            selected_model = "ifs"
+            model_labels = [MODEL_LABELS[m] for m in available_models]
+            current_label = MODEL_LABELS.get(st.session_state["threshold_model"], model_labels[0])
+            if current_label not in model_labels:
+                current_label = model_labels[0]
+            selected_label = st.segmented_control("Model", model_labels, default=current_label)
+            if selected_label is not None:
+                st.session_state["threshold_model"] = next(
+                    m for m in available_models if MODEL_LABELS[m] == selected_label
+                )
+
+        selected_model = (
+            st.session_state["threshold_model"]
+            if st.session_state["threshold_model"] in available_models
+            else "ifs"
+        )
 
         result = ens_result if selected_model == "ifs" else aifs_result
         was_cached = ens_was_cached if selected_model == "ifs" else aifs_was_cached
