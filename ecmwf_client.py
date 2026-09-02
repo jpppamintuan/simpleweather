@@ -379,7 +379,7 @@ AVAILABLE_PERIOD_HOURS = [3, 6, 12, 24]
 def fetch_percentile_rainfall(
     lat: float,
     lon: float,
-    max_lead_hours: int = 72,
+    max_lead_hours: int = 120,
     progress_callback: ProgressFn = None,
 ) -> dict:
     """
@@ -425,7 +425,7 @@ def fetch_percentile_rainfall(
     function. Expect noticeably longer load times -- this is why it's a
     separate, opt-in feature.
 
-    max_lead_hours is hard-capped at 72 for now -- 3-hourly steps that far
+    max_lead_hours is hard-capped at 120 for now -- 3-hourly steps that far
     out are safely within ECMWF's documented step availability for type=pf
     (0-144h by 3h, for all four run times), so this isn't pushing into any
     step-availability edge case; it's a deliberate scope limit for this
@@ -455,7 +455,7 @@ def fetch_percentile_rainfall(
         "downloaded_bytes": int | None,
     }
     """
-    max_lead_hours = min(max_lead_hours, 72)  # hard cap, see docstring
+    max_lead_hours = min(max_lead_hours, 120)  # hard cap, see docstring
     bin_hours = PERCENTILE_BIN_HOURS
 
     # Every native 3-hourly step INCLUDING step=0 -- step=0 is needed as
@@ -690,7 +690,7 @@ def fetch_threshold_grid(
 
 def fetch_percentile_grid(
     bbox: dict,
-    max_lead_hours: int = 72,
+    max_lead_hours: int = 120,
     progress_callback: ProgressFn = None,
 ) -> xr.Dataset:
     """
@@ -708,7 +708,7 @@ def fetch_percentile_grid(
     the same way aggregate_percentile_bins() does it today for the live
     app -- ingestion's job is just getting the raw numbers stored.
     """
-    max_lead_hours = min(max_lead_hours, 72)
+    max_lead_hours = min(max_lead_hours, 120)
     bin_hours = PERCENTILE_BIN_HOURS
     steps = list(range(0, max_lead_hours + 1, bin_hours))
 
