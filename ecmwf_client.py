@@ -177,15 +177,18 @@ def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn
     return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
 
-def _aligned_end_steps(run_hour: int, step_labels: list[str], target_hour: int = 0) -> list[int]:
+def _aligned_end_steps(run_hour: int, end_steps: list[int], target_hour: int = 0) -> list[int]:
     """Keep only windows whose *start* aligns with `target_hour` UTC
     (default 00 UTC -- i.e. skip the 12 UTC-to-12 UTC windows for a 12h-
-    spaced IFS request), returned as end-step hours (S1+24)."""
+    spaced IFS request). Takes plain end-step hours (not "S1-S2" range
+    strings) so this can filter steps from either a live GRIB fetch or
+    an already-cropped stored grid -- both just need to know which
+    end-hours line up with a 00 UTC start."""
     aligned = []
-    for label in step_labels:
-        s1 = int(label.split("-")[0])
+    for end_h in end_steps:
+        s1 = end_h - 24
         if (run_hour + s1 - target_hour) % 24 == 0:
-            aligned.append(s1 + 24)
+            aligned.append(end_h)
     return aligned
 
 
@@ -278,8 +281,44 @@ def fetch_forecast_table(
 
     _notify(progress_callback, 0.9, "Computing aligned forecast windows...")
 
+    end_steps = [int(label.split("-")[1]) for label in step_labels]
+    result = _build_threshold_result(
+        run_time=run_time,
+        grid_lat=grid_lat,
+        grid_lon=grid_lon,
+        raw_by_threshold=raw_by_threshold,
+        end_steps=end_steps,
+        max_lead_days=max_lead_days,
+        model=model,
+        downloaded_bytes=size_bytes,
+        fetch_mode=fetch_mode,
+        capped_to_day6=capped_to_day6,
+    )
+    _notify(progress_callback, 1.0, "Done")
+    return result
+
+
+def _build_threshold_result(
+    run_time,
+    grid_lat: float,
+    grid_lon: float,
+    raw_by_threshold: dict,
+    end_steps: list[int],
+    max_lead_days: int,
+    model: str,
+    downloaded_bytes,
+    fetch_mode: str,
+    capped_to_day6: bool,
+) -> dict:
+    """Shared tail logic for building the fetch_forecast_table() result
+    shape (windows/data/metadata) from already-decoded per-threshold point
+    data. Used both by the live-fetch path above and by
+    read_threshold_result_from_store() below, which reads the same
+    per-threshold point values out of a pre-fetched stored grid instead of
+    a fresh GRIB download -- keeping this logic in one place means the
+    24h-window alignment can't drift between the two paths."""
     run_hour = run_time.hour
-    aligned_end_steps = _aligned_end_steps(run_hour, step_labels)
+    aligned_end_steps = _aligned_end_steps(run_hour, end_steps)
     aligned_to_utc_midnight = True
 
     if not aligned_end_steps:
@@ -288,7 +327,7 @@ def fetch_forecast_table(
         # runs 4x/day, unlike IFS which only ever produces this product at
         # 00Z/12Z. Rather than show nothing, align to the run's own hour
         # instead of insisting on exactly midnight UTC.
-        aligned_end_steps = _aligned_end_steps(run_hour, step_labels, target_hour=run_hour)
+        aligned_end_steps = _aligned_end_steps(run_hour, end_steps, target_hour=run_hour)
         aligned_to_utc_midnight = False
 
     windows = []
@@ -316,8 +355,6 @@ def fetch_forecast_table(
     next_run_time = run_time + timedelta(hours=12)
     next_expected = _dissemination_available_time(next_run_time)
 
-    _notify(progress_callback, 1.0, "Done")
-
     return {
         "run_time": run_time,
         "grid_lat": grid_lat,
@@ -326,7 +363,7 @@ def fetch_forecast_table(
         "data": data,
         "available_since": available_since,
         "next_expected": next_expected,
-        "downloaded_bytes": size_bytes,
+        "downloaded_bytes": downloaded_bytes,
         "fetch_mode": fetch_mode,
         "model": model,
         "aligned_to_utc_midnight": aligned_to_utc_midnight,
@@ -706,3 +743,104 @@ def fetch_percentile_grid(
     ds_out.attrs["bin_hours"] = bin_hours
     _notify(progress_callback, 1.0, "Done")
     return ds_out
+
+
+# ---------------------------------------------------------------------------
+# Store-read functions -- used by the Streamlit app to build the exact same
+# result shapes as the live-fetch functions above, but sourced from an
+# already-fetched grid (opened from the GitHub-hosted Zarr store) instead of
+# a fresh ECMWF download. This is what makes reading the stored data a
+# few-second operation instead of ~500s: the expensive GRIB fetch/decode
+# already happened once, in the scheduled ingestion job.
+# ---------------------------------------------------------------------------
+
+
+def extract_threshold_point_from_grid(ds: xr.Dataset, lat: float, lon: float) -> dict:
+    """Nearest-neighbor point extraction from a threshold grid (as
+    produced by fetch_threshold_grid() and stored via ingestion), in the
+    same raw_by_threshold shape (mm -> {end_step_hour: value}) that
+    _fetch_combined() produces for a live fetch -- so both feed the same
+    _build_threshold_result() helper."""
+    lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+
+    raw_by_threshold: dict[int, dict[int, float]] = {}
+    for threshold_mm in AVAILABLE_THRESHOLDS_MM:
+        var_name = _param_for(threshold_mm)
+        if var_name not in ds.data_vars:
+            raise KeyError(f"{var_name} not found in stored grid (has: {list(ds.data_vars)})")
+        raw_by_threshold[threshold_mm] = _extract_point_series(ds, var_name, point)
+
+    return raw_by_threshold
+
+
+def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max_lead_days: int) -> dict:
+    """Builds the same result shape as fetch_forecast_table(), but reads
+    from an already-open stored grid Dataset (e.g. opened from the
+    GitHub-hosted Zarr store) instead of fetching from ECMWF live."""
+    run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+    lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+    grid_lat = float(point.latitude.values)
+    grid_lon = float(point.longitude.values)
+    if grid_lon > 180:
+        grid_lon -= 360
+
+    raw_by_threshold = extract_threshold_point_from_grid(ds, lat, lon)
+    end_steps = [int(h) for h in (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)]
+
+    return _build_threshold_result(
+        run_time=run_time,
+        grid_lat=grid_lat,
+        grid_lon=grid_lon,
+        raw_by_threshold=raw_by_threshold,
+        end_steps=end_steps,
+        max_lead_days=max_lead_days,
+        model=ds.attrs.get("model", DEFAULT_MODEL),
+        downloaded_bytes=None,  # not meaningful here -- the heavy download already happened during ingestion
+        fetch_mode="store",
+        capped_to_day6=False,  # ingestion always requests the full 15-day range for IFS
+    )
+
+
+def read_percentile_raw_from_store(ds: xr.Dataset, lat: float, lon: float, max_lead_hours: int) -> dict:
+    """Builds the same raw-bins shape as fetch_percentile_rainfall()
+    (run_time/grid_lat/grid_lon/bins/bin_hours/downloaded_bytes), but reads
+    from an already-open stored grid Dataset instead of fetching from
+    ECMWF live. Feed the result straight into aggregate_percentile_bins()
+    exactly as the live-fetch path does -- that function doesn't care
+    where the raw bins came from."""
+    run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+    bin_hours = ds.attrs.get("bin_hours", PERCENTILE_BIN_HOURS)
+
+    lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+
+    var_name = list(ds.data_vars)[0]  # 'precip_3h_mm'
+    step_hours = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
+    order = np.argsort(step_hours)
+
+    max_bins = max_lead_hours // bin_hours
+    bins = []
+    for idx in order[:max_bins]:
+        idx = int(idx)
+        end_h = int(step_hours[idx])
+        start_h = end_h - bin_hours
+        # mean(dim="number") would collapse members -- .values on the raw
+        # per-member slice keeps every member, matching what
+        # aggregate_percentile_bins() expects to compute percentiles over.
+        member_values_mm = point[var_name].isel(step=idx).values.tolist()
+        bins.append({
+            "start_utc": run_time + timedelta(hours=start_h),
+            "end_utc": run_time + timedelta(hours=end_h),
+            "member_values_mm": member_values_mm,
+        })
+
+    return {
+        "run_time": run_time,
+        "grid_lat": float(point.latitude.values),
+        "grid_lon": float(point.longitude.values) if float(point.longitude.values) <= 180 else float(point.longitude.values) - 360,
+        "bins": bins,
+        "bin_hours": bin_hours,
+        "downloaded_bytes": None,  # heavy download already happened during ingestion
+    }
