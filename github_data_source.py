@@ -24,7 +24,7 @@ import xarray as xr
 
 # EDIT THIS before deploying -- "owner/repo", e.g. "yourusername/simpleweather".
 # Used to build the raw.githubusercontent.com URLs below.
-GITHUB_REPO = "YOUR_GITHUB_USERNAME/simpleweather"
+GITHUB_REPO = "jpppamintuan/simpleweather"
 
 _BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/data"
 _MANIFEST_URL = f"{_BASE_URL}/manifest.json"
