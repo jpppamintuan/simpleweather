@@ -40,7 +40,7 @@ import xarray as xr
 # Reuses the exact fetch/decode/crop logic in ecmwf_client.py -- this
 # script is intentionally a thin wrapper, not a reimplementation, so
 # ingestion and the live app's own fetch code can't quietly drift apart.
-from ecmwf_client import fetch_threshold_grid, fetch_percentile_grid
+from ecmwf_client import fetch_threshold_grid, fetch_percentile_grid, MODEL_LABELS
 
 # Generous bounding box around the Philippines -- covers all 5 of the
 # app's current fixed locations with plenty of room to spare, sized for
@@ -49,8 +49,14 @@ from ecmwf_client import fetch_threshold_grid, fetch_percentile_grid
 # outside this box.
 PH_BBOX = {"lat_min": 4.0, "lat_max": 21.5, "lon_min": 115.0, "lon_max": 127.5}
 
+# Both ECMWF's physics-based ENS and their AI-based ensemble are ingested
+# for the threshold dataset. Percentile stays IFS-only for now -- that
+# view has no model selector in the UI yet, so ingesting AIFS data for it
+# would have nowhere to be shown. Revisit both together if/when that UI
+# need comes up.
+THRESHOLD_MODELS = ["ifs", "aifs-ens"]
+
 OUTPUT_DIR = Path("output")
-THRESHOLD_ZARR_PATH = OUTPUT_DIR / "ifs" / "threshold_latest.zarr"
 PERCENTILE_ZARR_PATH = OUTPUT_DIR / "ifs" / "percentile_latest.zarr"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
@@ -101,19 +107,21 @@ def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = 
     ds.to_zarr(path, mode="w", encoding=encoding)
 
 
-def ingest_threshold_forecast() -> str | None:
+def ingest_threshold_forecast(model: str) -> str | None:
     """Returns the run_time string on success, None on failure (caller logs)."""
-    print("[threshold] Fetching IFS ENS threshold-exceedance grid...")
+    label = MODEL_LABELS.get(model, model)
+    print(f"[threshold:{model}] Fetching {label} threshold-exceedance grid...")
     ds = fetch_threshold_grid(
         bbox=PH_BBOX,
         max_lead_days=15,
-        model="ifs",
-        progress_callback=lambda frac, msg: print(f"[threshold] {frac:.0%} {msg}"),
+        model=model,
+        progress_callback=lambda frac, msg: print(f"[threshold:{model}] {frac:.0%} {msg}"),
     )
-    print(f"[threshold] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
-    print(f"[threshold] Writing locally to {THRESHOLD_ZARR_PATH}")
-    _write_zarr_locally(ds, THRESHOLD_ZARR_PATH)
-    print("[threshold] Done.")
+    print(f"[threshold:{model}] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
+    path = OUTPUT_DIR / model / "threshold_latest.zarr"
+    print(f"[threshold:{model}] Writing locally to {path}")
+    _write_zarr_locally(ds, path)
+    print(f"[threshold:{model}] Done.")
     return ds.attrs.get("run_time")
 
 
@@ -152,7 +160,13 @@ def main() -> int:
     run_times = {}
     failures = []
 
-    for name, fn in [("threshold", ingest_threshold_forecast), ("percentile", ingest_percentile_data)]:
+    # Manifest keys: "threshold_ifs", "threshold_aifs-ens", "percentile" --
+    # each checked independently by github_data_source.py, so one model's
+    # failure never blocks another's data from being served.
+    jobs = [(f"threshold_{m}", lambda m=m: ingest_threshold_forecast(m)) for m in THRESHOLD_MODELS]
+    jobs.append(("percentile", ingest_percentile_data))
+
+    for name, fn in jobs:
         try:
             run_times[name] = fn()
         except Exception:
