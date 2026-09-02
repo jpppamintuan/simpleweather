@@ -1278,7 +1278,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         pct_lat, pct_lon = LOCATIONS[pct_location_name]
     with pct_col2:
         pct_lead_hours = st.slider(
-            "Forecast range (hours)", min_value=6, max_value=72, value=72, step=6, key="pct_lead_hours"
+            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
         )
 
     pct_clicked = st.button("Get percentile forecast", key="pct_button")
@@ -1317,7 +1317,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         # above can take a while.
         period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
         if "pct_period_hours" not in st.session_state:
-            st.session_state["pct_period_hours"] = 6
+            st.session_state["pct_period_hours"] = 3
         selected_period_label = st.segmented_control(
             "Time step",
             list(period_labels.values()),
@@ -1347,7 +1347,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         st.caption(
             f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
             f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
-            f"for this first version. Limited to 72 hours ahead for now."
+            f"for this first version. Limited to 120 hours ahead for now."
         )
 
         st.subheader(f"Percentile rainfall for {pct_location_name}")
