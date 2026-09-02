@@ -11,6 +11,9 @@ on:
     - cron: "15 20 * * *"
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab, e.g. to test setup
 
+permissions:
+  contents: write  # needed to push to the `data` branch below
+
 jobs:
   ingest:
     runs-on: ubuntu-latest
@@ -31,9 +34,21 @@ jobs:
         run: pip install -r requirements-ingest.txt
 
       - name: Run ingestion
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET_NAME: ${{ secrets.R2_BUCKET_NAME }}
         run: python ingest.py
+
+      # Publishes ./output to a dedicated `data` branch as a single fresh
+      # commit each run (force_orphan: true means no parent history, so
+      # the branch never grows -- matches the "rolling latest only"
+      # retention decision). No secrets needed beyond the token GitHub
+      # Actions already provides automatically.
+      - name: Publish to data branch
+        if: always()  # publish whatever succeeded even if one of the two fetches failed (see ingest.py)
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./output
+          publish_branch: data
+          force_orphan: true
+          user_name: "github-actions[bot]"
+          user_email: "github-actions[bot]@users.noreply.github.com"
+          commit_message: "Update forecast data"
