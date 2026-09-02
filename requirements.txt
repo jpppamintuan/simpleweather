@@ -4,3 +4,7 @@ xarray>=2024.3
 cfgrib>=0.9.14
 pandas>=2.0
 numpy>=1.24
+zarr>=2.17,<3
+fsspec>=2024.3
+aiohttp>=3.9
+requests>=2.31
