@@ -24,7 +24,7 @@ import xarray as xr
 
 # EDIT THIS before deploying -- "owner/repo", e.g. "yourusername/simpleweather".
 # Used to build the raw.githubusercontent.com URLs below.
-GITHUB_REPO = "jpppamintuan/simpleweather"
+GITHUB_REPO = "YOUR_GITHUB_USERNAME/simpleweather"
 
 _BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/data"
 _MANIFEST_URL = f"{_BASE_URL}/manifest.json"
@@ -91,13 +91,14 @@ def _open_remote_zarr(relative_path: str) -> xr.Dataset:
     return ds.load()
 
 
-def load_threshold_grid() -> xr.Dataset | None:
-    """Returns the stored threshold grid if fresh, else None."""
-    is_fresh, _ = check_dataset_freshness("threshold")
+def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
+    """Returns the stored threshold grid for the given model ('ifs' or
+    'aifs-ens') if fresh, else None."""
+    is_fresh, _ = check_dataset_freshness(f"threshold_{model}")
     if not is_fresh:
         return None
     try:
-        return _open_remote_zarr("ifs/threshold_latest.zarr")
+        return _open_remote_zarr(f"{model}/threshold_latest.zarr")
     except Exception:
         return None
 
