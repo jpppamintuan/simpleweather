@@ -6,36 +6,35 @@ Fetches the latest ECMWF IFS ENS forecast -- both the precomputed
 threshold-exceedance product and the raw ensemble-member product used for
 percentile calculations -- crops each to a bounding box covering the
 Philippines (generous enough to support arbitrary-point queries later, not
-just the app's current 5 fixed locations), and writes the result to
-Cloudflare R2 as Zarr.
+just the app's current 5 fixed locations), and writes the result to a
+local ./output directory as Zarr.
 
-Zarr specifically (not GRIB2/NetCDF): R2 supports HTTP range requests and
-Zarr is chunked, so a future query layer (Phase 2 -- a Cloudflare Worker)
-can read just the chunk containing a queried point instead of downloading
-the whole file per request.
+This script itself has NO knowledge of where ./output ends up -- that's
+the GitHub Actions workflow's job (it publishes ./output to a dedicated
+`data` branch as a single fresh commit each run, via
+peaceiris/actions-gh-pages with force_orphan: true, so the branch never
+accumulates history -- matches the "rolling latest only" retention
+decision). Keeping storage/publishing out of this script means no cloud
+credentials are needed here at all.
 
-"Latest run" storage model: every run overwrites the same object keys
-(ifs/threshold_latest.zarr, ifs/percentile_latest.zarr) rather than
-accumulating timestamped runs -- matches the "rolling latest only"
-retention decision. Wanting historical/verification data later is a
-deliberate, separate change to this retention model, not something to
-grow into by accident.
-
-Required environment variables (set as GitHub Actions secrets -- see the
-setup notes shared alongside this script, NEVER commit these):
-    R2_ACCOUNT_ID
-    R2_ACCESS_KEY_ID
-    R2_SECRET_ACCESS_KEY
-    R2_BUCKET_NAME
+Zarr specifically (not GRIB2/NetCDF): it's chunked, and both
+raw.githubusercontent.com and (later, if adopted) a CDN in front of it
+support HTTP range requests -- so a future query layer (Phase 2 -- a
+Cloudflare Worker) can fetch just the chunk containing a queried point
+instead of downloading the whole file. Chunk sizes below are a first
+guess (small lat/lon tiles, full step/member dimensions) sized for
+"a query wants every step for one point" -- worth re-tuning once Phase 2
+makes the real access pattern visible.
 """
 
 from __future__ import annotations
 
-import os
+import json
+import shutil
 import sys
 import traceback
+from pathlib import Path
 
-import s3fs
 import xarray as xr
 
 # Reuses the exact fetch/decode/crop logic in ecmwf_client.py -- this
@@ -50,41 +49,28 @@ from ecmwf_client import fetch_threshold_grid, fetch_percentile_grid
 # outside this box.
 PH_BBOX = {"lat_min": 4.0, "lat_max": 21.5, "lon_min": 115.0, "lon_max": 127.5}
 
-R2_ENDPOINT_TEMPLATE = "https://{account_id}.r2.cloudflarestorage.com"
+OUTPUT_DIR = Path("output")
+THRESHOLD_ZARR_PATH = OUTPUT_DIR / "ifs" / "threshold_latest.zarr"
+PERCENTILE_ZARR_PATH = OUTPUT_DIR / "ifs" / "percentile_latest.zarr"
+MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
-THRESHOLD_OBJECT_KEY = "ifs/threshold_latest.zarr"
-PERCENTILE_OBJECT_KEY = "ifs/percentile_latest.zarr"
-
-
-def _require_env(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise RuntimeError(
-            f"Missing required environment variable: {name}. "
-            f"This must be set as a GitHub Actions secret (see setup notes)."
-        )
-    return value
+# First-guess chunk sizes -- see module docstring.
+LATLON_CHUNK = 10  # grid points per chunk, each dimension
 
 
-def _r2_filesystem() -> s3fs.S3FileSystem:
-    account_id = _require_env("R2_ACCOUNT_ID")
-    return s3fs.S3FileSystem(
-        key=_require_env("R2_ACCESS_KEY_ID"),
-        secret=_require_env("R2_SECRET_ACCESS_KEY"),
-        endpoint_url=R2_ENDPOINT_TEMPLATE.format(account_id=account_id),
-    )
+def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = None) -> None:
+    chunks = {"latitude": LATLON_CHUNK, "longitude": LATLON_CHUNK}
+    if extra_chunks:
+        chunks.update(extra_chunks)
+    ds = ds.chunk(chunks)
+    # mode="w" -- the "rolling latest" overwrite happens at the git-publish
+    # level (force_orphan), but writing fresh here too avoids ever mixing
+    # stale chunk files with new ones within a single local run.
+    ds.to_zarr(path, mode="w")
 
 
-def _write_zarr_to_r2(ds: xr.Dataset, object_key: str) -> None:
-    bucket = _require_env("R2_BUCKET_NAME")
-    fs = _r2_filesystem()
-    store = s3fs.S3Map(root=f"{bucket}/{object_key}", s3=fs, check=False)
-    # mode="w" IS the "rolling latest" overwrite -- each run replaces the
-    # previous object wholesale rather than appending to it.
-    ds.to_zarr(store, mode="w")
-
-
-def ingest_threshold_forecast() -> None:
+def ingest_threshold_forecast() -> str | None:
+    """Returns the run_time string on success, None on failure (caller logs)."""
     print("[threshold] Fetching IFS ENS threshold-exceedance grid...")
     ds = fetch_threshold_grid(
         bbox=PH_BBOX,
@@ -93,12 +79,14 @@ def ingest_threshold_forecast() -> None:
         progress_callback=lambda frac, msg: print(f"[threshold] {frac:.0%} {msg}"),
     )
     print(f"[threshold] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
-    print(f"[threshold] Writing to R2: {THRESHOLD_OBJECT_KEY}")
-    _write_zarr_to_r2(ds, THRESHOLD_OBJECT_KEY)
+    print(f"[threshold] Writing locally to {THRESHOLD_ZARR_PATH}")
+    _write_zarr_locally(ds, THRESHOLD_ZARR_PATH)
     print("[threshold] Done.")
+    return ds.attrs.get("run_time")
 
 
-def ingest_percentile_data() -> None:
+def ingest_percentile_data() -> str | None:
+    """Returns the run_time string on success, None on failure (caller logs)."""
     print("[percentile] Fetching IFS ENS raw-member percentile grid...")
     ds = fetch_percentile_grid(
         bbox=PH_BBOX,
@@ -106,26 +94,49 @@ def ingest_percentile_data() -> None:
         progress_callback=lambda frac, msg: print(f"[percentile] {frac:.0%} {msg}"),
     )
     print(f"[percentile] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
-    print(f"[percentile] Writing to R2: {PERCENTILE_OBJECT_KEY}")
-    _write_zarr_to_r2(ds, PERCENTILE_OBJECT_KEY)
+    print(f"[percentile] Writing locally to {PERCENTILE_ZARR_PATH}")
+    # step (25 bins) and number (50 members) are kept as single chunks --
+    # a point query wants the whole forecast + all members for that point,
+    # so splitting those dimensions would only mean more chunk files to
+    # fetch for the same query, not less data transferred.
+    _write_zarr_locally(ds, PERCENTILE_ZARR_PATH, extra_chunks={"step": -1, "number": -1})
     print("[percentile] Done.")
+    return ds.attrs.get("run_time")
 
 
 def main() -> int:
+    if OUTPUT_DIR.exists():
+        shutil.rmtree(OUTPUT_DIR)  # clean slate -- no leftover files from a previous local run
+    OUTPUT_DIR.mkdir(parents=True)
+
     # Both run to completion even if one fails -- a broken percentile
     # fetch shouldn't prevent the (cheaper, more central to the app)
     # threshold data from updating, and vice versa. Streamlit's fallback
     # to a live fetch (kept in place, see the app-side plan) covers
-    # whichever one didn't make it.
+    # whichever one didn't make it. If one fails, its ./output subfolder
+    # simply won't exist -- the workflow still publishes whatever DID
+    # succeed, rather than an all-or-nothing failure wiping out a good
+    # threshold fetch just because percentile had a bad day.
+    run_times = {}
     failures = []
 
     for name, fn in [("threshold", ingest_threshold_forecast), ("percentile", ingest_percentile_data)]:
         try:
-            fn()
+            run_times[name] = fn()
         except Exception:
             print(f"[{name}] FAILED:", file=sys.stderr)
             traceback.print_exc()
             failures.append(name)
+
+    # Small manifest alongside the data -- lets the Streamlit app (and
+    # later, the Worker) check "how fresh is this?" with one small fetch
+    # instead of opening a Zarr store just to read an attribute.
+    manifest = {
+        "generated_at": _now_iso(),
+        "run_times": run_times,
+        "failures": failures,
+    }
+    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
 
     if failures:
         print(f"Ingestion finished with failures: {failures}", file=sys.stderr)
@@ -133,6 +144,11 @@ def main() -> int:
 
     print("Ingestion finished successfully.")
     return 0
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
 
 
 if __name__ == "__main__":
