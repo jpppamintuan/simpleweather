@@ -59,14 +59,30 @@ LATLON_CHUNK = 10  # grid points per chunk, each dimension
 
 
 def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = None) -> None:
-    chunks = {"latitude": LATLON_CHUNK, "longitude": LATLON_CHUNK}
+    # NOTE: deliberately NOT using ds.chunk(...) here -- that's xarray's
+    # dask-chunking API (it tries to wrap the data in dask arrays), which
+    # requires the 'dask' package and isn't otherwise needed anywhere in
+    # this pipeline (everything is already materialized via .load() by
+    # the time it gets here). Passing chunk sizes through to_zarr's
+    # `encoding` argument instead sets zarr's on-disk chunk layout
+    # directly, with no dask dependency at all.
+    chunk_sizes = {"latitude": LATLON_CHUNK, "longitude": LATLON_CHUNK}
     if extra_chunks:
-        chunks.update(extra_chunks)
-    ds = ds.chunk(chunks)
+        chunk_sizes.update(extra_chunks)
+
+    encoding = {}
+    for var_name, var in ds.data_vars.items():
+        chunk_shape = []
+        for dim in var.dims:
+            requested = chunk_sizes.get(dim, -1)  # -1 (or unlisted) = one chunk covering the whole dimension
+            dim_size = var.sizes[dim]
+            chunk_shape.append(dim_size if requested in (-1, None) else min(requested, dim_size))
+        encoding[var_name] = {"chunks": tuple(chunk_shape)}
+
     # mode="w" -- the "rolling latest" overwrite happens at the git-publish
     # level (force_orphan), but writing fresh here too avoids ever mixing
     # stale chunk files with new ones within a single local run.
-    ds.to_zarr(path, mode="w")
+    ds.to_zarr(path, mode="w", encoding=encoding)
 
 
 def ingest_threshold_forecast() -> str | None:
