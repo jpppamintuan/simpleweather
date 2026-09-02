@@ -18,7 +18,10 @@ from ecmwf_client import (
     fetch_forecast_table,
     fetch_percentile_rainfall,
     aggregate_percentile_bins,
+    read_threshold_result_from_store,
+    read_percentile_raw_from_store,
 )
+import github_data_source
 
 st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
 
@@ -281,12 +284,12 @@ def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
 
 def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     """Three-tier lookup (session -> cross-session -> superset-trim ->
-    fresh fetch), mirroring get_forecast_with_progress() for the main
-    forecast. Returns the RAW 3-hourly bins result (result, was_cached) --
-    NOT aggregated to any particular time step. Call
-    aggregate_percentile_bins() on the result to get displayable
-    period_hours-long periods; that step is cheap and can be redone on
-    every rerun without coming back here."""
+    GitHub-hosted store -> fresh live fetch), mirroring
+    get_forecast_with_progress() for the main forecast. Returns the RAW
+    3-hourly bins result (result, was_cached) -- NOT aggregated to any
+    particular time step. Call aggregate_percentile_bins() on the result
+    to get displayable period_hours-long periods; that step is cheap and
+    can be redone on every rerun without coming back here."""
     key = (lat, lon, lead_hours)
     now = time.time()
     session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
@@ -310,6 +313,27 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
         session_cache[key] = entry
         _PCT_GLOBAL_CACHE[key] = entry
         return trimmed, True
+
+    # Fast path: the scheduled ingestion job may already have this data
+    # sitting in the GitHub data branch -- a few-second HTTP read instead
+    # of the ~500s live ECMWF fetch below. Fails soft (returns None) on
+    # any problem -- missing/stale data, network error -- so falling
+    # through to the live fetch is always safe.
+    try:
+        store_ds = github_data_source.load_percentile_grid()
+        store_result = (
+            read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
+            if store_ds is not None else None
+        )
+    except Exception:
+        store_result = None
+
+    if store_result is not None:
+        entry = {"ts": now, "result": store_result}
+        session_cache[key] = entry
+        _PCT_GLOBAL_CACHE[key] = entry
+        _save_pct_disk_cache()
+        return store_result, True
 
     progress = st.progress(0, text="Connecting to ECMWF Open Data...")
 
@@ -401,6 +425,26 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs
     models = ["ifs"] + (["aifs-ens"] if load_aifs else [])
     keys = {m: (lat, lon, lead_days, m) for m in models}
     cached_results = {m: _cache_lookup(keys[m]) for m in models}
+
+    # Fast path for IFS: the scheduled ingestion job may already have this
+    # data sitting in the GitHub data branch -- a few-second HTTP read
+    # instead of the ~500s live ECMWF fetch below. AIFS isn't ingested
+    # (Phase 1 scope is IFS-only), so it always goes through the live path.
+    # Fails soft on any problem, so falling through to live fetch is safe.
+    if cached_results["ifs"] is None:
+        try:
+            store_ds = github_data_source.load_threshold_grid()
+            store_result = (
+                read_threshold_result_from_store(store_ds, lat, lon, lead_days)
+                if store_ds is not None else None
+            )
+        except Exception:
+            store_result = None
+
+        if store_result is not None:
+            cached_results["ifs"] = store_result
+            _cache_store(keys["ifs"], store_result)
+
     to_fetch = [m for m in models if cached_results[m] is None]
 
     if not to_fetch:
