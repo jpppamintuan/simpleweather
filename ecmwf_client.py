@@ -376,6 +376,22 @@ PERCENTILE_BIN_HOURS = 3  # ECMWF's native accumulation granularity for this pro
 AVAILABLE_PERIOD_HOURS = [3, 6, 12, 24]
 
 
+def check_latest_threshold_run(model: str = DEFAULT_MODEL):
+    """Cheap metadata-only check for the most recent available threshold
+    (ep) run -- does NOT download any data, per ecmwf-opendata's
+    documented Client.latest() behavior. Used by ingestion to decide
+    whether a full fetch is actually needed before paying for one."""
+    client = Client(source="ecmwf", model=model)
+    return client.latest(stream="enfo", type="ep", param=_param_for(AVAILABLE_THRESHOLDS_MM[0]))
+
+
+def check_latest_percentile_run():
+    """Cheap metadata-only check for the most recent available raw-member
+    (pf) run -- does NOT download any data."""
+    client = Client(source="ecmwf")
+    return client.latest(stream="enfo", type="pf", param="tp")
+
+
 def fetch_percentile_rainfall(
     lat: float,
     lon: float,
