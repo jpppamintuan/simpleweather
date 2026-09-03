@@ -170,6 +170,9 @@ def _needs_fetch(dataset_name: str, latest_check, existing_run_times: dict) -> b
     # datetime, while our stored run_time is timezone-aware (both UTC),
     # so a direct aware-vs-naive comparison would raise.
     return latest_dt.replace(tzinfo=None) != current_dt.replace(tzinfo=None)
+
+
+def ingest_threshold_forecast(model: str) -> str | None:
     """Returns the run_time string on success, None on failure (caller logs)."""
     label = MODEL_LABELS.get(model, model)
     print(f"[threshold:{model}] Fetching {label} threshold-exceedance grid...")
