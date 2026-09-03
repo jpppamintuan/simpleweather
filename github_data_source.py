@@ -16,6 +16,7 @@ the only path.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 
 import fsspec
@@ -36,18 +37,38 @@ _MANIFEST_URL = f"{_BASE_URL}/manifest.json"
 # on every minor scheduling hiccup.
 MAX_AGE_HOURS = 15
 
+# Module-level cache for the manifest fetch, shared across every dataset
+# freshness check within the same process. Previously each check
+# (threshold-IFS, threshold-AIFS, percentile) called _fetch_manifest()
+# independently -- up to 3 separate HTTP requests for the SAME file per
+# page load, meaning one transient network hiccup could make everything
+# look stale at once. One shared, short-lived cache fixes that.
+_MANIFEST_CACHE_TTL_SECONDS = 30
+_manifest_cache: dict = {"ts": 0.0, "data": None}
 
-def _fetch_manifest(timeout_seconds: float = 5.0) -> dict | None:
+
+def _fetch_manifest(timeout_seconds: float = 8.0) -> dict | None:
     """Small JSON fetch -- checked before opening any Zarr store, so a
     missing/failed ingestion run is detected in one cheap request instead
     of discovering it partway through opening a (possibly nonexistent)
-    store."""
-    try:
-        resp = requests.get(_MANIFEST_URL, timeout=timeout_seconds)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception:
-        return None
+    store. Cached briefly (see _manifest_cache above) and retried once on
+    failure before giving up."""
+    now = time.time()
+    if _manifest_cache["data"] is not None and (now - _manifest_cache["ts"] < _MANIFEST_CACHE_TTL_SECONDS):
+        return _manifest_cache["data"]
+
+    for attempt in range(2):
+        try:
+            resp = requests.get(_MANIFEST_URL, timeout=timeout_seconds)
+            resp.raise_for_status()
+            data = resp.json()
+            _manifest_cache["ts"] = now
+            _manifest_cache["data"] = data
+            return data
+        except Exception:
+            if attempt == 0:
+                continue
+            return None
 
 
 def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
