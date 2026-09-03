@@ -10,12 +10,20 @@ just the app's current 5 fixed locations), and writes the result to a
 local ./output directory as Zarr.
 
 This script itself has NO knowledge of where ./output ends up -- that's
-the GitHub Actions workflow's job (it publishes ./output to a dedicated
-`data` branch as a single fresh commit each run, via
-peaceiris/actions-gh-pages with force_orphan: true, so the branch never
-accumulates history -- matches the "rolling latest only" retention
-decision). Keeping storage/publishing out of this script means no cloud
-credentials are needed here at all.
+the GitHub Actions workflow's job (it checks out the current `data`
+branch into ./output before this script runs, then publishes ./output
+back as a single fresh commit after, via peaceiris/actions-gh-pages with
+force_orphan: true, so the branch never accumulates history -- matches
+the "rolling latest only" retention decision). Keeping storage/publishing
+out of this script means no cloud credentials are needed here at all.
+
+Check-then-fetch: before doing any expensive download, each dataset's
+availability is checked cheaply via Client.latest() (metadata only, no
+data transferred) and compared against what's already published. If
+nothing's newer, that dataset's existing files are left untouched rather
+than re-downloaded -- this is what makes it safe to run this workflow
+often (see the schedule in ingest.yml) without wasting bandwidth on
+repeatedly re-fetching the same unchanged forecast run.
 
 Zarr specifically (not GRIB2/NetCDF): it's chunked, and both
 raw.githubusercontent.com and (later, if adopted) a CDN in front of it
@@ -30,9 +38,9 @@ makes the real access pattern visible.
 from __future__ import annotations
 
 import json
-import shutil
 import sys
 import traceback
+from datetime import datetime, timezone
 from pathlib import Path
 
 import xarray as xr
@@ -40,7 +48,13 @@ import xarray as xr
 # Reuses the exact fetch/decode/crop logic in ecmwf_client.py -- this
 # script is intentionally a thin wrapper, not a reimplementation, so
 # ingestion and the live app's own fetch code can't quietly drift apart.
-from ecmwf_client import fetch_threshold_grid, fetch_percentile_grid, MODEL_LABELS
+from ecmwf_client import (
+    fetch_threshold_grid,
+    fetch_percentile_grid,
+    check_latest_threshold_run,
+    check_latest_percentile_run,
+    MODEL_LABELS,
+)
 
 # Generous bounding box around the Philippines -- covers all 5 of the
 # app's current fixed locations with plenty of room to spare, sized for
@@ -107,7 +121,55 @@ def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = 
     ds.to_zarr(path, mode="w", encoding=encoding)
 
 
-def ingest_threshold_forecast(model: str) -> str | None:
+def _load_existing_manifest() -> dict:
+    """Reads whatever manifest.json is already sitting in ./output -- the
+    workflow checks out the current `data` branch into ./output BEFORE
+    running this script (see ingest.yml), so this reflects the currently
+    published state. Used both to know each dataset's last-ingested
+    run_time (for the check-then-fetch comparison below) and, implicitly,
+    to leave already-correct data files untouched when nothing's new."""
+    if MANIFEST_PATH.exists():
+        try:
+            return json.loads(MANIFEST_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _normalize_latest_result(latest):
+    """Client.latest() is documented to return the date of the most
+    recent matching forecast. Normalizes to a plain datetime regardless
+    of whether it comes back bare or wrapped in a small result-like
+    object -- worth spot-checking against the printed log on the first
+    real run, since this couldn't be verified against the live API
+    ahead of time."""
+    if latest is None:
+        return None
+    return getattr(latest, "datetime", latest)
+
+
+def _needs_fetch(dataset_name: str, latest_check, existing_run_times: dict) -> bool:
+    """True if a full fetch is warranted for this dataset: either the
+    cheap availability check itself failed (better to retry the full
+    fetch than silently stay stale), there's no prior recorded run_time,
+    or the latest available run doesn't match what's already stored."""
+    latest_dt = _normalize_latest_result(latest_check)
+    if latest_dt is None:
+        return True
+
+    current_str = existing_run_times.get(dataset_name)
+    if not current_str:
+        return True
+
+    try:
+        current_dt = datetime.fromisoformat(current_str)
+    except ValueError:
+        return True
+
+    # Compare on the naive value -- Client.latest() returns a naive UTC
+    # datetime, while our stored run_time is timezone-aware (both UTC),
+    # so a direct aware-vs-naive comparison would raise.
+    return latest_dt.replace(tzinfo=None) != current_dt.replace(tzinfo=None)
     """Returns the run_time string on success, None on failure (caller logs)."""
     label = MODEL_LABELS.get(model, model)
     print(f"[threshold:{model}] Fetching {label} threshold-exceedance grid...")
@@ -145,30 +207,44 @@ def ingest_percentile_data() -> str | None:
 
 
 def main() -> int:
-    if OUTPUT_DIR.exists():
-        shutil.rmtree(OUTPUT_DIR)  # clean slate -- no leftover files from a previous local run
-    OUTPUT_DIR.mkdir(parents=True)
+    # NOTE: no longer wipes ./output -- the workflow checks out the
+    # current `data` branch into ./output before this script runs, so it
+    # already contains the last-published state (including datasets we're
+    # about to decide NOT to refetch). Only mkdir if that checkout didn't
+    # happen (e.g. very first run ever, before a `data` branch exists).
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Both run to completion even if one fails -- a broken percentile
-    # fetch shouldn't prevent the (cheaper, more central to the app)
-    # threshold data from updating, and vice versa. Streamlit's fallback
-    # to a live fetch (kept in place, see the app-side plan) covers
-    # whichever one didn't make it. If one fails, its ./output subfolder
-    # simply won't exist -- the workflow still publishes whatever DID
-    # succeed, rather than an all-or-nothing failure wiping out a good
-    # threshold fetch just because percentile had a bad day.
-    run_times = {}
+    existing_manifest = _load_existing_manifest()
+    existing_run_times = existing_manifest.get("run_times", {})
+    # Seed this run's manifest from the existing one -- datasets we skip
+    # below (because nothing's new) keep their carried-forward run_time
+    # and their on-disk files untouched, rather than disappearing from
+    # the published output.
+    run_times = dict(existing_run_times)
     failures = []
 
-    # Manifest keys: "threshold_ifs", "threshold_aifs-ens", "percentile" --
-    # each checked independently by github_data_source.py, so one model's
-    # failure never blocks another's data from being served.
-    jobs = [(f"threshold_{m}", lambda m=m: ingest_threshold_forecast(m)) for m in THRESHOLD_MODELS]
-    jobs.append(("percentile", ingest_percentile_data))
+    jobs = [(f"threshold_{m}", m, "threshold") for m in THRESHOLD_MODELS]
+    jobs.append(("percentile", None, "percentile"))
 
-    for name, fn in jobs:
+    for name, model, product in jobs:
         try:
-            run_times[name] = fn()
+            latest_check = (
+                check_latest_threshold_run(model) if product == "threshold"
+                else check_latest_percentile_run()
+            )
+        except Exception:
+            print(f"[{name}] Availability check failed -- will attempt a full fetch anyway.")
+            latest_check = None
+
+        if not _needs_fetch(name, latest_check, existing_run_times):
+            print(f"[{name}] Already up to date (run {existing_run_times.get(name)}) -- skipping.")
+            continue
+
+        try:
+            if product == "threshold":
+                run_times[name] = ingest_threshold_forecast(model)
+            else:
+                run_times[name] = ingest_percentile_data()
         except Exception:
             print(f"[{name}] FAILED:", file=sys.stderr)
             traceback.print_exc()
@@ -193,7 +269,6 @@ def main() -> int:
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
 
