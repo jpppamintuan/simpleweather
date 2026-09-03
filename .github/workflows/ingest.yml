@@ -2,13 +2,25 @@ name: Ingest ECMWF forecast data
 
 on:
   schedule:
-    # ECMWF's IFS ENS probability/dissemination product is typically
-    # available ~7-9h after each run: 00Z -> ~08:01 UTC, 12Z -> ~20:01 UTC
-    # (see _dissemination_available_time() in ecmwf_client.py, which this
-    # mirrors). A ~15min buffer is added past that so the run doesn't race
-    # the publish. Cron times below are in UTC.
-    - cron: "15 8 * * *"
-    - cron: "15 20 * * *"
+    # Now check-then-fetch (see ingest.py): each run does a cheap
+    # metadata-only availability check per dataset and only pays for a
+    # full download if something's actually new, so running this often
+    # is safe and cheap -- unlike the old twice-daily heavy-fetch
+    # schedule, being late by 15 minutes here just means the NEXT check
+    # (15 min later) catches up, not a wait until the next 12-hour slot.
+    #
+    # Dense checks (every 15 min) inside the two ~7-9h-after-run-start
+    # windows ECMWF documents for dissemination (00Z -> ~07:00-10:00 UTC,
+    # 12Z -> ~19:00-22:00 UTC -- see _dissemination_available_time() in
+    # ecmwf_client.py, which this mirrors).
+    - cron: "*/15 7-10 * * *"
+    - cron: "*/15 19-22 * * *"
+    # Sparse hourly fallback the rest of the day, in case dissemination
+    # runs unusually late outside that normal window. Offset to :17 past
+    # the hour rather than :00 -- GitHub's own docs flag the top of the
+    # hour as the highest-delay-risk time for scheduled jobs, since every
+    # repo's hourly crons queue up at once.
+    - cron: "17 0-6,11-18,23 * * *"
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab, e.g. to test setup
 
 permissions:
@@ -20,6 +32,26 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      # Checks out the CURRENT published state into ./output before
+      # ingest.py runs, so datasets it decides not to refetch (nothing
+      # new available) keep their existing files instead of vanishing
+      # from the publish step below. continue-on-error covers the very
+      # first run ever, before a `data` branch exists yet.
+      - name: Check out existing published data
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: output
+        continue-on-error: true
+
+      # The checkout above creates its own .git inside ./output (it's an
+      # independent checkout, not a subfolder of the main one) -- remove
+      # it so the publish step's own git operations on ./output don't
+      # get confused by a nested repo.
+      - name: Remove nested .git from the data-branch checkout
+        run: rm -rf output/.git
+        shell: bash
 
       - uses: actions/setup-python@v5
         with:
