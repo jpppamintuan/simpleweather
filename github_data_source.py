@@ -25,17 +25,20 @@ import xarray as xr
 
 # EDIT THIS before deploying -- "owner/repo", e.g. "yourusername/simpleweather".
 # Used to build the raw.githubusercontent.com URLs below.
-GITHUB_REPO = "jpppamintuan/simpleweather"
+GITHUB_REPO = "YOUR_GITHUB_USERNAME/simpleweather"
 
 _BASE_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/data"
 _MANIFEST_URL = f"{_BASE_URL}/manifest.json"
 
-# How old a dataset's run_time can be before treating it as stale and
-# falling back to a live fetch. ECMWF publishes ~every 12h; this allows a
-# generous buffer for one missed/delayed ingestion cycle before giving up
-# on the stored data rather than a tight window that flips to live-fetch
-# on every minor scheduling hiccup.
-MAX_AGE_HOURS = 15
+# How old the manifest's generated_at can be before treating the store as
+# stale and falling back to a live fetch. This is checking "was the
+# check-then-fetch job here recently" (see ingest.yml's schedule -- every
+# 15 min in the dense windows, hourly outside them), NOT how old the
+# underlying model run is -- see the long comment on check_dataset_freshness()
+# below for why those are different. 2h is a generous buffer over even the
+# hourly sparse-check cadence, covering a couple of missed/delayed cycles
+# before genuinely falling back.
+MAX_MANIFEST_AGE_HOURS = 2
 
 # Module-level cache for the manifest fetch, shared across every dataset
 # freshness check within the same process. Previously each check
@@ -72,11 +75,20 @@ def _fetch_manifest(timeout_seconds: float = 8.0) -> dict | None:
 
 
 def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
-    """Returns (is_fresh, manifest). dataset_name is 'threshold' or
-    'percentile', matching the keys ingest.py writes into run_times.
-    is_fresh is False for any of: manifest unreachable, that dataset
-    failed its last ingestion run, or its run_time is older than
-    MAX_AGE_HOURS."""
+    """Returns (is_fresh, manifest). dataset_name is 'threshold_ifs',
+    'threshold_aifs-ens', or 'percentile', matching the keys ingest.py
+    writes into run_times.
+
+    is_fresh checks how recently ingestion itself last ran/checked
+    (manifest["generated_at"]), NOT how old the underlying model run is
+    (manifest["run_times"][dataset_name]). Those are very different
+    things: IFS's own run_time can legitimately be ~20 hours old right
+    before the next run disseminates (00Z -> ~20:01 UTC for the 12Z run,
+    accounting for ECMWF's own ~8h publish lag) without that being stale
+    data -- it's just the correct current answer. What actually indicates
+    staleness is whether the check-then-fetch job has recently confirmed
+    that answer is still current, which is what MAX_MANIFEST_AGE_HOURS
+    checks below."""
     manifest = _fetch_manifest()
     if manifest is None:
         return False, None
@@ -84,17 +96,20 @@ def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
     if dataset_name in manifest.get("failures", []):
         return False, manifest
 
-    run_time_str = manifest.get("run_times", {}).get(dataset_name)
-    if not run_time_str:
+    if dataset_name not in manifest.get("run_times", {}):
+        return False, manifest
+
+    generated_at_str = manifest.get("generated_at")
+    if not generated_at_str:
         return False, manifest
 
     try:
-        run_time = datetime.fromisoformat(run_time_str)
+        generated_at = datetime.fromisoformat(generated_at_str)
     except ValueError:
         return False, manifest
 
-    age = datetime.now(timezone.utc) - run_time
-    is_fresh = age < timedelta(hours=MAX_AGE_HOURS)
+    age = datetime.now(timezone.utc) - generated_at
+    is_fresh = age < timedelta(hours=MAX_MANIFEST_AGE_HOURS)
     return is_fresh, manifest
 
 
