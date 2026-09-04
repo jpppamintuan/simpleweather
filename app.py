@@ -23,7 +23,7 @@ from ecmwf_client import (
 )
 import github_data_source
 
-st.set_page_config(page_title="Rainfall Exceedance Forecast", page_icon="🌧️", layout="wide")
+st.set_page_config(page_title="Probabilistic Rainfall Forecast", page_icon="🌧️", layout="wide")
 
 # Load the actual webfont Streamlit's own UI uses (Source Sans) so the
 # tables' font-family declaration has something real to point to, instead
@@ -831,6 +831,30 @@ def render_ribbon_chart_html(result: dict) -> str:
     """
 
 
+def _pct_detail_html_for_period(day: dict, percentiles: list[int]) -> str:
+    """One period's detail-panel content: a header (the date range) plus
+    one row per stat (mean, median, each percentile), matching the style
+    of _tooltip_html_for_window() for the threshold ribbon chart -- same
+    idea, just no color tiers here since these are mm amounts, not
+    probabilities."""
+    header = (
+        f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;"
+        f"color:{BASE_TEXT};background-color:#ffffff;"
+        f"border-bottom:1px solid rgba(0,0,0,0.12);'>{_fmt_ph(day['start_utc'])} to {_fmt_ph(day['end_utc'])}</div>"
+    )
+    stat_rows = [("Mean", "mean"), ("Median", "median")] + [(f"P{p}", f"p{p}") for p in percentiles]
+    rows = ""
+    for label, key in stat_rows:
+        val = day["stats"].get(key)
+        val_str = f"{val:.1f} mm" if val is not None else "—"
+        rows += (
+            f"<div style='padding:6px 10px;display:flex;justify-content:space-between;"
+            f"font-size:12px;color:{BASE_TEXT};border-bottom:1px solid rgba(0,0,0,0.08);'>"
+            f"<span>{label}</span><span style='font-weight:600;'>{val_str}</span></div>"
+        )
+    return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
+
+
 def render_percentile_chart_html(pct_result: dict) -> str:
     """Nested P10/P25-P75/P90 bands + median line for the raw-ensemble
     percentile feature. Uses the same fill-between-adjacent-datasets
@@ -842,10 +866,17 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     (light outer band), P75 fills to P25 (darker inner/interquartile
     band), P25 fills to P10 (light outer band), P10 and Median are plain
     lines with no further fill.
+
+    Also has a persistent per-period detail panel below the chart,
+    updating on hover/tap (same technique as the threshold ribbon
+    chart's dayDetailPanel) -- defaults to showing the first period as
+    soon as the chart loads.
     """
     days = pct_result["days"]
     if not days:
         return ""
+
+    percentiles = pct_result["percentiles"]
 
     # Day-only labels ("Fri 28") are ambiguous when each period is
     # shorter than 24h -- multiple periods can land on the same calendar
@@ -858,12 +889,15 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
     median = [d["stats"]["median"] for d in days]
 
+    day_detail_html_by_day = [_pct_detail_html_for_period(d, percentiles) for d in days]
+
     labels_json = json.dumps(day_labels)
     p10_json = json.dumps(p10)
     p25_json = json.dumps(p25)
     p75_json = json.dumps(p75)
     p90_json = json.dumps(p90)
     median_json = json.dumps(median)
+    day_details_json = json.dumps(day_detail_html_by_day)
 
     # P25/P75 keep the original P10/P90 shade; P10/P90 become lighter,
     # since they now bound the outer (less central) bands.
@@ -879,6 +913,8 @@ def render_percentile_chart_html(pct_result: dict) -> str:
       <div style="position:relative;width:100%;height:300px;">
         <canvas id="pctChart"></canvas>
       </div>
+      <div id="pctDetailPanel" style="margin-top:10px;border-radius:6px;overflow:hidden;
+        border:1px solid rgba(0,0,0,0.12);"></div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script>
@@ -889,6 +925,17 @@ def render_percentile_chart_html(pct_result: dict) -> str:
       const p75 = {p75_json};
       const p90 = {p90_json};
       const median = {median_json};
+      const dayDetailHtmlByDay = {day_details_json};
+      const panelEl = document.getElementById("pctDetailPanel");
+
+      function showPeriodDetail(context) {{
+        const {{ tooltip }} = context;
+        if (tooltip.opacity === 0 || tooltip.dataPoints.length === 0) {{
+          return;  // leave the panel showing whatever period it last showed
+        }}
+        const idx = tooltip.dataPoints[0].dataIndex;
+        panelEl.innerHTML = dayDetailHtmlByDay[idx];
+      }}
 
       new Chart(document.getElementById("pctChart"), {{
         type: "line",
@@ -915,11 +962,15 @@ def render_percentile_chart_html(pct_result: dict) -> str:
         options: {{
           responsive: true,
           maintainAspectRatio: false,
+          interaction: {{ mode: "index", intersect: false }},
           plugins: {{
             colors: {{ enabled: false, forceOverride: false }},
             legend: {{ display: true, position: "bottom",
               labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }} }},
-            tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + " mm" }} }},
+            // No floating tooltip -- the same content goes into the
+            // persistent panel below the graph instead (see
+            // showPeriodDetail), via this same hover/tap detection.
+            tooltip: {{ enabled: false, external: showPeriodDetail }},
           }},
           scales: {{
             y: {{ min: 0, ticks: {{ callback: (v) => v + " mm", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
@@ -927,6 +978,9 @@ def render_percentile_chart_html(pct_result: dict) -> str:
           }},
         }},
       }});
+
+      // Default to period 1 as soon as the chart is ready, before any hover.
+      panelEl.innerHTML = dayDetailHtmlByDay[0];
     }})();
     </script>
     """
@@ -1375,18 +1429,20 @@ elif view_mode == "Percentile Rainfall Forecast":
         )
 
         st.subheader(f"Percentile rainfall for {pct_location_name}")
-        components.html(render_percentile_chart_html(pct_result), height=380)
+        show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
+        if show_graph:
+            components.html(render_percentile_chart_html(pct_result), height=600)
+        else:
+            stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+            stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+            day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
 
-        stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-        stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
-
-        table_data = {
-            day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-            for i, d in enumerate(pct_days)
-        }
-        pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-        st.dataframe(pct_df, use_container_width=True)
+            table_data = {
+                day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+                for i, d in enumerate(pct_days)
+            }
+            pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+            st.dataframe(pct_df, use_container_width=True)
 
         downloaded = pct_result.get("downloaded_bytes")
         if downloaded:
