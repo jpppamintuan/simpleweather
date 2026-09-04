@@ -208,6 +208,33 @@ def _dissemination_available_time(run_time):
         return run_time + timedelta(hours=8, minutes=1)
 
 
+def _effective_threshold_request(model: str, requested_max_lead_days: int) -> tuple[int, bool]:
+    """Both IFS ENS and AIFS ENS publish 4x/day (00/06/12/18Z), but only
+    the 00Z/12Z runs carry the full 15-day threshold product -- 06Z/18Z
+    runs for EITHER model are capped at day 6 (step 144). (An earlier
+    version of this only applied the cap to AIFS, on the mistaken
+    assumption that regular IFS ENS only ever publishes at 00Z/12Z -- it
+    doesn't; 06Z/18Z IFS runs exist and have the same day-6 cap.)
+
+    Since we don't know in advance which run is currently latest, this
+    does one cheap metadata-only check (Client.latest(), no data
+    download) to find out, and returns the lead days actually safe to
+    request plus whether a cap was applied. On check failure, defaults
+    to the conservative 6-day cap rather than risking a request for
+    steps that may not exist for whatever run turns out to be latest."""
+    try:
+        latest = check_latest_threshold_run(model)
+        latest_dt = getattr(latest, "datetime", latest)
+        run_hour = latest_dt.hour
+    except Exception:
+        run_hour = None
+
+    if run_hour is None or run_hour in (6, 18):
+        effective = min(requested_max_lead_days, 6)
+        return effective, requested_max_lead_days > 6
+    return requested_max_lead_days, False
+
+
 def fetch_forecast_table(
     lat: float,
     lon: float,
@@ -243,22 +270,9 @@ def fetch_forecast_table(
     data, run time, grid point) comes directly from the fetched file and
     is exact either way.
     """
-    if model == "aifs-ens":
-        # 06Z/18Z AIFS runs only publish up to step 144 (day 6); 00Z/12Z
-        # runs go to the full day 15 (step 360). We don't know which of
-        # the 4 the "latest" run will resolve to until after fetching, so
-        # request only the range that's safe regardless -- this is what
-        # was missing before: requesting the full 15-day range against a
-        # 06Z/18Z run (capped at day 6) asked for steps that don't exist
-        # for that run, which produced zero usable data rather than an
-        # error. Trade-off: AIFS is capped at 6 days here even on a
-        # 00Z/12Z run where more would technically be available.
-        effective_max_lead_days = min(max_lead_days, 6)
-        step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=144)
-        capped_to_day6 = max_lead_days > 6
-    else:
-        step_labels = _request_step_labels(max_lead_days, increment_hours=12)
-        capped_to_day6 = False
+    effective_max_lead_days, capped_to_day6 = _effective_threshold_request(model, max_lead_days)
+    max_step_hours = 144 if capped_to_day6 else 360
+    step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=max_step_hours)
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
@@ -679,7 +693,9 @@ def fetch_threshold_grid(
     whatever reads this later (the Worker, in Phase 2) does that alignment
     at query time.
     """
-    step_labels = _request_step_labels(max_lead_days, increment_hours=12)
+    effective_max_lead_days, capped_to_day6 = _effective_threshold_request(model, max_lead_days)
+    max_step_hours = 144 if capped_to_day6 else 360
+    step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=max_step_hours)
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -700,6 +716,7 @@ def fetch_threshold_grid(
 
     ds.attrs["run_time"] = run_time.isoformat()
     ds.attrs["model"] = model
+    ds.attrs["capped_to_day6"] = capped_to_day6
     _notify(progress_callback, 1.0, "Done")
     return ds
 
@@ -815,7 +832,7 @@ def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max
         model=ds.attrs.get("model", DEFAULT_MODEL),
         downloaded_bytes=None,  # not meaningful here -- the heavy download already happened during ingestion
         fetch_mode="store",
-        capped_to_day6=False,  # ingestion always requests the full 15-day range for IFS
+        capped_to_day6=ds.attrs.get("capped_to_day6", False),
     )
 
 
