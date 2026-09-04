@@ -1180,24 +1180,30 @@ if view_mode == "Threshold Forecast":
         else:
             st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
 
-        if "threshold_model" not in st.session_state:
-            st.session_state["threshold_model"] = "ifs"
+        if "threshold_model_label" not in st.session_state:
+            st.session_state["threshold_model_label"] = MODEL_LABELS["ifs"]
 
         if len(available_models) > 1:
             model_labels = [MODEL_LABELS[m] for m in available_models]
-            current_label = MODEL_LABELS.get(st.session_state["threshold_model"], model_labels[0])
-            if current_label not in model_labels:
-                current_label = model_labels[0]
-            selected_label = st.segmented_control("Model", model_labels, default=current_label)
-            if selected_label is not None:
-                st.session_state["threshold_model"] = next(
-                    m for m in available_models if MODEL_LABELS[m] == selected_label
-                )
+            # If the currently-stored label isn't among today's available
+            # options (e.g. AIFS just became unavailable), reset it -- but
+            # otherwise leave session_state alone entirely here. The widget's
+            # key IS the state; passing default= AND separately writing back
+            # to session_state after reading the widget's return value (the
+            # previous approach) is what caused the revert-after-one-click
+            # bug -- Streamlit re-derives the widget's identity from `default`
+            # each render, so recomputing default from a value we just wrote
+            # made the widget's own interaction state and our tracked value
+            # fight each other. Binding key= directly to this session_state
+            # entry lets Streamlit own persistence with no manual syncing.
+            if st.session_state["threshold_model_label"] not in model_labels:
+                st.session_state["threshold_model_label"] = model_labels[0]
+            st.segmented_control("Model", model_labels, key="threshold_model_label")
 
-        selected_model = (
-            st.session_state["threshold_model"]
-            if st.session_state["threshold_model"] in available_models
-            else "ifs"
+        selected_label = st.session_state["threshold_model_label"]
+        selected_model = next(
+            (m for m in available_models if MODEL_LABELS[m] == selected_label),
+            "ifs",
         )
 
         result = ens_result if selected_model == "ifs" else aifs_result
