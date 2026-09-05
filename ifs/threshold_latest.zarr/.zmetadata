@@ -1,0 +1,477 @@
+{
+    "metadata": {
+        ".zattrs": {
+            "Conventions": "CF-1.7",
+            "GRIB_centre": "ecmf",
+            "GRIB_centreDescription": "European Centre for Medium-Range Weather Forecasts",
+            "GRIB_edition": 2,
+            "GRIB_subCentre": 0,
+            "capped_to_day6": false,
+            "history": "2026-09-05T10:43 GRIB to CDM+CF via cfgrib-0.9.15.1/ecCodes-2.48.0 with {\"source\": \"../../../../../tmp/tmpmqfngwh3/combined.grib2\", \"filter_by_keys\": {}, \"encode_cf\": [\"parameter\", \"time\", \"geography\", \"vertical\"]}",
+            "institution": "European Centre for Medium-Range Weather Forecasts",
+            "model": "ifs",
+            "run_time": "2026-09-05T00:00:00+00:00"
+        },
+        ".zgroup": {
+            "zarr_format": 2
+        },
+        "latitude/.zarray": {
+            "chunks": [
+                71
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                71
+            ],
+            "zarr_format": 2
+        },
+        "latitude/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "latitude"
+            ],
+            "long_name": "latitude",
+            "standard_name": "latitude",
+            "stored_direction": "decreasing",
+            "units": "degrees_north"
+        },
+        "longitude/.zarray": {
+            "chunks": [
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                51
+            ],
+            "zarr_format": 2
+        },
+        "longitude/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "longitude"
+            ],
+            "long_name": "longitude",
+            "standard_name": "longitude",
+            "units": "degrees_east"
+        },
+        "step/.zarray": {
+            "chunks": [
+                29
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29
+            ],
+            "zarr_format": 2
+        },
+        "step/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "step"
+            ],
+            "dtype": "timedelta64[ns]",
+            "long_name": "time since forecast_reference_time",
+            "standard_name": "forecast_period",
+            "units": "hours"
+        },
+        "surface/.zarray": {
+            "chunks": [],
+            "compressor": null,
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [],
+            "zarr_format": 2
+        },
+        "surface/.zattrs": {
+            "_ARRAY_DIMENSIONS": [],
+            "long_name": "original GRIB coordinate for key: level(surface)",
+            "units": "1"
+        },
+        "time/.zarray": {
+            "chunks": [],
+            "compressor": null,
+            "dtype": "<i8",
+            "fill_value": null,
+            "filters": null,
+            "order": "C",
+            "shape": [],
+            "zarr_format": 2
+        },
+        "time/.zattrs": {
+            "_ARRAY_DIMENSIONS": [],
+            "calendar": "proleptic_gregorian",
+            "long_name": "initial time of forecast",
+            "standard_name": "forecast_reference_time",
+            "units": "seconds since 1970-01-01"
+        },
+        "tpg1/.zarray": {
+            "chunks": [
+                29,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "tpg1/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tpg1",
+            "GRIB_dataType": "ep",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation of at least 1 mm",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 131060,
+            "GRIB_shortName": "tpg1",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "%",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "time step surface latitude longitude valid_time",
+            "long_name": "Total precipitation of at least 1 mm",
+            "standard_name": "unknown",
+            "units": "%"
+        },
+        "tpg100/.zarray": {
+            "chunks": [
+                29,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "tpg100/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tpg100",
+            "GRIB_dataType": "ep",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation of at least 100 mm",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 131085,
+            "GRIB_shortName": "tpg100",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "%",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "time step surface latitude longitude valid_time",
+            "long_name": "Total precipitation of at least 100 mm",
+            "standard_name": "unknown",
+            "units": "%"
+        },
+        "tpg20/.zarray": {
+            "chunks": [
+                29,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "tpg20/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tpg20",
+            "GRIB_dataType": "ep",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation of at least 20 mm",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 131063,
+            "GRIB_shortName": "tpg20",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "%",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "time step surface latitude longitude valid_time",
+            "long_name": "Total precipitation of at least 20 mm",
+            "standard_name": "unknown",
+            "units": "%"
+        },
+        "tpg5/.zarray": {
+            "chunks": [
+                29,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "tpg5/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tpg5",
+            "GRIB_dataType": "ep",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation of at least 5 mm",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 131061,
+            "GRIB_shortName": "tpg5",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "%",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "time step surface latitude longitude valid_time",
+            "long_name": "Total precipitation of at least 5 mm",
+            "standard_name": "unknown",
+            "units": "%"
+        },
+        "tpg50/.zarray": {
+            "chunks": [
+                29,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "tpg50/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tpg50",
+            "GRIB_dataType": "ep",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation of at least 50 mm",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 131099,
+            "GRIB_shortName": "tpg50",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "%",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "time step surface latitude longitude valid_time",
+            "long_name": "Total precipitation of at least 50 mm",
+            "standard_name": "unknown",
+            "units": "%"
+        },
+        "valid_time/.zarray": {
+            "chunks": [
+                29
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                29
+            ],
+            "zarr_format": 2
+        },
+        "valid_time/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "step"
+            ],
+            "calendar": "proleptic_gregorian",
+            "long_name": "time",
+            "standard_name": "time",
+            "units": "seconds since 1970-01-01"
+        }
+    },
+    "zarr_consolidated_format": 1
+}
