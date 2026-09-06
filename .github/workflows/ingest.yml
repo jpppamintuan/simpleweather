@@ -7,20 +7,31 @@ on:
     # full download if something's actually new, so running this often
     # is safe and cheap -- unlike the old twice-daily heavy-fetch
     # schedule, being late by 15 minutes here just means the NEXT check
-    # (15 min later) catches up, not a wait until the next 12-hour slot.
+    # (15 min later) catches up, not a wait until the next 6-hour slot.
     #
-    # Dense checks (every 15 min) inside the two ~7-9h-after-run-start
-    # windows ECMWF documents for dissemination (00Z -> ~07:00-10:00 UTC,
-    # 12Z -> ~19:00-22:00 UTC -- see _dissemination_available_time() in
-    # ecmwf_client.py, which this mirrors).
+    # Chasing every run (00/06/12/18Z), not just 00Z/12Z, per the
+    # deliberate choice to trade a stable always-15-day range for
+    # fresher updates 4x/day -- the "Full N-day forecast" section will
+    # legitimately show 6 days for a few hours after a 06Z/18Z run,
+    # until the next 00Z/12Z run arrives (the app already has UI
+    # messaging for this, see the capped_to_day6 caption).
+    #
+    # Dense checks (every 15 min) inside each dissemination window (see
+    # _dissemination_available_time() in ecmwf_client.py, which these
+    # mirror -- times are estimates, see that function's docstring for
+    # the "forecast vs derived products" caveat):
+    #   00Z -> ~07:40 UTC        12Z -> ~19:40 UTC
+    #   06Z -> ~13:20 UTC        18Z -> ~01:20 UTC (next day)
     - cron: "*/15 7-10 * * *"
+    - cron: "*/15 13-15 * * *"
     - cron: "*/15 19-22 * * *"
-    # Sparse hourly fallback the rest of the day, in case dissemination
-    # runs unusually late outside that normal window. Offset to :17 past
-    # the hour rather than :00 -- GitHub's own docs flag the top of the
-    # hour as the highest-delay-risk time for scheduled jobs, since every
-    # repo's hourly crons queue up at once.
-    - cron: "17 0-6,11-18,23 * * *"
+    - cron: "*/15 1-3 * * *"
+    # Sparse hourly fallback for the remaining hours, in case any
+    # dissemination runs unusually late outside its normal window.
+    # Offset to :17 past the hour rather than :00 -- GitHub's own docs
+    # flag the top of the hour as the highest-delay-risk time for
+    # scheduled jobs, since every repo's hourly crons queue up at once.
+    - cron: "17 0,4-6,11,12,16-18,23 * * *"
   workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab, e.g. to test setup
 
 permissions:
