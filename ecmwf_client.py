@@ -193,17 +193,33 @@ def _aligned_end_steps(run_hour: int, end_steps: list[int], target_hour: int = 0
 
 
 def _dissemination_available_time(run_time):
-    """Approximate when the full 15-day ENS probability product (Set III,
-    derived products step 246-360) becomes available, per ECMWF's published
-    dissemination schedule. 00Z -> ~08:01 UTC same day. 12Z -> ~20:01 UTC
-    same day. ECMWF's own docs describe this as "available between 7 and 9
-    hours after the forecast starting date and time", which this matches.
+    """Approximate when this run's threshold-exceedance product becomes
+    available, per ECMWF's published dissemination schedule.
+
+    NOTE on accuracy: these times are estimates, refined from
+    user-sourced research against ECMWF's Confluence documentation, but
+    NOT independently confirmed against an authoritative source for this
+    specific product (ep/tpg). ECMWF distinguishes "forecast" dissemination
+    times from "derived products" times (~20min later) for the day-15
+    product; which bucket ep/tpg falls into wasn't confirmed, so the
+    earlier ("forecast") time is used here as the working estimate. This
+    only affects the "Last updated" / "Next update" display text -- actual
+    ingestion timing doesn't depend on this being exactly right, since the
+    scheduled checks (see ingest.yml) run every 15 minutes across windows
+    generous enough to cover either possibility.
     """
     run_hour = run_time.hour
     if run_hour == 0:
-        return run_time.replace(hour=8, minute=1, second=0, microsecond=0)
+        return run_time.replace(hour=7, minute=40, second=0, microsecond=0)
     elif run_hour == 12:
-        return run_time.replace(hour=20, minute=1, second=0, microsecond=0)
+        return run_time.replace(hour=19, minute=40, second=0, microsecond=0)
+    elif run_hour == 6:
+        # 06Z is capped at day 6 -- no separate day-15 product applies.
+        return run_time.replace(hour=13, minute=20, second=0, microsecond=0)
+    elif run_hour == 18:
+        # 18Z's day-6 product disseminates after midnight, the following day.
+        next_day = run_time + timedelta(days=1)
+        return next_day.replace(hour=1, minute=20, second=0, microsecond=0)
     else:
         return run_time + timedelta(hours=8, minutes=1)
 
@@ -366,7 +382,9 @@ def _build_threshold_result(
     }
 
     available_since = _dissemination_available_time(run_time)
-    next_run_time = run_time + timedelta(hours=12)
+    # 6h, not 12h -- now that every run (00/06/12/18Z) is chased, not just
+    # 00Z/12Z, the next run in sequence is always 6h later.
+    next_run_time = run_time + timedelta(hours=6)
     next_expected = _dissemination_available_time(next_run_time)
 
     return {
