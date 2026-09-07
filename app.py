@@ -16,7 +16,6 @@ from ecmwf_client import (
     DEFAULT_PERCENTILES,
     AVAILABLE_PERIOD_HOURS,
     fetch_forecast_table,
-    fetch_percentile_rainfall,
     aggregate_percentile_bins,
     read_threshold_result_from_store,
     read_percentile_raw_from_store,
@@ -283,13 +282,19 @@ def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
 
 
 def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
-    """Three-tier lookup (session -> cross-session -> superset-trim ->
-    GitHub-hosted store -> fresh live fetch), mirroring
-    get_forecast_with_progress() for the main forecast. Returns the RAW
-    3-hourly bins result (result, was_cached) -- NOT aggregated to any
-    particular time step. Call aggregate_percentile_bins() on the result
-    to get displayable period_hours-long periods; that step is cheap and
-    can be redone on every rerun without coming back here."""
+    """Two-tier lookup (session -> cross-session/superset-trim -> GitHub-
+    hosted store), mirroring get_forecast_with_progress() for the main
+    forecast MINUS the live-fetch fallback -- deliberately removed. The
+    raw-member fetch is ~1.7GB and takes 10+ minutes; that's fine for a
+    scheduled background job but completely inappropriate to trigger from
+    a user's click. If the store can't be read, this returns (None, False)
+    and the caller shows a "not available yet" message instead of ever
+    falling back to a live fetch.
+
+    Returns the RAW 3-hourly bins result (result, was_cached) -- NOT
+    aggregated to any particular time step. Call aggregate_percentile_bins()
+    on the result to get displayable period_hours-long periods; that step
+    is cheap and can be redone on every rerun without coming back here."""
     key = (lat, lon, lead_hours)
     now = time.time()
     session_cache = st.session_state.setdefault("_pct_forecast_cache", {})
@@ -314,11 +319,6 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
         _PCT_GLOBAL_CACHE[key] = entry
         return trimmed, True
 
-    # Fast path: the scheduled ingestion job may already have this data
-    # sitting in the GitHub data branch -- a few-second HTTP read instead
-    # of the ~500s live ECMWF fetch below. Fails soft (returns None) on
-    # any problem -- missing/stale data, network error -- so falling
-    # through to the live fetch is always safe.
     try:
         store_ds = github_data_source.load_percentile_grid()
         store_result = (
@@ -328,30 +328,14 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     except Exception:
         store_result = None
 
-    if store_result is not None:
-        entry = {"ts": now, "result": store_result}
-        session_cache[key] = entry
-        _PCT_GLOBAL_CACHE[key] = entry
-        _save_pct_disk_cache()
-        return store_result, True
+    if store_result is None:
+        return None, False
 
-    progress = st.progress(0, text="Connecting to ECMWF Open Data...")
-
-    def on_progress(frac: float, msg: str):
-        progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
-
-    try:
-        result = fetch_percentile_rainfall(lat, lon, max_lead_hours=lead_hours, progress_callback=on_progress)
-    finally:
-        progress.progress(100, text="Done!")
-        time.sleep(0.2)
-        progress.empty()
-
-    entry = {"ts": now, "result": result}
+    entry = {"ts": now, "result": store_result}
     session_cache[key] = entry
     _PCT_GLOBAL_CACHE[key] = entry
     _save_pct_disk_cache()
-    return result, False
+    return store_result, True
 
 
 def _find_superset_entry(cache_dict: dict, lat: float, lon: float, model: str, requested_lead_days: int, now: float):
@@ -1344,10 +1328,11 @@ if view_mode == "Threshold Forecast":
 elif view_mode == "Percentile Rainfall Forecast":
     st.caption(
         "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
-        "percentiles locally, instead of using ECMWF's precomputed threshold "
-        "probabilities like the tables above. This gives actual mm amounts (not "
-        "just chance of exceeding a fixed threshold) but is a much heavier fetch -- "
-        "expect noticeably longer load times than the main forecast above."
+        "percentiles, instead of using ECMWF's precomputed threshold probabilities "
+        "like the tables above -- this gives actual mm amounts (not just chance of "
+        "exceeding a fixed threshold). Always reads pre-computed data from the "
+        "scheduled ingestion job, same as the main forecast above -- no live fetch, "
+        "since the raw member data involved is far too heavy to fetch on demand."
     )
 
     pct_col1, pct_col2 = st.columns([2, 1])
@@ -1367,16 +1352,30 @@ elif view_mode == "Percentile Rainfall Forecast":
         try:
             pct_raw_result, pct_was_cached = get_percentile_raw_with_progress(pct_lat, pct_lon, pct_lead_hours)
         except Exception as e:
-            st.error(f"Failed to fetch percentile forecast: {type(e).__name__}: {e}")
+            st.error(f"Failed to read percentile forecast: {type(e).__name__}: {e}")
             with st.expander("Full error details"):
                 st.exception(e)
             st.stop()
         pct_elapsed = time.time() - pct_request_started_at
 
-        st.session_state["last_pct_raw_result"] = pct_raw_result
-        st.session_state["last_pct_location_name"] = pct_location_name
-        st.session_state["last_pct_was_cached"] = pct_was_cached
-        st.session_state["last_pct_elapsed"] = pct_elapsed
+        if pct_raw_result is None:
+            # No live-fetch fallback for percentile (see
+            # get_percentile_raw_with_progress) -- if the store genuinely
+            # isn't reachable, that's the whole answer, not a cue to try
+            # a ~1.7GB live fetch. Deliberately doesn't touch
+            # last_pct_raw_result, so a previously-loaded result (from
+            # earlier in the session) stays on screen instead of being
+            # wiped by a transient read failure.
+            st.error(
+                "Percentile data isn't available from the latest ingestion right now "
+                "(store unreachable or not yet published). This view only ever reads "
+                "pre-computed data -- please try again shortly."
+            )
+        else:
+            st.session_state["last_pct_raw_result"] = pct_raw_result
+            st.session_state["last_pct_location_name"] = pct_location_name
+            st.session_state["last_pct_was_cached"] = pct_was_cached
+            st.session_state["last_pct_elapsed"] = pct_elapsed
 
     if "last_pct_raw_result" in st.session_state:
         pct_raw_result = st.session_state["last_pct_raw_result"]
@@ -1450,6 +1449,6 @@ elif view_mode == "Percentile Rainfall Forecast":
             st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation, 3-hourly).")
     else:
         st.info(
-            "Choose a location and click **Get percentile forecast** to see mm-based rainfall "
-            "percentiles (this will take noticeably longer than the main forecast above)."
+            "Choose a location and click **Get percentile forecast** to see mm-based "
+            "rainfall percentiles."
         )
