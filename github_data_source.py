@@ -139,17 +139,21 @@ def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
         return None
 
 
-def load_percentile_grid() -> xr.Dataset | None:
-    """Returns the stored percentile grid, or None only if it's genuinely
-    unreachable (network error, file missing). Deliberately does NOT gate
-    on freshness the way load_threshold_grid() does -- there's no live
+def load_percentile_grid() -> xr.Dataset:
+    """Returns the stored percentile grid. Deliberately does NOT gate on
+    freshness the way load_threshold_grid() does -- there's no live
     fetch fallback for percentile anymore (the raw-member fetch is ~1.7GB
     and takes 10+ minutes, completely inappropriate as an on-demand
     fallback for a user request), so showing whatever ingestion most
     recently produced is always better than showing nothing. Freshness is
     entirely the scheduled ingestion job's responsibility now (see
-    ingest.yml's schedule -- it already chases every run, 00/06/12/18Z)."""
-    try:
-        return _open_remote_zarr("ifs/percentile_latest.zarr")
-    except Exception:
-        return None
+    ingest.yml's schedule -- it already chases every run, 00/06/12/18Z).
+
+    Raises on failure rather than swallowing to None -- this is
+    deliberately loud for now (unlike load_threshold_grid()) so a real
+    read-side problem shows up as a visible traceback via the app's
+    existing error-details expander, instead of silently degrading into
+    an opaque "not available" message with no diagnostic value. Revisit
+    once the percentile store-read path has actually been proven to work
+    at least once."""
+    return _open_remote_zarr("ifs/percentile_latest.zarr")
