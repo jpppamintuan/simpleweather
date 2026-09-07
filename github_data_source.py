@@ -140,10 +140,15 @@ def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
 
 
 def load_percentile_grid() -> xr.Dataset | None:
-    """Returns the stored percentile grid if fresh, else None."""
-    is_fresh, _ = check_dataset_freshness("percentile")
-    if not is_fresh:
-        return None
+    """Returns the stored percentile grid, or None only if it's genuinely
+    unreachable (network error, file missing). Deliberately does NOT gate
+    on freshness the way load_threshold_grid() does -- there's no live
+    fetch fallback for percentile anymore (the raw-member fetch is ~1.7GB
+    and takes 10+ minutes, completely inappropriate as an on-demand
+    fallback for a user request), so showing whatever ingestion most
+    recently produced is always better than showing nothing. Freshness is
+    entirely the scheduled ingestion job's responsibility now (see
+    ingest.yml's schedule -- it already chases every run, 00/06/12/18Z)."""
     try:
         return _open_remote_zarr("ifs/percentile_latest.zarr")
     except Exception:
