@@ -1,0 +1,12 @@
+{
+    "Conventions": "CF-1.7",
+    "GRIB_centre": "ecmf",
+    "GRIB_centreDescription": "European Centre for Medium-Range Weather Forecasts",
+    "GRIB_edition": 2,
+    "GRIB_subCentre": 0,
+    "capped_to_day6": false,
+    "history": "2026-09-06T20:56 GRIB to CDM+CF via cfgrib-0.9.15.1/ecCodes-2.48.0 with {\"source\": \"../../../../../tmp/tmp638fdo9p/combined.grib2\", \"filter_by_keys\": {}, \"encode_cf\": [\"parameter\", \"time\", \"geography\", \"vertical\"]}",
+    "institution": "European Centre for Medium-Range Weather Forecasts",
+    "model": "ifs",
+    "run_time": "2026-09-06T12:00:00+00:00"
+}

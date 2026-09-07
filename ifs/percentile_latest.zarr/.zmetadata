@@ -1,0 +1,253 @@
+{
+    "metadata": {
+        ".zattrs": {
+            "bin_hours": 3,
+            "run_time": "2026-09-06T18:00:00+00:00"
+        },
+        ".zgroup": {
+            "zarr_format": 2
+        },
+        "latitude/.zarray": {
+            "chunks": [
+                71
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                71
+            ],
+            "zarr_format": 2
+        },
+        "latitude/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "latitude"
+            ],
+            "long_name": "latitude",
+            "standard_name": "latitude",
+            "stored_direction": "decreasing",
+            "units": "degrees_north"
+        },
+        "longitude/.zarray": {
+            "chunks": [
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                51
+            ],
+            "zarr_format": 2
+        },
+        "longitude/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "longitude"
+            ],
+            "long_name": "longitude",
+            "standard_name": "longitude",
+            "units": "degrees_east"
+        },
+        "number/.zarray": {
+            "chunks": [
+                50
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<i8",
+            "fill_value": null,
+            "filters": null,
+            "order": "C",
+            "shape": [
+                50
+            ],
+            "zarr_format": 2
+        },
+        "number/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "number"
+            ],
+            "long_name": "ensemble member numerical id",
+            "standard_name": "realization",
+            "units": "1"
+        },
+        "precip_3h_mm/.zarray": {
+            "chunks": [
+                50,
+                40,
+                71,
+                51
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f4",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                50,
+                40,
+                71,
+                51
+            ],
+            "zarr_format": 2
+        },
+        "precip_3h_mm/.zattrs": {
+            "GRIB_NV": 0,
+            "GRIB_Nx": 1440,
+            "GRIB_Ny": 721,
+            "GRIB_cfName": "unknown",
+            "GRIB_cfVarName": "tp",
+            "GRIB_dataType": "pf",
+            "GRIB_gridDefinitionDescription": "Latitude/longitude",
+            "GRIB_gridType": "regular_ll",
+            "GRIB_iDirectionIncrementInDegrees": 0.25,
+            "GRIB_iScansNegatively": 0,
+            "GRIB_jDirectionIncrementInDegrees": 0.25,
+            "GRIB_jPointsAreConsecutive": 0,
+            "GRIB_jScansPositively": 0,
+            "GRIB_latitudeOfFirstGridPointInDegrees": 90.0,
+            "GRIB_latitudeOfLastGridPointInDegrees": -90.0,
+            "GRIB_longitudeOfFirstGridPointInDegrees": 180.0,
+            "GRIB_longitudeOfLastGridPointInDegrees": 179.75,
+            "GRIB_missingValue": 3.4028234663852886e+38,
+            "GRIB_name": "Total precipitation",
+            "GRIB_numberOfPoints": 1038240,
+            "GRIB_paramId": 228,
+            "GRIB_shortName": "tp",
+            "GRIB_stepType": "accum",
+            "GRIB_stepUnits": 1,
+            "GRIB_totalNumber": 51,
+            "GRIB_typeOfLevel": "surface",
+            "GRIB_units": "m",
+            "GRIB_uvRelativeToGrid": 0,
+            "_ARRAY_DIMENSIONS": [
+                "number",
+                "step",
+                "latitude",
+                "longitude"
+            ],
+            "coordinates": "surface time valid_time",
+            "long_name": "Total precipitation",
+            "standard_name": "unknown",
+            "units": "m"
+        },
+        "step/.zarray": {
+            "chunks": [
+                40
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                40
+            ],
+            "zarr_format": 2
+        },
+        "step/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "step"
+            ],
+            "dtype": "timedelta64[ns]",
+            "long_name": "time since forecast_reference_time",
+            "standard_name": "forecast_period",
+            "units": "hours"
+        },
+        "surface/.zarray": {
+            "chunks": [],
+            "compressor": null,
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [],
+            "zarr_format": 2
+        },
+        "surface/.zattrs": {
+            "_ARRAY_DIMENSIONS": [],
+            "long_name": "original GRIB coordinate for key: level(surface)",
+            "units": "1"
+        },
+        "time/.zarray": {
+            "chunks": [],
+            "compressor": null,
+            "dtype": "<i8",
+            "fill_value": null,
+            "filters": null,
+            "order": "C",
+            "shape": [],
+            "zarr_format": 2
+        },
+        "time/.zattrs": {
+            "_ARRAY_DIMENSIONS": [],
+            "calendar": "proleptic_gregorian",
+            "long_name": "initial time of forecast",
+            "standard_name": "forecast_reference_time",
+            "units": "seconds since 1970-01-01"
+        },
+        "valid_time/.zarray": {
+            "chunks": [
+                40
+            ],
+            "compressor": {
+                "blocksize": 0,
+                "clevel": 5,
+                "cname": "lz4",
+                "id": "blosc",
+                "shuffle": 1
+            },
+            "dtype": "<f8",
+            "fill_value": "NaN",
+            "filters": null,
+            "order": "C",
+            "shape": [
+                40
+            ],
+            "zarr_format": 2
+        },
+        "valid_time/.zattrs": {
+            "_ARRAY_DIMENSIONS": [
+                "step"
+            ],
+            "calendar": "proleptic_gregorian",
+            "long_name": "time",
+            "standard_name": "time",
+            "units": "seconds since 1970-01-01"
+        }
+    },
+    "zarr_consolidated_format": 1
+}
