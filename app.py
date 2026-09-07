@@ -319,14 +319,15 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
         _PCT_GLOBAL_CACHE[key] = entry
         return trimmed, True
 
-    try:
-        store_ds = github_data_source.load_percentile_grid()
-        store_result = (
-            read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
-            if store_ds is not None else None
-        )
-    except Exception:
-        store_result = None
+    # Deliberately NOT catching exceptions here for now (unlike the
+    # threshold store-read path) -- load_percentile_grid() now raises
+    # instead of swallowing, precisely so a real read-side problem
+    # surfaces as a visible traceback (via the caller's existing
+    # try/except + st.exception() in the UI) instead of degrading into
+    # an opaque "not available" message. Revisit once this path has
+    # actually been proven to work at least once.
+    store_ds = github_data_source.load_percentile_grid()
+    store_result = read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
 
     if store_result is None:
         return None, False
