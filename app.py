@@ -422,15 +422,19 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs
     for m in models:
         if cached_results[m] is not None:
             continue
-        try:
-            store_ds = github_data_source.load_threshold_grid(model=m)
-            store_result = (
-                read_threshold_result_from_store(store_ds, lat, lon, lead_days)
-                if store_ds is not None else None
-            )
-        except Exception:
-            store_result = None
-        if store_result is not None:
+        store_ds = github_data_source.load_threshold_grid(model=m)
+        if store_ds is not None:
+            # Deliberately NOT catching exceptions here -- load_threshold_grid()
+            # returning None (stale/not-yet-ingested) is the normal,
+            # expected unavailability case and still falls through to the
+            # live fetch below untouched. But a real exception from the
+            # parsing/extraction step is a bug, and should surface loudly
+            # via the button-click handler's existing try/except +
+            # st.exception(), not get silently converted into "just live
+            # fetch instead" -- that exact silent-masking pattern is what
+            # hid the analogous percentile bug until its live-fetch
+            # fallback was removed and the error had nowhere left to hide.
+            store_result = read_threshold_result_from_store(store_ds, lat, lon, lead_days)
             cached_results[m] = store_result
             _cache_store(keys[m], store_result)
 
