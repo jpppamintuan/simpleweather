@@ -118,7 +118,16 @@ def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = 
     # mode="w" -- the "rolling latest" overwrite happens at the git-publish
     # level (force_orphan), but writing fresh here too avoids ever mixing
     # stale chunk files with new ones within a single local run.
-    ds.to_zarr(path, mode="w", encoding=encoding)
+    #
+    # consolidated=True is NOT optional -- the read side (github_data_source.py)
+    # always opens with consolidated=True (needed since raw.githubusercontent.com
+    # can't do directory listings, so zarr needs the .zmetadata file to know
+    # what's there without one). Without this explicit flag on write, no
+    # .zmetadata gets written at all, and every read fails outright with
+    # KeyError('.zmetadata') -- which is exactly what was happening, silently
+    # masked behind the live-fetch fallback until that got removed for
+    # percentile and the error had nowhere left to hide.
+    ds.to_zarr(path, mode="w", encoding=encoding, consolidated=True)
 
 
 def _load_existing_manifest() -> dict:
