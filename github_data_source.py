@@ -129,14 +129,23 @@ def _open_remote_zarr(relative_path: str) -> xr.Dataset:
 
 def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
     """Returns the stored threshold grid for the given model ('ifs' or
-    'aifs-ens') if fresh, else None."""
+    'aifs-ens') if fresh, else None (the normal, expected case when
+    there's nothing fresh yet -- app.py's caller falls back to a live
+    fetch for this, no error involved).
+
+    Does NOT catch exceptions from _open_remote_zarr() itself -- unlike
+    the "not fresh yet" case above, a real read/parse failure is a bug,
+    and should surface loudly via app.py's existing error display rather
+    than silently degrading into another "just live fetch" case. That
+    silent swallowing here (an earlier version of this function) is
+    exactly what hid the missing-consolidated-metadata bug for weeks:
+    every store read was failing, but it just looked like "still slow,
+    guess the store isn't fresh yet" instead of a visible, diagnosable
+    error."""
     is_fresh, _ = check_dataset_freshness(f"threshold_{model}")
     if not is_fresh:
         return None
-    try:
-        return _open_remote_zarr(f"{model}/threshold_latest.zarr")
-    except Exception:
-        return None
+    return _open_remote_zarr(f"{model}/threshold_latest.zarr")
 
 
 def load_percentile_grid() -> xr.Dataset:
