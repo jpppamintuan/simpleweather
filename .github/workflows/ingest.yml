@@ -32,7 +32,12 @@ on:
     # flag the top of the hour as the highest-delay-risk time for
     # scheduled jobs, since every repo's hourly crons queue up at once.
     - cron: "17 0,4-6,11,12,16-18,23 * * *"
-  workflow_dispatch: {}  # lets you trigger a manual run from the Actions tab, e.g. to test setup
+  workflow_dispatch:
+    inputs:
+      force_refresh:
+        description: "Force a full refetch of every dataset, ignoring the check-then-fetch skip logic (use after a storage-format change, e.g. this one)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write  # needed to push to the `data` branch below
@@ -77,6 +82,8 @@ jobs:
         run: pip install -r requirements-ingest.txt
 
       - name: Run ingestion
+        env:
+          FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
         run: python ingest.py
 
       # Publishes ./output to a dedicated `data` branch as a single fresh
