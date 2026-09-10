@@ -38,6 +38,7 @@ makes the real access pattern visible.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import traceback
 from datetime import datetime, timezone
@@ -226,6 +227,12 @@ def main() -> int:
     # happen (e.g. very first run ever, before a `data` branch exists).
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    force_refresh = os.environ.get("FORCE_REFRESH", "false").strip().lower() == "true"
+    if force_refresh:
+        print("FORCE_REFRESH is set -- ignoring the check-then-fetch skip logic, "
+              "refetching and rewriting every dataset regardless of whether the "
+              "underlying ECMWF run has changed.")
+
     existing_manifest = _load_existing_manifest()
     existing_run_times = existing_manifest.get("run_times", {})
     # Seed this run's manifest from the existing one -- datasets we skip
@@ -239,18 +246,19 @@ def main() -> int:
     jobs.append(("percentile", None, "percentile"))
 
     for name, model, product in jobs:
-        try:
-            latest_check = (
-                check_latest_threshold_run(model) if product == "threshold"
-                else check_latest_percentile_run()
-            )
-        except Exception:
-            print(f"[{name}] Availability check failed -- will attempt a full fetch anyway.")
-            latest_check = None
+        if not force_refresh:
+            try:
+                latest_check = (
+                    check_latest_threshold_run(model) if product == "threshold"
+                    else check_latest_percentile_run()
+                )
+            except Exception:
+                print(f"[{name}] Availability check failed -- will attempt a full fetch anyway.")
+                latest_check = None
 
-        if not _needs_fetch(name, latest_check, existing_run_times):
-            print(f"[{name}] Already up to date (run {existing_run_times.get(name)}) -- skipping.")
-            continue
+            if not _needs_fetch(name, latest_check, existing_run_times):
+                print(f"[{name}] Already up to date (run {existing_run_times.get(name)}) -- skipping.")
+                continue
 
         try:
             if product == "threshold":
