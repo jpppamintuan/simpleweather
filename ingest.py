@@ -7,7 +7,7 @@ threshold-exceedance product and the raw ensemble-member product used for
 percentile calculations -- crops each to a bounding box covering the
 Philippines (generous enough to support arbitrary-point queries later, not
 just the app's current 5 fixed locations), and writes the result to a
-local ./output directory as Zarr.
+local ./output directory as a single NetCDF file per dataset.
 
 This script itself has NO knowledge of where ./output ends up -- that's
 the GitHub Actions workflow's job (it checks out the current `data`
@@ -25,14 +25,26 @@ than re-downloaded -- this is what makes it safe to run this workflow
 often (see the schedule in ingest.yml) without wasting bandwidth on
 repeatedly re-fetching the same unchanged forecast run.
 
-Zarr specifically (not GRIB2/NetCDF): it's chunked, and both
-raw.githubusercontent.com and (later, if adopted) a CDN in front of it
-support HTTP range requests -- so a future query layer (Phase 2 -- a
-Cloudflare Worker) can fetch just the chunk containing a queried point
-instead of downloading the whole file. Chunk sizes below are a first
-guess (small lat/lon tiles, full step/member dimensions) sized for
-"a query wants every step for one point" -- worth re-tuning once Phase 2
-makes the real access pattern visible.
+NetCDF, not Zarr: an earlier version of this used Zarr (chunked,
+multi-file, intended to support partial/chunked reads for a future
+point-query service). That ran into a persistent, thoroughly-debugged-but-
+never-resolved KeyError('.zmetadata') when read back through fsspec over
+raw.githubusercontent.com -- despite the file demonstrably existing and
+being valid (confirmed directly via GitHub's web UI), despite explicit
+consolidated=True on write, and despite ruling out CDN caching via
+commit-SHA-pinned URLs. Something about pretending a static file host is
+a full remote filesystem (which is what Zarr's multi-file layout,
+consolidated metadata included, fundamentally needs) wasn't working, and
+the exact mechanism was never pinned down. NetCDF sidesteps the entire
+class of problem: it's ONE file, fetched with a single plain HTTP GET --
+the same simple, proven pattern manifest.json has used successfully this
+whole time, with none of these issues. The tradeoff: no more chunked
+partial reads (every read downloads the whole file) -- acceptable now,
+since ingestion crops the whole grid to a small Philippines bbox before
+writing regardless, so whole-file downloads are already small (a few MB).
+Revisit if/when Phase 2's point-query Worker needs partial reads over a
+much larger grid -- that's also the point where real object storage
+(R2/B2/etc, see project notes) becomes worth the setup cost, not before.
 """
 
 from __future__ import annotations
@@ -72,63 +84,22 @@ PH_BBOX = {"lat_min": 4.0, "lat_max": 21.5, "lon_min": 115.0, "lon_max": 127.5}
 THRESHOLD_MODELS = ["ifs", "aifs-ens"]
 
 OUTPUT_DIR = Path("output")
-PERCENTILE_ZARR_PATH = OUTPUT_DIR / "ifs" / "percentile_latest.zarr"
+PERCENTILE_NC_PATH = OUTPUT_DIR / "ifs" / "percentile_latest.nc"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
-# First-guess chunk sizes -- see module docstring.
-# Chunk size for lat/lon, in grid points. Deliberately large enough to
-# exceed any realistic bbox grid size, so _write_zarr_locally's min(request,
-# actual_size) logic collapses this to ONE chunk per dimension -- i.e. one
-# chunk per data variable overall, not many small tiles.
-#
-# This was originally set to 10 (small tiles), reasoning ahead to Phase 2's
-# point-query Worker, which only needs to fetch the one tile containing a
-# queried point. That reasoning was premature: right now, in Phase 1, the
-# only consumer is the Streamlit app, which reads the ENTIRE small grid
-# eagerly every time (github_data_source.py) -- and fine-grained tiling
-# only hurts that pattern, since reading "everything" then means fetching
-# every tile as its own separate HTTP request. With a 71x51 grid split into
-# 10x10 tiles, that was ~48 chunks x 5 threshold variables = ~240 individual
-# HTTP requests, which is exactly what made loads take ~25s instead of the
-# few seconds a single request per variable should take. One chunk per
-# variable now; revisit tiling if/when Phase 2's Worker actually needs it.
-LATLON_CHUNK = 10_000
 
-
-def _write_zarr_locally(ds: xr.Dataset, path: Path, extra_chunks: dict | None = None) -> None:
-    # NOTE: deliberately NOT using ds.chunk(...) here -- that's xarray's
-    # dask-chunking API (it tries to wrap the data in dask arrays), which
-    # requires the 'dask' package and isn't otherwise needed anywhere in
-    # this pipeline (everything is already materialized via .load() by
-    # the time it gets here). Passing chunk sizes through to_zarr's
-    # `encoding` argument instead sets zarr's on-disk chunk layout
-    # directly, with no dask dependency at all.
-    chunk_sizes = {"latitude": LATLON_CHUNK, "longitude": LATLON_CHUNK}
-    if extra_chunks:
-        chunk_sizes.update(extra_chunks)
-
-    encoding = {}
-    for var_name, var in ds.data_vars.items():
-        chunk_shape = []
-        for dim in var.dims:
-            requested = chunk_sizes.get(dim, -1)  # -1 (or unlisted) = one chunk covering the whole dimension
-            dim_size = var.sizes[dim]
-            chunk_shape.append(dim_size if requested in (-1, None) else min(requested, dim_size))
-        encoding[var_name] = {"chunks": tuple(chunk_shape)}
-
-    # mode="w" -- the "rolling latest" overwrite happens at the git-publish
-    # level (force_orphan), but writing fresh here too avoids ever mixing
-    # stale chunk files with new ones within a single local run.
-    #
-    # consolidated=True is NOT optional -- the read side (github_data_source.py)
-    # always opens with consolidated=True (needed since raw.githubusercontent.com
-    # can't do directory listings, so zarr needs the .zmetadata file to know
-    # what's there without one). Without this explicit flag on write, no
-    # .zmetadata gets written at all, and every read fails outright with
-    # KeyError('.zmetadata') -- which is exactly what was happening, silently
-    # masked behind the live-fetch fallback until that got removed for
-    # percentile and the error had nowhere left to hide.
-    ds.to_zarr(path, mode="w", encoding=encoding, consolidated=True)
+def _write_netcdf_locally(ds: xr.Dataset, path: Path) -> None:
+    """Writes a single NetCDF file -- see the module docstring for why
+    this replaced an earlier Zarr-based approach. zlib compression is
+    applied per-variable to keep the whole-file download size down, since
+    (unlike Zarr's old chunk-based partial reads) every read now
+    downloads the complete file regardless of what's actually needed from
+    it. mode is implicitly "w" -- to_netcdf() always overwrites an
+    existing file at `path`, matching the "rolling latest only" retention
+    decision the same way the old mode="w" did for Zarr."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoding = {var_name: {"zlib": True, "complevel": 4} for var_name in ds.data_vars}
+    ds.to_netcdf(path, engine="h5netcdf", encoding=encoding)
 
 
 def _load_existing_manifest() -> dict:
@@ -193,9 +164,9 @@ def ingest_threshold_forecast(model: str) -> str | None:
         progress_callback=lambda frac, msg: print(f"[threshold:{model}] {frac:.0%} {msg}"),
     )
     print(f"[threshold:{model}] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
-    path = OUTPUT_DIR / model / "threshold_latest.zarr"
+    path = OUTPUT_DIR / model / "threshold_latest.nc"
     print(f"[threshold:{model}] Writing locally to {path}")
-    _write_zarr_locally(ds, path)
+    _write_netcdf_locally(ds, path)
     print(f"[threshold:{model}] Done.")
     return ds.attrs.get("run_time")
 
@@ -209,12 +180,8 @@ def ingest_percentile_data() -> str | None:
         progress_callback=lambda frac, msg: print(f"[percentile] {frac:.0%} {msg}"),
     )
     print(f"[percentile] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
-    print(f"[percentile] Writing locally to {PERCENTILE_ZARR_PATH}")
-    # step (25 bins) and number (50 members) are kept as single chunks --
-    # a point query wants the whole forecast + all members for that point,
-    # so splitting those dimensions would only mean more chunk files to
-    # fetch for the same query, not less data transferred.
-    _write_zarr_locally(ds, PERCENTILE_ZARR_PATH, extra_chunks={"step": -1, "number": -1})
+    print(f"[percentile] Writing locally to {PERCENTILE_NC_PATH}")
+    _write_netcdf_locally(ds, PERCENTILE_NC_PATH)
     print("[percentile] Done.")
     return ds.attrs.get("run_time")
 
@@ -272,7 +239,7 @@ def main() -> int:
 
     # Small manifest alongside the data -- lets the Streamlit app (and
     # later, the Worker) check "how fresh is this?" with one small fetch
-    # instead of opening a Zarr store just to read an attribute.
+    # instead of opening the NetCDF file just to read an attribute.
     manifest = {
         "generated_at": _now_iso(),
         "run_times": run_times,
