@@ -672,7 +672,9 @@ def aggregate_percentile_bins(
 # whole region so a future query layer (a Cloudflare Worker, see project
 # plan) can look up ANY point within it, not just today's 5 hardcoded
 # locations. These functions return cropped xarray Datasets instead of
-# point dicts, ready to write to Zarr.
+# point dicts, ready for ingestion to write to disk (currently NetCDF;
+# see ingest.py -- this module stays storage-format-agnostic on purpose,
+# it just returns plain xarray Datasets either way).
 # ---------------------------------------------------------------------------
 
 
@@ -799,7 +801,7 @@ def fetch_percentile_grid(
 # ---------------------------------------------------------------------------
 # Store-read functions -- used by the Streamlit app to build the exact same
 # result shapes as the live-fetch functions above, but sourced from an
-# already-fetched grid (opened from the GitHub-hosted Zarr store) instead of
+# already-fetched grid (opened from the GitHub-hosted data file) instead of
 # a fresh ECMWF download. This is what makes reading the stored data a
 # few-second operation instead of ~500s: the expensive GRIB fetch/decode
 # already happened once, in the scheduled ingestion job.
@@ -828,7 +830,7 @@ def extract_threshold_point_from_grid(ds: xr.Dataset, lat: float, lon: float) ->
 def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max_lead_days: int) -> dict:
     """Builds the same result shape as fetch_forecast_table(), but reads
     from an already-open stored grid Dataset (e.g. opened from the
-    GitHub-hosted Zarr store) instead of fetching from ECMWF live."""
+    GitHub-hosted data file) instead of fetching from ECMWF live."""
     run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
     lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
     point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
