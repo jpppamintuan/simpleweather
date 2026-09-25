@@ -6,19 +6,21 @@ fetch. This is what turns a ~500s page load into a few-second one: the
 expensive GRIB download/decode already happened once, on a schedule,
 independent of anyone actually visiting the page.
 
-Every function here is designed to fail soft: any problem (network error,
-missing file, data too old) returns None rather than raising, so the
-caller in app.py can fall back to the existing live-fetch path exactly as
-if this module didn't exist. Reading pre-fetched data is a fast path, not
-the only path.
+Every function here reads pre-computed data, never fetches live from
+ECMWF. Failure handling differs deliberately by case: legitimate
+unavailability (nothing fresh yet) returns None so callers can fall back
+appropriately, but a genuine read/parse error is left to raise rather
+than being silently swallowed -- see the docstrings on
+load_threshold_grid() and load_percentile_grid() below for why that
+distinction matters.
 """
 
 from __future__ import annotations
 
+import io
 import time
 from datetime import datetime, timedelta, timezone
 
-import fsspec
 import requests
 import xarray as xr
 
@@ -108,7 +110,7 @@ def _base_url() -> str:
 
 
 def _fetch_manifest(timeout_seconds: float = 8.0) -> dict | None:
-    """Small JSON fetch -- checked before opening any Zarr store, so a
+    """Small JSON fetch -- checked before opening any data file, so a
     missing/failed ingestion run is detected in one cheap request instead
     of discovering it partway through opening a (possibly nonexistent)
     store. Cached briefly (see _manifest_cache above) and retried once on
@@ -171,18 +173,18 @@ def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
     return is_fresh, manifest
 
 
-def _open_remote_zarr(relative_path: str) -> xr.Dataset:
-    """Opens a Zarr store from the data branch over HTTP. chunks=None
-    deliberately disables xarray's default dask-backed lazy loading --
-    the cropped Philippines-bbox grids here are small (a few MB), so
-    eagerly loading the whole small grid in one go is simpler than lazy
-    per-chunk fetching and doesn't require the 'dask' package. Genuine
-    partial/lazy remote reads only start to matter at the much larger
-    grid sizes Phase 2's point-query service is meant for."""
+def _open_remote_netcdf(relative_path: str, timeout_seconds: float = 30.0) -> xr.Dataset:
+    """Fetches a NetCDF file via a single, plain HTTP GET -- the same
+    simple, proven pattern _fetch_manifest() has always used successfully
+    -- and opens it from the downloaded bytes. No remote-filesystem
+    abstraction, no multi-file layout, no consolidated metadata: just one
+    file, one request. Replaces an earlier Zarr-based approach that ran
+    into a persistent, never-fully-diagnosed KeyError('.zmetadata') --
+    see ingest.py's module docstring for the full story."""
     url = f"{_base_url()}/{relative_path}"
-    mapper = fsspec.get_mapper(url)
-    ds = xr.open_zarr(mapper, consolidated=True, chunks=None)
-    return ds.load()
+    resp = requests.get(url, timeout=timeout_seconds)
+    resp.raise_for_status()
+    return xr.open_dataset(io.BytesIO(resp.content), engine="h5netcdf").load()
 
 
 def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
@@ -191,19 +193,18 @@ def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
     there's nothing fresh yet -- app.py's caller falls back to a live
     fetch for this, no error involved).
 
-    Does NOT catch exceptions from _open_remote_zarr() itself -- unlike
+    Does NOT catch exceptions from _open_remote_netcdf() itself -- unlike
     the "not fresh yet" case above, a real read/parse failure is a bug,
     and should surface loudly via app.py's existing error display rather
     than silently degrading into another "just live fetch" case. That
     silent swallowing here (an earlier version of this function) is
-    exactly what hid the missing-consolidated-metadata bug for weeks:
-    every store read was failing, but it just looked like "still slow,
-    guess the store isn't fresh yet" instead of a visible, diagnosable
-    error."""
+    exactly what hid a persistent read-side bug for weeks: every store
+    read was failing, but it just looked like "still slow, guess the
+    store isn't fresh yet" instead of a visible, diagnosable error."""
     is_fresh, _ = check_dataset_freshness(f"threshold_{model}")
     if not is_fresh:
         return None
-    return _open_remote_zarr(f"{model}/threshold_latest.zarr")
+    return _open_remote_netcdf(f"{model}/threshold_latest.nc")
 
 
 def load_percentile_grid() -> xr.Dataset:
@@ -216,11 +217,9 @@ def load_percentile_grid() -> xr.Dataset:
     entirely the scheduled ingestion job's responsibility now (see
     ingest.yml's schedule -- it already chases every run, 00/06/12/18Z).
 
-    Raises on failure rather than swallowing to None -- this is
-    deliberately loud for now (unlike load_threshold_grid()) so a real
-    read-side problem shows up as a visible traceback via the app's
-    existing error-details expander, instead of silently degrading into
-    an opaque "not available" message with no diagnostic value. Revisit
-    once the percentile store-read path has actually been proven to work
-    at least once."""
-    return _open_remote_zarr("ifs/percentile_latest.zarr")
+    Raises on failure rather than swallowing to None -- kept deliberately
+    loud (unlike load_threshold_grid()) so a real read-side problem shows
+    up as a visible traceback via the app's existing error-details
+    expander, instead of silently degrading into an opaque "not
+    available" message with no diagnostic value."""
+    return _open_remote_netcdf("ifs/percentile_latest.nc")
