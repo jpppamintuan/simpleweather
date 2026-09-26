@@ -26,7 +26,7 @@ import xarray as xr
 
 # EDIT THIS before deploying -- "owner/repo", e.g. "yourusername/simpleweather".
 # Used to build the raw.githubusercontent.com and api.github.com URLs below.
-GITHUB_REPO = "YOUR_GITHUB_USERNAME/simpleweather"
+GITHUB_REPO = "jpppamintuan/simpleweather"
 
 _DATA_BRANCH = "data"
 _COMMIT_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{_DATA_BRANCH}"
