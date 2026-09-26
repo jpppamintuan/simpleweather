@@ -868,7 +868,9 @@ def read_percentile_raw_from_store(ds: xr.Dataset, lat: float, lon: float, max_l
     exactly as the live-fetch path does -- that function doesn't care
     where the raw bins came from."""
     run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
-    bin_hours = ds.attrs.get("bin_hours", PERCENTILE_BIN_HOURS)
+    bin_hours = int(ds.attrs.get("bin_hours", PERCENTILE_BIN_HOURS))  # NetCDF attrs round-trip as
+    # numpy scalar types (e.g. numpy.int64), not plain Python int -- timedelta(hours=...) below
+    # rejects that, so cast explicitly here rather than relying on it staying a plain int.
 
     lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
     point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
