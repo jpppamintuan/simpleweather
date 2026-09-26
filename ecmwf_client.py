@@ -736,7 +736,11 @@ def fetch_threshold_grid(
 
     ds.attrs["run_time"] = run_time.isoformat()
     ds.attrs["model"] = model
-    ds.attrs["capped_to_day6"] = capped_to_day6
+    # int, not bool -- NetCDF/h5netcdf has no boolean attribute type and
+    # raises CompatibilityError on write if given one. 0/1 round-trips
+    # through .attrs.get(...) fine for the truthy checks that consume this
+    # downstream (read_threshold_result_from_store, app.py's UI caption).
+    ds.attrs["capped_to_day6"] = int(capped_to_day6)
     _notify(progress_callback, 1.0, "Done")
     return ds
 
@@ -852,7 +856,7 @@ def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max
         model=ds.attrs.get("model", DEFAULT_MODEL),
         downloaded_bytes=None,  # not meaningful here -- the heavy download already happened during ingestion
         fetch_mode="store",
-        capped_to_day6=ds.attrs.get("capped_to_day6", False),
+        capped_to_day6=bool(ds.attrs.get("capped_to_day6", False)),  # stored as int 0/1, see write side
     )
 
 
