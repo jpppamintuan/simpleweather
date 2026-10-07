@@ -755,7 +755,12 @@ def _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c):
     numerator = np.exp((a * dewpoint_c) / (b + dewpoint_c))
     denominator = np.exp((a * temp_c) / (b + temp_c))
     rh = 100.0 * (numerator / denominator)
-    return np.clip(rh, 0, 100)
+    # .clip() as a DataArray METHOD, not np.clip(rh, ...) -- calling it on
+    # the object itself is unambiguous about preserving DataArray type,
+    # unlike passing a DataArray into a bare numpy function (see the
+    # np.where() note in _heat_index_celsius for why that distinction
+    # matters here).
+    return rh.clip(0, 100)
 
 
 def _heat_index_celsius(temp_c, rh_pct):
@@ -797,10 +802,19 @@ def _heat_index_celsius(temp_c, rh_pct):
     high_rh_mask = (rh_pct > 85) & (temp_f >= 80) & (temp_f <= 87)
     high_rh_adj = ((rh_pct - 85) / 10.0) * ((87 - temp_f) / 5.0)
 
-    hi_full_adjusted = hi_full - np.where(low_rh_mask, low_rh_adj, 0.0) + np.where(high_rh_mask, high_rh_adj, 0.0)
+    # xr.where(), NOT np.where() -- np.where() on xarray DataArrays is a
+    # known trap: it can silently return a bare numpy array, stripping
+    # all dimension/coordinate metadata, where xr.where() is specifically
+    # built to preserve it. temp_c/rh_pct (and everything derived from
+    # them here) are DataArrays, not plain arrays, so this matters.
+    hi_full_adjusted = (
+        hi_full
+        - xr.where(low_rh_mask, low_rh_adj, 0.0)
+        + xr.where(high_rh_mask, high_rh_adj, 0.0)
+    )
 
     use_simple = hi_simple < 80
-    hi_final_f = np.where(use_simple, hi_simple, hi_full_adjusted)
+    hi_final_f = xr.where(use_simple, hi_simple, hi_full_adjusted)
 
     return (hi_final_f - 32.0) * 5.0 / 9.0
 
@@ -906,12 +920,21 @@ def fetch_percentile_grid(
         rh_pct = _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c)
         heat_index_c = _heat_index_celsius(temp_c, rh_pct)
 
-        ds_temp = xr.Dataset({
-            "temperature_c": temp_c,
-            "heat_index_c": heat_index_c,
-        }).rename({"step": "step_instant"}).load()
+        ds_temp = xr.Dataset({"temperature_c": temp_c, "heat_index_c": heat_index_c})
+        # rename_dims + rename_vars done explicitly and separately (rather
+        # than the combined .rename() shorthand) so it's unambiguous that
+        # BOTH the dimension itself and its associated dimension-coordinate
+        # end up renamed -- easier to reason about than relying on the
+        # shorthand to handle both implicitly.
+        ds_temp = ds_temp.rename_dims({"step": "step_instant"})
+        if "step" in ds_temp.coords:
+            ds_temp = ds_temp.rename_vars({"step": "step_instant"})
+        ds_temp = ds_temp.load()
+
+        print(f"[fetch_percentile_grid] ds_temp dims: {dict(ds_temp.sizes)}, coords: {list(ds_temp.coords)}")
 
         ds_out = xr.merge([ds_precip, ds_temp])
+        print(f"[fetch_percentile_grid] ds_out dims: {dict(ds_out.sizes)}, coords: {list(ds_out.coords)}")
 
     ds_out.attrs["run_time"] = run_time.isoformat()
     ds_out.attrs["bin_hours"] = bin_hours
