@@ -745,6 +745,78 @@ def fetch_threshold_grid(
     return ds
 
 
+def _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c):
+    """Magnus-Tetens approximation (Alduchov & Eskridge 1996 constants).
+    ECMWF publishes 2m dewpoint temperature, not 2m relative humidity,
+    directly -- confirmed via ecmwf-opendata's own parameter list and
+    ECMWF's own documentation -- so RH has to be derived from temperature
+    + dewpoint rather than read as its own field."""
+    a, b = 17.625, 243.04
+    numerator = np.exp((a * dewpoint_c) / (b + dewpoint_c))
+    denominator = np.exp((a * temp_c) / (b + temp_c))
+    rh = 100.0 * (numerator / denominator)
+    return np.clip(rh, 0, 100)
+
+
+def _heat_index_celsius(temp_c, rh_pct):
+    """NWS Rothfusz regression -- the standard, near-universal Heat Index
+    formula. PAGASA's own Heat Index Advisory almost certainly uses the
+    same underlying formula (their own heat index product, iHeatMAP, is
+    itself built from ECMWF data per DOST-PAGASA's own documentation) --
+    PAGASA's specific category labels/colors are a UI-layer concern, not
+    part of this calculation.
+
+    Operates in Fahrenheit internally (the formula's native units),
+    converting at the boundaries. Includes the NWS's standard simple-
+    formula fallback for mild conditions and the two correction terms for
+    very low/very high humidity, not just the bare regression --
+    PAGASA's lowest category ("Caution") starts at 27C (~80F), right at
+    the edge of the regression's documented valid range, so getting the
+    full algorithm right (not a simplified version) matters here."""
+    temp_f = temp_c * 9.0 / 5.0 + 32.0
+
+    # NWS "simple formula" -- this average IS the NWS's own documented
+    # criterion for when the full regression doesn't apply yet.
+    hi_simple = 0.5 * (temp_f + 61.0 + (temp_f - 68.0) * 1.2 + rh_pct * 0.094)
+
+    hi_full = (
+        -42.379
+        + 2.04901523 * temp_f
+        + 10.14333127 * rh_pct
+        - 0.22475541 * temp_f * rh_pct
+        - 0.00683783 * temp_f ** 2
+        - 0.05481717 * rh_pct ** 2
+        + 0.00122874 * temp_f ** 2 * rh_pct
+        + 0.00085282 * temp_f * rh_pct ** 2
+        - 0.00199788 * temp_f ** 2 * rh_pct ** 2
+    )
+
+    low_rh_mask = (rh_pct < 13) & (temp_f >= 80) & (temp_f <= 112)
+    low_rh_adj = ((13 - rh_pct) / 4.0) * np.sqrt((17 - np.abs(temp_f - 95)) / 17.0)
+
+    high_rh_mask = (rh_pct > 85) & (temp_f >= 80) & (temp_f <= 87)
+    high_rh_adj = ((rh_pct - 85) / 10.0) * ((87 - temp_f) / 5.0)
+
+    hi_full_adjusted = hi_full - np.where(low_rh_mask, low_rh_adj, 0.0) + np.where(high_rh_mask, high_rh_adj, 0.0)
+
+    use_simple = hi_simple < 80
+    hi_final_f = np.where(use_simple, hi_simple, hi_full_adjusted)
+
+    return (hi_final_f - 32.0) * 5.0 / 9.0
+
+
+def _find_var(ds: xr.Dataset, candidates: list[str]) -> str:
+    """cfgrib's variable naming for a given GRIB shortName isn't something
+    this code can verify against the live API ahead of time -- checks a
+    few plausible names (both the raw GRIB shortName and cfgrib's more
+    common CF-style rename) rather than hardcoding one and risking a
+    silent KeyError in ingestion."""
+    for name in candidates:
+        if name in ds.data_vars:
+            return name
+    raise KeyError(f"None of {candidates} found in dataset (has: {list(ds.data_vars)})")
+
+
 def fetch_percentile_grid(
     bbox: dict,
     max_lead_hours: int = 120,
@@ -752,49 +824,94 @@ def fetch_percentile_grid(
 ) -> xr.Dataset:
     """
     Ingestion counterpart to fetch_percentile_rainfall(): fetches raw tp
-    from all 50 members at every native 3-hourly step, diffs consecutive
-    cumulative steps into true per-3-hour-bin amounts (same accumulation
-    logic as fetch_percentile_rainfall() -- see that docstring for why
-    diffing against the previous step is required), and returns the
-    CROPPED GRID over `bbox` with a "step" dimension of 3-hour bins,
-    instead of collapsing straight to one point's percentile statistics.
+    (precipitation), 2t (2m temperature), and 2d (2m dewpoint temperature)
+    from all 50 members at every native 3-hourly step, and returns the
+    CROPPED GRID over `bbox` with per-member values for all three --
+    precipitation as 3-hour bin totals, temperature/heat index as direct
+    per-step instantaneous values (see below for why those use different
+    step dimensions).
+
+    tp and 2t/2d are fetched via SEPARATE retrieve calls and merged
+    afterward, rather than one combined request -- tp is an accumulated
+    field (stepType=accum) while 2t/2d are instantaneous (stepType=instant);
+    mixing stepTypes in one GRIB file is a known source of cfgrib decode
+    issues, and this couldn't be tested against the live API ahead of
+    time, so the safer two-request approach is used deliberately.
+
+    PRECIPITATION: diffs consecutive cumulative steps into true
+    per-3-hour-bin amounts (see fetch_percentile_rainfall()'s docstring
+    for why diffing against the previous step is required) -- "step"
+    dimension, 3-hour bins, bin_hours stored as an attr.
+
+    TEMPERATURE / HEAT INDEX: 2t and 2d are already instantaneous values
+    at each step (no diffing needed) -- relative humidity is derived from
+    temperature + dewpoint (_relative_humidity_from_temp_dewpoint()),
+    then combined with temperature into Heat Index
+    (_heat_index_celsius()). Stored on a separate "step_instant"
+    dimension (same 3-hourly spacing, but including step=0 -- the
+    analysis/"right now" reading -- which precipitation's diffed bins
+    don't have) to avoid a dimension-size conflict with precipitation's
+    "step" dimension in the same Dataset.
 
     Storing per-member values (not already-computed percentiles) is
     deliberate: percentiles for an arbitrary future query point get
     computed on demand by whatever reads this (the Worker, in Phase 2),
-    the same way aggregate_percentile_bins() does it today for the live
+    the same way aggregate_percentile_bins() and
+    read_temperature_percentiles_from_store() do it today for the live
     app -- ingestion's job is just getting the raw numbers stored.
     """
     max_lead_hours = min(max_lead_hours, 120)
     bin_hours = PERCENTILE_BIN_HOURS
     steps = list(range(0, max_lead_hours + 1, bin_hours))
+    numbers = list(range(1, 51))
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         client = Client(source="ecmwf")
-        target = str(Path(tmpdir) / "tp_members.grib2")
-        _notify(progress_callback, 0.15, f"Requesting {len(steps)} steps x 50 members (full grid)...")
-        client.retrieve(
-            stream="enfo", type="pf", param="tp", step=steps, number=list(range(1, 51)), target=target
-        )
 
-        _notify(progress_callback, 0.6, "Decoding GRIB2 data...")
-        ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+        # --- Precipitation ---
+        tp_target = str(Path(tmpdir) / "tp_members.grib2")
+        _notify(progress_callback, 0.1, f"Requesting {len(steps)} steps x 50 members (precipitation)...")
+        client.retrieve(stream="enfo", type="pf", param="tp", step=steps, number=numbers, target=tp_target)
 
-        run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+        _notify(progress_callback, 0.35, "Decoding precipitation GRIB2 data...")
+        ds_tp = xr.open_dataset(tp_target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+        run_time = pd.Timestamp(ds_tp.time.values).to_pydatetime().replace(tzinfo=UTC)
 
-        _notify(progress_callback, 0.75, "Cropping to bounding box...")
-        ds = _crop_to_bbox(ds, bbox)
-
-        _notify(progress_callback, 0.85, "Computing per-member 3-hour totals...")
-        var_name = list(ds.data_vars)[0]  # 'tp', cumulative-since-forecast-start
-        ds = ds.sortby("step")
-        tp_mm = ds[var_name] * 1000.0
+        ds_tp = _crop_to_bbox(ds_tp, bbox).sortby("step")
+        tp_var = _find_var(ds_tp, ["tp"])
+        tp_mm = ds_tp[tp_var] * 1000.0
         period_mm = tp_mm.diff(dim="step")  # each entry = precip during that specific 3h bin
         period_mm = period_mm.clip(min=0)  # guard tiny negative float noise
+        ds_precip = period_mm.to_dataset(name="precip_3h_mm").load()
 
-        ds_out = period_mm.to_dataset(name="precip_3h_mm").load()
+        # --- Temperature / dewpoint -> relative humidity -> heat index ---
+        t2m_target = str(Path(tmpdir) / "t2m_members.grib2")
+        _notify(progress_callback, 0.45, f"Requesting {len(steps)} steps x 50 members (temperature, dewpoint)...")
+        client.retrieve(
+            stream="enfo", type="pf", param=["2t", "2d"], step=steps, number=numbers, target=t2m_target
+        )
+
+        _notify(progress_callback, 0.7, "Decoding temperature GRIB2 data...")
+        ds_t = xr.open_dataset(t2m_target, engine="cfgrib", backend_kwargs={"indexpath": ""})
+        ds_t = _crop_to_bbox(ds_t, bbox).sortby("step")
+
+        t2m_var = _find_var(ds_t, ["t2m", "2t"])
+        d2m_var = _find_var(ds_t, ["d2m", "2d"])
+        temp_c = ds_t[t2m_var] - 273.15
+        dewpoint_c = ds_t[d2m_var] - 273.15
+
+        _notify(progress_callback, 0.85, "Computing relative humidity and heat index...")
+        rh_pct = _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c)
+        heat_index_c = _heat_index_celsius(temp_c, rh_pct)
+
+        ds_temp = xr.Dataset({
+            "temperature_c": temp_c,
+            "heat_index_c": heat_index_c,
+        }).rename({"step": "step_instant"}).load()
+
+        ds_out = xr.merge([ds_precip, ds_temp])
 
     ds_out.attrs["run_time"] = run_time.isoformat()
     ds_out.attrs["bin_hours"] = bin_hours
@@ -902,4 +1019,64 @@ def read_percentile_raw_from_store(ds: xr.Dataset, lat: float, lon: float, max_l
         "bins": bins,
         "bin_hours": bin_hours,
         "downloaded_bytes": None,  # heavy download already happened during ingestion
+    }
+
+
+def read_temperature_percentiles_from_store(
+    ds: xr.Dataset,
+    lat: float,
+    lon: float,
+    max_lead_hours: int,
+    percentiles: list[int] = None,
+) -> dict:
+    """Reads per-member temperature and heat index values from the stored
+    percentile grid (the temperature_c/heat_index_c variables written by
+    fetch_percentile_grid(), computed from 2m temperature + derived
+    relative humidity) and computes percentile stats across the 50
+    members at each native 3-hourly step directly.
+
+    Deliberately simpler than the rainfall percentile path: no raw-bins-
+    plus-separate-aggregate-step split, because there's no adjustable
+    time-step slider for temperature the way rainfall has one.
+    Temperature doesn't accumulate -- each step's value is already
+    meaningful on its own, so there's nothing to sum bins INTO. Includes
+    step=0 (the analysis/"right now" reading), unlike the rainfall bins,
+    which start at the first full 3-hour period.
+    """
+    if percentiles is None:
+        percentiles = DEFAULT_PERCENTILES
+
+    run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+
+    lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+
+    step_hours = (pd.to_timedelta(point.step_instant.values) / pd.Timedelta(hours=1)).astype(int)
+    order = np.argsort(step_hours)
+    max_steps = max_lead_hours // PERCENTILE_BIN_HOURS + 1  # +1 -- step=0 is included here, unlike precip's bins
+
+    def _stats(vals) -> dict:
+        s = {"mean": float(np.mean(vals)), "median": float(np.median(vals))}
+        for p in percentiles:
+            s[f"p{p}"] = float(np.percentile(vals, p))
+        return s
+
+    steps_out = []
+    for idx in order[:max_steps]:
+        idx = int(idx)
+        h = int(step_hours[idx])
+        temp_vals = point["temperature_c"].isel(step_instant=idx).values
+        hi_vals = point["heat_index_c"].isel(step_instant=idx).values
+        steps_out.append({
+            "time_utc": run_time + timedelta(hours=h),
+            "temperature_stats": _stats(temp_vals),
+            "heat_index_stats": _stats(hi_vals),
+        })
+
+    return {
+        "run_time": run_time,
+        "grid_lat": float(point.latitude.values),
+        "grid_lon": float(point.longitude.values) if float(point.longitude.values) <= 180 else float(point.longitude.values) - 360,
+        "steps": steps_out,
+        "percentiles": percentiles,
     }
