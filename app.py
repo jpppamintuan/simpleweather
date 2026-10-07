@@ -19,6 +19,7 @@ from ecmwf_client import (
     aggregate_percentile_bins,
     read_threshold_result_from_store,
     read_percentile_raw_from_store,
+    read_temperature_percentiles_from_store,
 )
 import github_data_source
 
@@ -281,6 +282,32 @@ def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
     return truncated
 
 
+# The single percentile_latest.nc file now carries precipitation AND
+# temperature/heat-index data together (see fetch_percentile_grid() in
+# ecmwf_client.py). Both features read from it independently, so this
+# small cache avoids fetching the same remote file twice if a person
+# loads both the rainfall-percentile and temperature views in one
+# session. Short TTL -- just enough to dedupe a burst of nearby requests,
+# not a substitute for the per-location caches below.
+_PCT_STORE_DS_CACHE_TTL_SECONDS = 60
+_pct_store_ds_cache: dict = {"ts": 0.0, "ds": None}
+
+
+def _load_percentile_store_cached():
+    """Returns the shared percentile Dataset, fetching it at most once per
+    _PCT_STORE_DS_CACHE_TTL_SECONDS regardless of how many features ask
+    for it. Deliberately does NOT catch exceptions -- same reasoning as
+    the direct load_percentile_grid() call this replaces: a real read
+    failure should surface loudly, not be swallowed here."""
+    now = time.time()
+    if _pct_store_ds_cache["ds"] is not None and (now - _pct_store_ds_cache["ts"] < _PCT_STORE_DS_CACHE_TTL_SECONDS):
+        return _pct_store_ds_cache["ds"]
+    ds = github_data_source.load_percentile_grid()
+    _pct_store_ds_cache["ts"] = now
+    _pct_store_ds_cache["ds"] = ds
+    return ds
+
+
 def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     """Two-tier lookup (session -> cross-session/superset-trim -> GitHub-
     hosted store), mirroring get_forecast_with_progress() for the main
@@ -326,7 +353,7 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     # try/except + st.exception() in the UI) instead of degrading into
     # an opaque "not available" message. Revisit once this path has
     # actually been proven to work at least once.
-    store_ds = github_data_source.load_percentile_grid()
+    store_ds = _load_percentile_store_cached()
     store_result = read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
 
     if store_result is None:
@@ -337,6 +364,42 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     _PCT_GLOBAL_CACHE[key] = entry
     _save_pct_disk_cache()
     return store_result, True
+
+
+# Mirrors the rainfall percentile cache above, but for temperature/heat
+# index. No superset-trim logic here (unlike rainfall's) -- not worth the
+# extra complexity for this feature; the store read itself is already
+# fast, so simply re-reading on a lead_hours change is cheap enough.
+_TEMP_GLOBAL_CACHE: dict = {}
+
+
+def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours: int):
+    """Store-only (no live-fetch fallback), same reasoning as
+    get_percentile_raw_with_progress(): the underlying fetch is the same
+    heavy raw-member download, now also carrying temperature/dewpoint, so
+    it's equally inappropriate to trigger on demand. Shares the cached
+    store dataset with the rainfall percentile path via
+    _load_percentile_store_cached() -- both read the same file."""
+    key = (lat, lon, lead_hours)
+    now = time.time()
+    session_cache = st.session_state.setdefault("_temp_forecast_cache", {})
+
+    cached = session_cache.get(key)
+    if cached and (now - cached["ts"] < CACHE_TTL_SECONDS):
+        return cached["result"], True
+
+    global_entry = _TEMP_GLOBAL_CACHE.get(key)
+    if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
+        session_cache[key] = global_entry
+        return global_entry["result"], True
+
+    store_ds = _load_percentile_store_cached()
+    result = read_temperature_percentiles_from_store(store_ds, lat, lon, lead_hours)
+
+    entry = {"ts": now, "result": result}
+    session_cache[key] = entry
+    _TEMP_GLOBAL_CACHE[key] = entry
+    return result, True
 
 
 def _find_superset_entry(cache_dict: dict, lat: float, lon: float, model: str, requested_lead_days: int, now: float):
@@ -975,6 +1038,119 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     """
 
 
+def render_temperature_chart_html(temp_result: dict) -> str:
+    """Temperature and Heat Index together on one chart, each as a median
+    line + a single P10-P90 shaded band -- deliberately simpler than the
+    rainfall percentile chart's full P10/P25-P75/P90 nested-band
+    treatment (which would mean 10 total series here, for two variables
+    instead of one -- too busy to read at a glance). No PAGASA category
+    shading/labels yet -- that's explicitly deferred to the later
+    laymanization pass, not part of this build.
+
+    No day-detail panel here (unlike the other two charts) -- temperature
+    doesn't have a natural "period" the way a rainfall day or window
+    does; each point is just a moment in time, readable directly off
+    Chart.js's own built-in tooltip.
+    """
+    steps = temp_result["steps"]
+    if not steps:
+        return ""
+
+    time_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for s in steps]
+    temp_median = [s["temperature_stats"]["median"] for s in steps]
+    temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
+    temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
+    hi_median = [s["heat_index_stats"]["median"] for s in steps]
+    hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
+    hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
+
+    labels_json = json.dumps(time_labels)
+    temp_median_json = json.dumps(temp_median)
+    temp_p10_json = json.dumps(temp_p10)
+    temp_p90_json = json.dumps(temp_p90)
+    hi_median_json = json.dumps(hi_median)
+    hi_p10_json = json.dumps(hi_p10)
+    hi_p90_json = json.dumps(hi_p90)
+
+    # Temperature: blue family. Heat index: red/orange family -- echoes
+    # "feels hotter" intuitively, and loosely rhymes with PAGASA's own
+    # warm-to-hot heat index color progression without claiming to BE it.
+    temp_border, temp_fill = "rgba(0,123,255,0.6)", "rgba(0,123,255,0.12)"
+    hi_border, hi_fill = "rgba(220,53,69,0.6)", "rgba(220,53,69,0.12)"
+
+    return f"""
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
+    <div style="background-color:#ffffff;padding:8px;">
+      <div style="position:relative;width:100%;height:320px;">
+        <canvas id="tempChart"></canvas>
+      </div>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+    <script>
+    (function() {{
+      const labels = {labels_json};
+      const tempMedian = {temp_median_json};
+      const tempP10 = {temp_p10_json};
+      const tempP90 = {temp_p90_json};
+      const hiMedian = {hi_median_json};
+      const hiP10 = {hi_p10_json};
+      const hiP90 = {hi_p90_json};
+
+      new Chart(document.getElementById("tempChart"), {{
+        type: "line",
+        data: {{
+          labels: labels,
+          datasets: [
+            {{ label: "Temp P90", data: tempP90, borderColor: "{temp_border}",
+               backgroundColor: "{temp_fill}", fill: "+1",
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "Temp P10", data: tempP10, borderColor: "{temp_border}",
+               backgroundColor: "{temp_fill}", fill: false,
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "Temperature (median)", data: tempMedian, borderColor: "#0056b3",
+               backgroundColor: "#0056b3", fill: false,
+               pointRadius: 0, tension: 0.3, borderWidth: 2 }},
+            {{ label: "Feels Like P90", data: hiP90, borderColor: "{hi_border}",
+               backgroundColor: "{hi_fill}", fill: "+1",
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "Feels Like P10", data: hiP10, borderColor: "{hi_border}",
+               backgroundColor: "{hi_fill}", fill: false,
+               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
+            {{ label: "Feels Like (median)", data: hiMedian, borderColor: "#c82333",
+               backgroundColor: "#c82333", fill: false,
+               pointRadius: 0, tension: 0.3, borderWidth: 2 }},
+          ],
+        }},
+        options: {{
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: {{ mode: "index", intersect: false }},
+          plugins: {{
+            colors: {{ enabled: false, forceOverride: false }},
+            legend: {{
+              display: true, position: "bottom",
+              labels: {{
+                boxWidth: 12, font: {{ size: 10 }}, color: "#333333",
+                // Hides the band-boundary series (P10/P90) from the legend --
+                // they're visually obvious as shading, listing them by name
+                // just clutters the legend with near-duplicate entries.
+                filter: (item) => !item.text.includes("P10") && !item.text.includes("P90"),
+              }},
+            }},
+            tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }} }},
+          }},
+          scales: {{
+            y: {{ ticks: {{ callback: (v) => v + "\\u00b0C", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
+            x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
+          }},
+        }},
+      }});
+    }})();
+    </script>
+    """
+
+
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
@@ -1155,7 +1331,7 @@ if "view_mode" not in st.session_state:
 
 _selected_mode = st.segmented_control(
     "View",
-    ["Threshold Forecast", "Percentile Rainfall Forecast"],
+    ["Threshold Forecast", "Percentile Rainfall Forecast", "Temperature Forecast"],
     default=st.session_state["view_mode"],
 )
 if _selected_mode is not None:
@@ -1456,4 +1632,97 @@ elif view_mode == "Percentile Rainfall Forecast":
         st.info(
             "Choose a location and click **Get percentile forecast** to see mm-based "
             "rainfall percentiles."
+        )
+
+
+elif view_mode == "Temperature Forecast":
+    st.caption(
+        "Temperature and heat index (\"feels like\") percentiles across all 50 ECMWF ensemble "
+        "members, at native 3-hourly resolution. Always reads pre-computed data from the "
+        "scheduled ingestion job, same as the views above -- no live fetch."
+    )
+
+    temp_col1, temp_col2 = st.columns([2, 1])
+    with temp_col1:
+        temp_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="temp_location")
+        temp_lat, temp_lon = LOCATIONS[temp_location_name]
+    with temp_col2:
+        temp_lead_hours = st.slider(
+            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
+        )
+
+    temp_clicked = st.button("Get temperature forecast", key="temp_button")
+    temp_elapsed_placeholder = st.empty()
+
+    if temp_clicked:
+        temp_request_started_at = time.time()
+        try:
+            temp_result, temp_was_cached = get_temperature_percentiles_with_progress(
+                temp_lat, temp_lon, temp_lead_hours
+            )
+        except Exception as e:
+            st.error(f"Failed to read temperature forecast: {type(e).__name__}: {e}")
+            with st.expander("Full error details"):
+                st.exception(e)
+            st.stop()
+        temp_elapsed = time.time() - temp_request_started_at
+
+        st.session_state["last_temp_result"] = temp_result
+        st.session_state["last_temp_location_name"] = temp_location_name
+        st.session_state["last_temp_was_cached"] = temp_was_cached
+        st.session_state["last_temp_elapsed"] = temp_elapsed
+
+    if "last_temp_result" in st.session_state:
+        temp_result = st.session_state["last_temp_result"]
+        temp_location_name = st.session_state["last_temp_location_name"]
+        temp_was_cached = st.session_state["last_temp_was_cached"]
+        temp_elapsed = st.session_state["last_temp_elapsed"]
+
+        temp_elapsed_placeholder.caption(
+            f"⏱️ Loaded in {temp_elapsed:.1f}s" + (" (from cache)" if temp_was_cached else "")
+        )
+
+        temp_steps = temp_result["steps"]
+        if not temp_steps:
+            st.warning("No data available for this forecast range.")
+            st.stop()
+
+        temp_percentiles = temp_result["percentiles"]
+        temp_run_time = temp_result["run_time"]
+
+        st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`")
+
+        st.subheader(f"Temperature & heat index for {temp_location_name}")
+        temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
+        if temp_show_graph:
+            components.html(render_temperature_chart_html(temp_result), height=380)
+        else:
+            temp_stat_rows = ["mean", "median"] + [f"p{p}" for p in temp_percentiles]
+            temp_stat_display_labels = {
+                "mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in temp_percentiles}
+            }
+            temp_col_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for s in temp_steps]
+
+            temp_table_data = {
+                temp_col_labels[i]: [round(s["temperature_stats"][row], 1) for row in temp_stat_rows]
+                for i, s in enumerate(temp_steps)
+            }
+            hi_table_data = {
+                temp_col_labels[i]: [round(s["heat_index_stats"][row], 1) for row in temp_stat_rows]
+                for i, s in enumerate(temp_steps)
+            }
+            st.caption("Temperature (°C)")
+            st.dataframe(
+                pd.DataFrame(temp_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
+                use_container_width=True,
+            )
+            st.caption("Heat Index / \"feels like\" (°C)")
+            st.dataframe(
+                pd.DataFrame(hi_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
+                use_container_width=True,
+            )
+    else:
+        st.info(
+            "Choose a location and click **Get temperature forecast** to see temperature "
+            "and heat index percentiles."
         )
