@@ -42,29 +42,10 @@ on:
 permissions:
   contents: write  # needed to push to the `data` branch below
 
-# Prevents overlapping runs. A genuine full fetch can now take up to the
-# full timeout (see above), while scheduled triggers fire every 15
-# minutes -- without this, a slow run could still be mid-download when
-# the next trigger starts a second one, racing on the same ./output
-# checkout and the same `data` branch push. cancel-in-progress: false
-# queues instead of killing an in-progress run, rather than wasting a
-# large partial download -- safe to queue here specifically because
-# check-then-fetch makes a queued run that finds nothing new resolve
-# almost instantly once its turn comes, so this can't build an unbounded
-# backlog, only a short queue during an actual data-change event.
-concurrency:
-  group: ingest
-  cancel-in-progress: false
-
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    # Bumped from 30 -- adding temperature/dewpoint to the percentile
-    # fetch roughly doubled its download size (tp alone was already
-    # ~1.7-2GB; 2t+2d together add another ~2.5GB+), pushing a genuine
-    # full-fetch run close to or past 30 minutes even without any network
-    # slowdown. 60 gives real headroom rather than being barely enough.
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
