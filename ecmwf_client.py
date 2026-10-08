@@ -929,6 +929,30 @@ def fetch_percentile_grid(
         ds_temp = ds_temp.rename_dims({"step": "step_instant"})
         if "step" in ds_temp.coords:
             ds_temp = ds_temp.rename_vars({"step": "step_instant"})
+
+        # Drop non-essential coordinates cfgrib auto-attaches (valid_time,
+        # heightAboveGround, etc.) BEFORE merging with ds_precip. Renaming
+        # the "step" dimension above does NOT rename these -- they're
+        # separately-named coordinates that merely depend on that
+        # dimension, so e.g. "valid_time" still ends up as a same-named
+        # coordinate in both ds_precip and ds_temp, holding genuinely
+        # different values (40 diffed bin-end-times vs. 41 raw
+        # instant-times) -- xr.merge correctly refuses to silently pick
+        # one and raises MergeError instead. None of these are used
+        # downstream (read_temperature_percentiles_from_store computes
+        # times directly from run_time + the step hours).
+        #
+        # Keeping only the dimension coordinates plus the scalar "time"
+        # reference (NOT a blanket reset_coords(drop=True), which would
+        # also strip "time" itself, breaking run_time downstream) --
+        # programmatic rather than hardcoding "valid_time" specifically,
+        # so a different extra coordinate cfgrib attaches in the future
+        # can't cause this same collision again.
+        needed_coords = {"number", "step_instant", "latitude", "longitude", "time"}
+        extra_coords = [c for c in ds_temp.coords if c not in needed_coords]
+        if extra_coords:
+            ds_temp = ds_temp.drop_vars(extra_coords)
+
         ds_temp = ds_temp.load()
 
         print(f"[fetch_percentile_grid] ds_temp dims: {dict(ds_temp.sizes)}, coords: {list(ds_temp.coords)}")
