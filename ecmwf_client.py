@@ -916,9 +916,38 @@ def fetch_percentile_grid(
         temp_c = ds_t[t2m_var] - 273.15
         dewpoint_c = ds_t[d2m_var] - 273.15
 
+        print(
+            f"[fetch_percentile_grid] raw temp_c range: "
+            f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
+            f"dewpoint_c range: [{float(dewpoint_c.min()):.1f}, {float(dewpoint_c.max()):.1f}]"
+        )
+
+        # Defensive clip to a physically plausible range BEFORE computing
+        # RH/Heat Index. Both the Magnus-Tetens approximation and the
+        # Rothfusz Heat Index regression are empirical fits, only
+        # valid/stable within a bounded input range -- extrapolating
+        # either on a wildly out-of-range value (e.g. a rare bad grid
+        # point, or data right at the Magnus-Tetens formula's
+        # near-singularity as dewpoint_c approaches -243.04) can produce
+        # physically absurd outputs rather than a graceful error (this is
+        # the actual, confirmed cause of the ~-20,000C heat index values
+        # seen in practice). Bounds are generous for Philippines
+        # near-surface conditions, not tight physical limits -- the point
+        # is to guard the formulas' valid domain, not to be a precise
+        # climatology check.
+        temp_c = temp_c.clip(-10, 50)
+        dewpoint_c = dewpoint_c.clip(-10, 40)
+
         _notify(progress_callback, 0.85, "Computing relative humidity and heat index...")
         rh_pct = _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c)
         heat_index_c = _heat_index_celsius(temp_c, rh_pct)
+
+        print(
+            f"[fetch_percentile_grid] clipped temp_c range: "
+            f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
+            f"rh_pct range: [{float(rh_pct.min()):.1f}, {float(rh_pct.max()):.1f}], "
+            f"heat_index_c range: [{float(heat_index_c.min()):.1f}, {float(heat_index_c.max()):.1f}]"
+        )
 
         ds_temp = xr.Dataset({"temperature_c": temp_c, "heat_index_c": heat_index_c})
         # rename_dims + rename_vars done explicitly and separately (rather
