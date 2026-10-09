@@ -1038,14 +1038,24 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     """
 
 
-def render_temperature_chart_html(temp_result: dict) -> str:
+def render_temperature_chart_html(
+    temp_result: dict,
+    show_temp: bool = True,
+    show_heat_index: bool = True,
+    show_ranges: bool = True,
+) -> str:
     """Temperature and Heat Index together on one chart, each as a median
-    line + a single P10-P90 shaded band -- deliberately simpler than the
-    rainfall percentile chart's full P10/P25-P75/P90 nested-band
+    line + an optional P10-P90 shaded band -- deliberately simpler than
+    the rainfall percentile chart's full P10/P25-P75/P90 nested-band
     treatment (which would mean 10 total series here, for two variables
     instead of one -- too busy to read at a glance). No PAGASA category
     shading/labels yet -- that's explicitly deferred to the later
     laymanization pass, not part of this build.
+
+    show_temp / show_heat_index / show_ranges let the caller toggle each
+    series on or off independently -- a hidden series is left out of the
+    dataset list entirely (not just visually hidden), simpler than
+    fighting Chart.js's own hide/legend-toggle state across reruns.
 
     No day-detail panel here (unlike the other two charts) -- temperature
     doesn't have a natural "period" the way a rainfall day or window
@@ -1053,30 +1063,60 @@ def render_temperature_chart_html(temp_result: dict) -> str:
     Chart.js's own built-in tooltip.
     """
     steps = temp_result["steps"]
-    if not steps:
+    if not steps or not (show_temp or show_heat_index):
         return ""
 
     time_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for s in steps]
-    temp_median = [s["temperature_stats"]["median"] for s in steps]
-    temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
-    temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
-    hi_median = [s["heat_index_stats"]["median"] for s in steps]
-    hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
-    hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
-
     labels_json = json.dumps(time_labels)
-    temp_median_json = json.dumps(temp_median)
-    temp_p10_json = json.dumps(temp_p10)
-    temp_p90_json = json.dumps(temp_p90)
-    hi_median_json = json.dumps(hi_median)
-    hi_p10_json = json.dumps(hi_p10)
-    hi_p90_json = json.dumps(hi_p90)
 
     # Temperature: blue family. Heat index: red/orange family -- echoes
     # "feels hotter" intuitively, and loosely rhymes with PAGASA's own
     # warm-to-hot heat index color progression without claiming to BE it.
-    temp_border, temp_fill = "rgba(0,123,255,0.6)", "rgba(0,123,255,0.12)"
-    hi_border, hi_fill = "rgba(220,53,69,0.6)", "rgba(220,53,69,0.12)"
+    temp_fill = "rgba(0,123,255,0.15)"
+    hi_fill = "rgba(220,53,69,0.15)"
+
+    datasets = []
+
+    if show_temp:
+        if show_ranges:
+            temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
+            temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
+            datasets.append({
+                "label": "Temp P90", "data": temp_p90, "borderWidth": 0,
+                "backgroundColor": temp_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
+            })
+            datasets.append({
+                "label": "Temp P10", "data": temp_p10, "borderWidth": 0,
+                "backgroundColor": temp_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
+            })
+        temp_median = [s["temperature_stats"]["median"] for s in steps]
+        datasets.append({
+            "label": "Temperature (median)", "data": temp_median,
+            "borderColor": "#0056b3", "backgroundColor": "#0056b3", "fill": False,
+            "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
+        })
+
+    if show_heat_index:
+        if show_ranges:
+            hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
+            hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
+            datasets.append({
+                "label": "Feels Like P90", "data": hi_p90, "borderWidth": 0,
+                "backgroundColor": hi_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
+            })
+            datasets.append({
+                "label": "Feels Like P10", "data": hi_p10, "borderWidth": 0,
+                "backgroundColor": hi_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
+            })
+        hi_median = [s["heat_index_stats"]["median"] for s in steps]
+        datasets.append({
+            "label": "Feels Like (median)", "data": hi_median,
+            "borderColor": "#c82333", "backgroundColor": "#c82333", "fill": False,
+            "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
+            "borderDash": [6, 4],  # dashed -- visually distinguishes it from the solid temperature line
+        })
+
+    datasets_json = json.dumps(datasets)
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -1090,38 +1130,11 @@ def render_temperature_chart_html(temp_result: dict) -> str:
     <script>
     (function() {{
       const labels = {labels_json};
-      const tempMedian = {temp_median_json};
-      const tempP10 = {temp_p10_json};
-      const tempP90 = {temp_p90_json};
-      const hiMedian = {hi_median_json};
-      const hiP10 = {hi_p10_json};
-      const hiP90 = {hi_p90_json};
+      const datasets = {datasets_json};
 
       new Chart(document.getElementById("tempChart"), {{
         type: "line",
-        data: {{
-          labels: labels,
-          datasets: [
-            {{ label: "Temp P90", data: tempP90, borderColor: "{temp_border}",
-               backgroundColor: "{temp_fill}", fill: "+1",
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "Temp P10", data: tempP10, borderColor: "{temp_border}",
-               backgroundColor: "{temp_fill}", fill: false,
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "Temperature (median)", data: tempMedian, borderColor: "#0056b3",
-               backgroundColor: "#0056b3", fill: false,
-               pointRadius: 0, tension: 0.3, borderWidth: 2 }},
-            {{ label: "Feels Like P90", data: hiP90, borderColor: "{hi_border}",
-               backgroundColor: "{hi_fill}", fill: "+1",
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "Feels Like P10", data: hiP10, borderColor: "{hi_border}",
-               backgroundColor: "{hi_fill}", fill: false,
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "Feels Like (median)", data: hiMedian, borderColor: "#c82333",
-               backgroundColor: "#c82333", fill: false,
-               pointRadius: 0, tension: 0.3, borderWidth: 2 }},
-          ],
-        }},
+        data: {{ labels: labels, datasets: datasets }},
         options: {{
           responsive: true,
           maintainAspectRatio: false,
@@ -1695,7 +1708,26 @@ elif view_mode == "Temperature Forecast":
         st.subheader(f"Temperature & heat index for {temp_location_name}")
         temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
         if temp_show_graph:
-            components.html(render_temperature_chart_html(temp_result), height=380)
+            cb1, cb2, cb3 = st.columns(3)
+            with cb1:
+                show_temp_series = st.checkbox("Temperature", value=True, key="temp_show_temp_series")
+            with cb2:
+                show_hi_series = st.checkbox("Feels Like", value=True, key="temp_show_hi_series")
+            with cb3:
+                show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
+
+            if not show_temp_series and not show_hi_series:
+                st.info("Select at least one of Temperature or Feels Like to show the graph.")
+            else:
+                components.html(
+                    render_temperature_chart_html(
+                        temp_result,
+                        show_temp=show_temp_series,
+                        show_heat_index=show_hi_series,
+                        show_ranges=show_ranges,
+                    ),
+                    height=380,
+                )
         else:
             temp_stat_rows = ["mean", "median"] + [f"p{p}" for p in temp_percentiles]
             temp_stat_display_labels = {
