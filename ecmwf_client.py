@@ -780,8 +780,9 @@ def _heat_index_celsius(temp_c, rh_pct):
     full algorithm right (not a simplified version) matters here."""
     temp_f = temp_c * 9.0 / 5.0 + 32.0
 
-    # NWS "simple formula" -- this average IS the NWS's own documented
-    # criterion for when the full regression doesn't apply yet.
+    # NWS "simple formula" -- used as the final answer when conditions
+    # are mild. Whether they count as "mild" is checked further down, by
+    # averaging THIS value with temp_f (see the use_simple line below).
     hi_simple = 0.5 * (temp_f + 61.0 + (temp_f - 68.0) * 1.2 + rh_pct * 0.094)
 
     hi_full = (
@@ -793,7 +794,7 @@ def _heat_index_celsius(temp_c, rh_pct):
         - 0.05481717 * rh_pct ** 2
         + 0.00122874 * temp_f ** 2 * rh_pct
         + 0.00085282 * temp_f * rh_pct ** 2
-        - 0.00199788 * temp_f ** 2 * rh_pct ** 2
+        - 0.00000199 * temp_f ** 2 * rh_pct ** 2
     )
 
     low_rh_mask = (rh_pct < 13) & (temp_f >= 80) & (temp_f <= 112)
@@ -813,7 +814,13 @@ def _heat_index_celsius(temp_c, rh_pct):
         + xr.where(high_rh_mask, high_rh_adj, 0.0)
     )
 
-    use_simple = hi_simple < 80
+    # The documented NWS switching criterion is the AVERAGE of the simple
+    # estimate and the actual temperature, not the simple estimate alone
+    # (confirmed against NOAA/NWS WPC's own description and an academic
+    # paper's precise restatement of the same procedure) -- an earlier
+    # version of this compared hi_simple directly against 80, which is
+    # not what NWS's own algorithm does.
+    use_simple = (hi_simple + temp_f) / 2.0 < 80
     hi_final_f = xr.where(use_simple, hi_simple, hi_full_adjusted)
 
     return (hi_final_f - 32.0) * 5.0 / 9.0
