@@ -39,12 +39,40 @@ st.title("🌧️ Probabilistic Rainfall Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
-    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
-    "Guiguinto, Bulacan": (14.842279, 120.859681),
-    "Makati City, Metro Manila": (14.555539, 121.002918),
-    "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
-    "Bacoor, Cavite": (14.454261, 120.941266),
+    "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
+    "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
+    "Makati City, Metro Manila": {"lat": 14.555539, "lon": 121.002918},
+    # query_lat/query_lon override the grid point actually requested for
+    # this location, distinct from its true coordinates above --
+    # Bambang's nearest ECMWF grid point (16.5, 121.0) falls on
+    # mountainous terrain, while the town itself sits in a flat valley;
+    # (16.5, 121.25) -- one grid cell east, slightly farther in raw
+    # distance -- is a much closer topographic/geographic match despite
+    # not being the nearest point.
+    "Bambang, Nueva Vizcaya": {
+        "lat": 16.389440, "lon": 121.106919,
+        "query_lat": 16.5, "query_lon": 121.25,
+    },
+    "Bacoor, Cavite": {"lat": 14.454261, "lon": 120.941266},
 }
+
+
+def get_query_point(location_name: str) -> tuple[float, float]:
+    """Returns the (lat, lon) to actually request forecast data for --
+    a location's query_lat/query_lon override if one is set, else its
+    true coordinates (which is what nearest-neighbor grid selection
+    would have picked anyway, so this is a no-op for every location
+    without an override). Use this for every fetch/store-read call."""
+    loc = LOCATIONS[location_name]
+    return loc.get("query_lat", loc["lat"]), loc.get("query_lon", loc["lon"])
+
+
+def get_true_point(location_name: str) -> tuple[float, float]:
+    """Returns a location's actual real-world coordinates, for display
+    purposes only (e.g. showing how far the queried grid point sits from
+    the true location) -- NOT what's used to request data."""
+    loc = LOCATIONS[location_name]
+    return loc["lat"], loc["lon"]
 
 CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
 
@@ -1355,7 +1383,8 @@ if view_mode == "Threshold Forecast":
     col1, col2 = st.columns([2, 1])
     with col1:
         location_name = st.selectbox("Location", list(LOCATIONS.keys()))
-        lat, lon = LOCATIONS[location_name]
+        lat, lon = get_query_point(location_name)  # what's actually requested
+        true_lat, true_lon = get_true_point(location_name)  # for the "(exact)" display below
     with col2:
         lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
@@ -1386,6 +1415,8 @@ if view_mode == "Threshold Forecast":
         st.session_state["last_location_name"] = location_name
         st.session_state["last_lat"] = lat
         st.session_state["last_lon"] = lon
+        st.session_state["last_true_lat"] = true_lat
+        st.session_state["last_true_lon"] = true_lon
         st.session_state["last_elapsed"] = elapsed
 
     if "last_fetch_out" in st.session_state:
@@ -1393,6 +1424,8 @@ if view_mode == "Threshold Forecast":
         location_name = st.session_state["last_location_name"]
         lat = st.session_state["last_lat"]
         lon = st.session_state["last_lon"]
+        true_lat = st.session_state["last_true_lat"]
+        true_lon = st.session_state["last_true_lon"]
         elapsed = st.session_state["last_elapsed"]
 
         ens_result, ens_was_cached = fetch_out["ifs"]
@@ -1489,7 +1522,7 @@ if view_mode == "Threshold Forecast":
             st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
             st.markdown(
                 f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
-                f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
+                f"&nbsp;·&nbsp; **{location_name} (exact):** {true_lat:.6f}°N, {true_lon:.6f}°E"
             )
         with info_col2:
             now_utc = datetime.now(timezone.utc)
@@ -1532,7 +1565,7 @@ elif view_mode == "Percentile Rainfall Forecast":
     pct_col1, pct_col2 = st.columns([2, 1])
     with pct_col1:
         pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
-        pct_lat, pct_lon = LOCATIONS[pct_location_name]
+        pct_lat, pct_lon = get_query_point(pct_location_name)
     with pct_col2:
         pct_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
@@ -1658,7 +1691,7 @@ elif view_mode == "Temperature Forecast":
     temp_col1, temp_col2 = st.columns([2, 1])
     with temp_col1:
         temp_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="temp_location")
-        temp_lat, temp_lon = LOCATIONS[temp_location_name]
+        temp_lat, temp_lon = get_query_point(temp_location_name)
     with temp_col2:
         temp_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
