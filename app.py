@@ -1066,24 +1066,51 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     """
 
 
+# PAGASA's official Heat Index Advisory categories (verified against
+# multiple PAGASA/DOST sources): Caution 27-32C, Extreme Caution 33-41C,
+# Danger 42-51C, Extreme Danger 52C+ -- shown here as their LOWER
+# boundary (the threshold at which each category begins), with PAGASA's
+# own color progression (yellow -> yellow-orange -> red-orange -> red).
+HEAT_INDEX_CATEGORIES = [
+    ("caution", "Caution (27\u00b0C+)", 27, "#F4C430"),
+    ("extreme_caution", "Extreme Caution (33\u00b0C+)", 33, "#FF9F1C"),
+    ("danger", "Danger (42\u00b0C+)", 42, "#E8450C"),
+    ("extreme_danger", "Extreme Danger (52\u00b0C+)", 52, "#C0122F"),
+]
+
+
 def render_temperature_chart_html(
     temp_result: dict,
     show_temp: bool = True,
     show_heat_index: bool = True,
     show_ranges: bool = True,
+    show_categories: dict | None = None,
 ) -> str:
     """Temperature and Heat Index together on one chart, each as a median
     line + an optional P10-P90 shaded band -- deliberately simpler than
     the rainfall percentile chart's full P10/P25-P75/P90 nested-band
     treatment (which would mean 10 total series here, for two variables
-    instead of one -- too busy to read at a glance). No PAGASA category
-    shading/labels yet -- that's explicitly deferred to the later
-    laymanization pass, not part of this build.
+    instead of one -- too busy to read at a glance).
 
     show_temp / show_heat_index / show_ranges let the caller toggle each
     series on or off independently -- a hidden series is left out of the
     dataset list entirely (not just visually hidden), simpler than
     fighting Chart.js's own hide/legend-toggle state across reruns.
+
+    show_categories is an optional {category_key: bool} dict (keys match
+    HEAT_INDEX_CATEGORIES' first element) controlling which PAGASA Heat
+    Index reference lines are drawn -- implemented as flat-value line
+    datasets (same technique as the P10/P90 bands), not a separate
+    annotation plugin, to avoid a new untested CDN dependency for this.
+
+    The y-axis range is deliberately computed from the ACTUAL temperature/
+    heat-index data only, BEFORE any reference lines are added, and fixed
+    explicitly via scales.y.min/max -- Chart.js auto-scales to every
+    dataset by default, so without this a reference line like 52C would
+    stretch the axis even when the real data tops out at 30C. This keeps
+    the axis exactly as data-dependent as before reference lines existed;
+    a line outside that range simply doesn't appear, which is expected,
+    not a bug to fix.
 
     No day-detail panel here (unlike the other two charts) -- temperature
     doesn't have a natural "period" the way a rainfall day or window
@@ -1093,6 +1120,7 @@ def render_temperature_chart_html(
     steps = temp_result["steps"]
     if not steps or not (show_temp or show_heat_index):
         return ""
+    show_categories = show_categories or {}
 
     time_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for s in steps]
     labels_json = json.dumps(time_labels)
@@ -1104,11 +1132,14 @@ def render_temperature_chart_html(
     hi_fill = "rgba(220,53,69,0.15)"
 
     datasets = []
+    data_values = []  # every actual temp/HI value shown -- drives the axis bounds, nothing else does
 
     if show_temp:
         if show_ranges:
             temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
             temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
+            data_values.extend(temp_p90)
+            data_values.extend(temp_p10)
             datasets.append({
                 "label": "Temp P90", "data": temp_p90, "borderWidth": 0,
                 "backgroundColor": temp_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
@@ -1118,6 +1149,7 @@ def render_temperature_chart_html(
                 "backgroundColor": temp_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
             })
         temp_median = [s["temperature_stats"]["median"] for s in steps]
+        data_values.extend(temp_median)
         datasets.append({
             "label": "Temperature (median)", "data": temp_median,
             "borderColor": "#0056b3", "backgroundColor": "#0056b3", "fill": False,
@@ -1128,6 +1160,8 @@ def render_temperature_chart_html(
         if show_ranges:
             hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
             hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
+            data_values.extend(hi_p90)
+            data_values.extend(hi_p10)
             datasets.append({
                 "label": "Feels Like P90", "data": hi_p90, "borderWidth": 0,
                 "backgroundColor": hi_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
@@ -1137,12 +1171,34 @@ def render_temperature_chart_html(
                 "backgroundColor": hi_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
             })
         hi_median = [s["heat_index_stats"]["median"] for s in steps]
+        data_values.extend(hi_median)
         datasets.append({
             "label": "Feels Like (median)", "data": hi_median,
             "borderColor": "#c82333", "backgroundColor": "#c82333", "fill": False,
             "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
             "borderDash": [6, 4],  # dashed -- visually distinguishes it from the solid temperature line
         })
+
+    # Axis bounds computed from data_values ONLY -- not touched by
+    # anything added below. A little padding keeps lines/bands from
+    # visually touching the chart edges.
+    data_min, data_max = min(data_values), max(data_values)
+    padding = max((data_max - data_min) * 0.1, 1.0)
+    y_min = data_min - padding
+    y_max = data_max + padding
+
+    # Reference lines inserted at the START of the list, so they draw
+    # BEHIND the actual temperature/heat-index lines (Chart.js draws
+    # datasets in array order, later entries on top).
+    category_datasets = []
+    for key, label, threshold_c, color in HEAT_INDEX_CATEGORIES:
+        if show_categories.get(key):
+            category_datasets.append({
+                "label": label, "data": [threshold_c] * len(steps),
+                "borderColor": color, "backgroundColor": color, "fill": False,
+                "pointRadius": 0, "tension": 0, "borderWidth": 1.5, "borderDash": [3, 3],
+            })
+    datasets = category_datasets + datasets
 
     datasets_json = json.dumps(datasets)
 
@@ -1182,7 +1238,12 @@ def render_temperature_chart_html(
             tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }} }},
           }},
           scales: {{
-            y: {{ ticks: {{ callback: (v) => v + "\\u00b0C", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
+            y: {{
+              min: {y_min},
+              max: {y_max},
+              ticks: {{ callback: (v) => v + "\\u00b0C", color: "#666666" }},
+              grid: {{ color: "#e5e5e5" }},
+            }},
             x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
           }},
         }},
@@ -1749,6 +1810,11 @@ elif view_mode == "Temperature Forecast":
             with cb3:
                 show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
 
+            show_all_categories = st.checkbox(
+                "Show PAGASA Heat Index reference lines", value=False, key="temp_show_categories"
+            )
+            show_categories = {key: show_all_categories for key, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES}
+
             if not show_temp_series and not show_hi_series:
                 st.info("Select at least one of Temperature or Feels Like to show the graph.")
             else:
@@ -1758,6 +1824,7 @@ elif view_mode == "Temperature Forecast":
                         show_temp=show_temp_series,
                         show_heat_index=show_hi_series,
                         show_ranges=show_ranges,
+                        show_categories=show_categories,
                     ),
                     height=380,
                 )
