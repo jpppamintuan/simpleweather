@@ -1,4 +1,5 @@
 import json
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -1163,29 +1164,44 @@ def render_temperature_chart_html(
             data_values.extend(hi_p90)
             data_values.extend(hi_p10)
             datasets.append({
-                "label": "Feels Like P90", "data": hi_p90, "borderWidth": 0,
+                "label": "Heat Index P90", "data": hi_p90, "borderWidth": 0,
                 "backgroundColor": hi_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
             })
             datasets.append({
-                "label": "Feels Like P10", "data": hi_p10, "borderWidth": 0,
+                "label": "Heat Index P10", "data": hi_p10, "borderWidth": 0,
                 "backgroundColor": hi_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
             })
         hi_median = [s["heat_index_stats"]["median"] for s in steps]
         data_values.extend(hi_median)
         datasets.append({
-            "label": "Feels Like (median)", "data": hi_median,
+            "label": "Heat Index (median)", "data": hi_median,
             "borderColor": "#c82333", "backgroundColor": "#c82333", "fill": False,
             "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
             "borderDash": [6, 4],  # dashed -- visually distinguishes it from the solid temperature line
         })
 
     # Axis bounds computed from data_values ONLY -- not touched by
-    # anything added below. A little padding keeps lines/bands from
-    # visually touching the chart edges.
+    # anything added below. Chart.js auto-determines tick spacing by
+    # default, which doesn't guarantee clean bounds once we fix min/max
+    # ourselves -- so the step size is chosen explicitly here (a modest
+    # heuristic based on the data's span, not fixed to one constant
+    # regardless of range) and the bounds are snapped OUT to the next
+    # full step in each direction (floor for min, ceil for max), rather
+    # than padding with a raw fraction of the range -- e.g. a data range
+    # of 23.4-34.8 with a 5-degree step becomes a clean 20-35, not
+    # 22.3-35.9.
     data_min, data_max = min(data_values), max(data_values)
-    padding = max((data_max - data_min) * 0.1, 1.0)
-    y_min = data_min - padding
-    y_max = data_max + padding
+    span = data_max - data_min
+    if span <= 10:
+        y_step = 2
+    elif span <= 25:
+        y_step = 5
+    else:
+        y_step = 10
+    y_min = math.floor(data_min / y_step) * y_step
+    y_max = math.ceil(data_max / y_step) * y_step
+    if y_max == y_min:  # guard a perfectly flat series (all values identical)
+        y_max += y_step
 
     # Reference lines inserted at the START of the list, so they draw
     # BEHIND the actual temperature/heat-index lines (Chart.js draws
@@ -1241,7 +1257,7 @@ def render_temperature_chart_html(
             y: {{
               min: {y_min},
               max: {y_max},
-              ticks: {{ callback: (v) => v + "\\u00b0C", color: "#666666" }},
+              ticks: {{ stepSize: {y_step}, callback: (v) => v + "\\u00b0C", color: "#666666" }},
               grid: {{ color: "#e5e5e5" }},
             }},
             x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
@@ -1806,17 +1822,17 @@ elif view_mode == "Temperature Forecast":
             with cb1:
                 show_temp_series = st.checkbox("Temperature", value=True, key="temp_show_temp_series")
             with cb2:
-                show_hi_series = st.checkbox("Feels Like", value=True, key="temp_show_hi_series")
+                show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
             with cb3:
                 show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
 
             show_all_categories = st.checkbox(
-                "Show PAGASA Heat Index reference lines", value=False, key="temp_show_categories"
+                "Show Heat Index reference lines", value=False, key="temp_show_categories"
             )
             show_categories = {key: show_all_categories for key, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES}
 
             if not show_temp_series and not show_hi_series:
-                st.info("Select at least one of Temperature or Feels Like to show the graph.")
+                st.info("Select at least one of Temperature or Heat Index to show the graph.")
             else:
                 components.html(
                     render_temperature_chart_html(
