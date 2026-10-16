@@ -1073,10 +1073,14 @@ def render_percentile_chart_html(pct_result: dict) -> str:
 # boundary (the threshold at which each category begins), with PAGASA's
 # own color progression (yellow -> yellow-orange -> red-orange -> red).
 HEAT_INDEX_CATEGORIES = [
-    ("caution", "Caution (27\u00b0C+)", 27, "#F4C430"),
-    ("extreme_caution", "Extreme Caution (33\u00b0C+)", 33, "#FF9F1C"),
-    ("danger", "Danger (42\u00b0C+)", 42, "#E8450C"),
-    ("extreme_danger", "Extreme Danger (52\u00b0C+)", 52, "#C0122F"),
+    # (key, short_name, full_label, threshold_c, color) -- short_name is
+    # the small text drawn directly on the chart next to each reference
+    # line; full_label (with the threshold value spelled out) is what
+    # shows in the legend, where there's room for it.
+    ("caution", "Caution", "Caution (27\u00b0C+)", 27, "#F4C430"),
+    ("extreme_caution", "Extreme Caution", "Extreme Caution (33\u00b0C+)", 33, "#FF9F1C"),
+    ("danger", "Danger", "Danger (42\u00b0C+)", 42, "#E8450C"),
+    ("extreme_danger", "Extreme Danger", "Extreme Danger (52\u00b0C+)", 52, "#C0122F"),
 ]
 
 
@@ -1207,16 +1211,22 @@ def render_temperature_chart_html(
     # BEHIND the actual temperature/heat-index lines (Chart.js draws
     # datasets in array order, later entries on top).
     category_datasets = []
-    for key, label, threshold_c, color in HEAT_INDEX_CATEGORIES:
+    category_lines_for_labels = []  # feeds the custom draw plugin below, not a Chart.js dataset
+    category_full_labels = []  # feeds the tooltip filter below
+    for key, short_name, full_label, threshold_c, color in HEAT_INDEX_CATEGORIES:
         if show_categories.get(key):
             category_datasets.append({
-                "label": label, "data": [threshold_c] * len(steps),
+                "label": full_label, "data": [threshold_c] * len(steps),
                 "borderColor": color, "backgroundColor": color, "fill": False,
                 "pointRadius": 0, "tension": 0, "borderWidth": 1.5, "borderDash": [3, 3],
             })
+            category_lines_for_labels.append({"name": short_name, "value": threshold_c, "color": color})
+            category_full_labels.append(full_label)
     datasets = category_datasets + datasets
 
     datasets_json = json.dumps(datasets)
+    category_lines_json = json.dumps(category_lines_for_labels)
+    category_full_labels_json = json.dumps(category_full_labels)
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -1231,10 +1241,39 @@ def render_temperature_chart_html(
     (function() {{
       const labels = {labels_json};
       const datasets = {datasets_json};
+      const categoryLines = {category_lines_json};
+      const categoryFullLabels = new Set({category_full_labels_json});
+
+      // Custom draw plugin -- no new CDN dependency needed for this.
+      // Draws each shown Heat Index category's short name just inside
+      // the plot area, right next to the y-axis, positioned a few
+      // pixels ABOVE its reference line (not centered on it, so the
+      // text doesn't sit on top of the dashed line itself). Skips any
+      // line currently outside the visible y-range, same as the line
+      // itself already does.
+      const categoryLabelPlugin = {{
+        id: "categoryLabelPlugin",
+        afterDatasetsDraw(chart) {{
+          const {{ ctx, chartArea, scales }} = chart;
+          const yScale = scales.y;
+          ctx.save();
+          ctx.font = "600 10px {FONT_STACK}";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          categoryLines.forEach((cat) => {{
+            if (cat.value < yScale.min || cat.value > yScale.max) return;
+            const y = yScale.getPixelForValue(cat.value);
+            ctx.fillStyle = cat.color;
+            ctx.fillText(cat.name, chartArea.left + 4, y - 2);
+          }});
+          ctx.restore();
+        }},
+      }};
 
       new Chart(document.getElementById("tempChart"), {{
         type: "line",
         data: {{ labels: labels, datasets: datasets }},
+        plugins: [categoryLabelPlugin],
         options: {{
           responsive: true,
           maintainAspectRatio: false,
@@ -1251,7 +1290,15 @@ def render_temperature_chart_html(
                 filter: (item) => !item.text.includes("P10") && !item.text.includes("P90"),
               }},
             }},
-            tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }} }},
+            tooltip: {{
+              // Heat Index category reference lines are visible in the
+              // graph and labeled on it directly (see categoryLabelPlugin
+              // above), but deliberately excluded from the hover tooltip
+              // -- they're fixed constants, not data, so repeating their
+              // value on every hover is just noise.
+              filter: (item) => !categoryFullLabels.has(item.dataset.label),
+              callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }},
+            }},
           }},
           scales: {{
             y: {{
@@ -1829,7 +1876,9 @@ elif view_mode == "Temperature Forecast":
             show_all_categories = st.checkbox(
                 "Show Heat Index reference lines", value=False, key="temp_show_categories"
             )
-            show_categories = {key: show_all_categories for key, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES}
+            show_categories = {
+                key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
+            }
 
             if not show_temp_series and not show_hi_series:
                 st.info("Select at least one of Temperature or Heat Index to show the graph.")
