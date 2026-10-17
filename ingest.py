@@ -67,14 +67,8 @@ from ecmwf_client import (
     check_latest_threshold_run,
     check_latest_percentile_run,
     MODEL_LABELS,
+    PH_BBOX,
 )
-
-# Generous bounding box around the Philippines -- covers all 5 of the
-# app's current fixed locations with plenty of room to spare, sized for
-# future arbitrary-point selection across the country rather than just
-# today's handful of points. Revisit if the app ever needs to cover areas
-# outside this box.
-PH_BBOX = {"lat_min": 4.0, "lat_max": 21.5, "lon_min": 115.0, "lon_max": 127.5}
 
 # Both ECMWF's physics-based ENS and their AI-based ensemble are ingested
 # for the threshold dataset. Percentile stays IFS-only for now -- that
