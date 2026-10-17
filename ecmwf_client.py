@@ -49,6 +49,14 @@ THRESHOLD_COLORS = {
 MODEL_LABELS = {"ifs": "ECMWF ENS", "aifs-ens": "AIFS ENS"}
 DEFAULT_MODEL = "ifs"
 
+# Generous bounding box around the Philippines -- covers all preset
+# locations with plenty of room to spare, sized for arbitrary-point
+# selection across the country. Shared single source of truth: ingest.py
+# crops every stored grid to exactly this box, and app.py uses the same
+# bounds to validate/limit any custom coordinate input, since a point
+# outside this box has no stored data to look up at all.
+PH_BBOX = {"lat_min": 4.0, "lat_max": 21.5, "lon_min": 115.0, "lon_max": 127.5}
+
 PH_TZ = timezone(timedelta(hours=8))
 UTC = timezone.utc
 
