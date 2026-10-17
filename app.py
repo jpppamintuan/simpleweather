@@ -1,4 +1,5 @@
 import json
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -39,12 +40,40 @@ st.title("🌧️ Probabilistic Rainfall Forecast")
 st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
 
 LOCATIONS = {
-    "Mandaluyong City, Metro Manila": (14.576975, 121.052521),
-    "Guiguinto, Bulacan": (14.842279, 120.859681),
-    "Makati City, Metro Manila": (14.555539, 121.002918),
-    "Bambang, Nueva Vizcaya": (16.389440, 121.106919),
-    "Bacoor, Cavite": (14.454261, 120.941266),
+    "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
+    "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
+    "Makati City, Metro Manila": {"lat": 14.555539, "lon": 121.002918},
+    # query_lat/query_lon override the grid point actually requested for
+    # this location, distinct from its true coordinates above --
+    # Bambang's nearest ECMWF grid point (16.5, 121.0) falls on
+    # mountainous terrain, while the town itself sits in a flat valley;
+    # (16.5, 121.25) -- one grid cell east, slightly farther in raw
+    # distance -- is a much closer topographic/geographic match despite
+    # not being the nearest point.
+    "Bambang, Nueva Vizcaya": {
+        "lat": 16.389440, "lon": 121.106919,
+        "query_lat": 16.5, "query_lon": 121.25,
+    },
+    "Bacoor, Cavite": {"lat": 14.454261, "lon": 120.941266},
 }
+
+
+def get_query_point(location_name: str) -> tuple[float, float]:
+    """Returns the (lat, lon) to actually request forecast data for --
+    a location's query_lat/query_lon override if one is set, else its
+    true coordinates (which is what nearest-neighbor grid selection
+    would have picked anyway, so this is a no-op for every location
+    without an override). Use this for every fetch/store-read call."""
+    loc = LOCATIONS[location_name]
+    return loc.get("query_lat", loc["lat"]), loc.get("query_lon", loc["lon"])
+
+
+def get_true_point(location_name: str) -> tuple[float, float]:
+    """Returns a location's actual real-world coordinates, for display
+    purposes only (e.g. showing how far the queried grid point sits from
+    the true location) -- NOT what's used to request data."""
+    loc = LOCATIONS[location_name]
+    return loc["lat"], loc["lon"]
 
 CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
 
@@ -1038,24 +1067,55 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     """
 
 
+# PAGASA's official Heat Index Advisory categories (verified against
+# multiple PAGASA/DOST sources): Caution 27-32C, Extreme Caution 33-41C,
+# Danger 42-51C, Extreme Danger 52C+ -- shown here as their LOWER
+# boundary (the threshold at which each category begins), with PAGASA's
+# own color progression (yellow -> yellow-orange -> red-orange -> red).
+HEAT_INDEX_CATEGORIES = [
+    # (key, short_name, full_label, threshold_c, color) -- short_name is
+    # the small text drawn directly on the chart next to each reference
+    # line; full_label (with the threshold value spelled out) is what
+    # shows in the legend, where there's room for it.
+    ("caution", "Caution", "Caution (27\u00b0C+)", 27, "#F4C430"),
+    ("extreme_caution", "Extreme Caution", "Extreme Caution (33\u00b0C+)", 33, "#FF9F1C"),
+    ("danger", "Danger", "Danger (42\u00b0C+)", 42, "#E8450C"),
+    ("extreme_danger", "Extreme Danger", "Extreme Danger (52\u00b0C+)", 52, "#C0122F"),
+]
+
+
 def render_temperature_chart_html(
     temp_result: dict,
     show_temp: bool = True,
     show_heat_index: bool = True,
     show_ranges: bool = True,
+    show_categories: dict | None = None,
 ) -> str:
     """Temperature and Heat Index together on one chart, each as a median
     line + an optional P10-P90 shaded band -- deliberately simpler than
     the rainfall percentile chart's full P10/P25-P75/P90 nested-band
     treatment (which would mean 10 total series here, for two variables
-    instead of one -- too busy to read at a glance). No PAGASA category
-    shading/labels yet -- that's explicitly deferred to the later
-    laymanization pass, not part of this build.
+    instead of one -- too busy to read at a glance).
 
     show_temp / show_heat_index / show_ranges let the caller toggle each
     series on or off independently -- a hidden series is left out of the
     dataset list entirely (not just visually hidden), simpler than
     fighting Chart.js's own hide/legend-toggle state across reruns.
+
+    show_categories is an optional {category_key: bool} dict (keys match
+    HEAT_INDEX_CATEGORIES' first element) controlling which PAGASA Heat
+    Index reference lines are drawn -- implemented as flat-value line
+    datasets (same technique as the P10/P90 bands), not a separate
+    annotation plugin, to avoid a new untested CDN dependency for this.
+
+    The y-axis range is deliberately computed from the ACTUAL temperature/
+    heat-index data only, BEFORE any reference lines are added, and fixed
+    explicitly via scales.y.min/max -- Chart.js auto-scales to every
+    dataset by default, so without this a reference line like 52C would
+    stretch the axis even when the real data tops out at 30C. This keeps
+    the axis exactly as data-dependent as before reference lines existed;
+    a line outside that range simply doesn't appear, which is expected,
+    not a bug to fix.
 
     No day-detail panel here (unlike the other two charts) -- temperature
     doesn't have a natural "period" the way a rainfall day or window
@@ -1065,6 +1125,7 @@ def render_temperature_chart_html(
     steps = temp_result["steps"]
     if not steps or not (show_temp or show_heat_index):
         return ""
+    show_categories = show_categories or {}
 
     time_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for s in steps]
     labels_json = json.dumps(time_labels)
@@ -1076,11 +1137,14 @@ def render_temperature_chart_html(
     hi_fill = "rgba(220,53,69,0.15)"
 
     datasets = []
+    data_values = []  # every actual temp/HI value shown -- drives the axis bounds, nothing else does
 
     if show_temp:
         if show_ranges:
             temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
             temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
+            data_values.extend(temp_p90)
+            data_values.extend(temp_p10)
             datasets.append({
                 "label": "Temp P90", "data": temp_p90, "borderWidth": 0,
                 "backgroundColor": temp_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
@@ -1090,6 +1154,7 @@ def render_temperature_chart_html(
                 "backgroundColor": temp_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
             })
         temp_median = [s["temperature_stats"]["median"] for s in steps]
+        data_values.extend(temp_median)
         datasets.append({
             "label": "Temperature (median)", "data": temp_median,
             "borderColor": "#0056b3", "backgroundColor": "#0056b3", "fill": False,
@@ -1100,23 +1165,68 @@ def render_temperature_chart_html(
         if show_ranges:
             hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
             hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
+            data_values.extend(hi_p90)
+            data_values.extend(hi_p10)
             datasets.append({
-                "label": "Feels Like P90", "data": hi_p90, "borderWidth": 0,
+                "label": "Heat Index P90", "data": hi_p90, "borderWidth": 0,
                 "backgroundColor": hi_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
             })
             datasets.append({
-                "label": "Feels Like P10", "data": hi_p10, "borderWidth": 0,
+                "label": "Heat Index P10", "data": hi_p10, "borderWidth": 0,
                 "backgroundColor": hi_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
             })
         hi_median = [s["heat_index_stats"]["median"] for s in steps]
+        data_values.extend(hi_median)
         datasets.append({
-            "label": "Feels Like (median)", "data": hi_median,
+            "label": "Heat Index (median)", "data": hi_median,
             "borderColor": "#c82333", "backgroundColor": "#c82333", "fill": False,
             "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
             "borderDash": [6, 4],  # dashed -- visually distinguishes it from the solid temperature line
         })
 
+    # Axis bounds computed from data_values ONLY -- not touched by
+    # anything added below. Chart.js auto-determines tick spacing by
+    # default, which doesn't guarantee clean bounds once we fix min/max
+    # ourselves -- so the step size is chosen explicitly here (a modest
+    # heuristic based on the data's span, not fixed to one constant
+    # regardless of range) and the bounds are snapped OUT to the next
+    # full step in each direction (floor for min, ceil for max), rather
+    # than padding with a raw fraction of the range -- e.g. a data range
+    # of 23.4-34.8 with a 5-degree step becomes a clean 20-35, not
+    # 22.3-35.9.
+    data_min, data_max = min(data_values), max(data_values)
+    span = data_max - data_min
+    if span <= 10:
+        y_step = 2
+    elif span <= 25:
+        y_step = 5
+    else:
+        y_step = 10
+    y_min = math.floor(data_min / y_step) * y_step
+    y_max = math.ceil(data_max / y_step) * y_step
+    if y_max == y_min:  # guard a perfectly flat series (all values identical)
+        y_max += y_step
+
+    # Reference lines inserted at the START of the list, so they draw
+    # BEHIND the actual temperature/heat-index lines (Chart.js draws
+    # datasets in array order, later entries on top).
+    category_datasets = []
+    category_lines_for_labels = []  # feeds the custom draw plugin below, not a Chart.js dataset
+    category_full_labels = []  # feeds the tooltip filter below
+    for key, short_name, full_label, threshold_c, color in HEAT_INDEX_CATEGORIES:
+        if show_categories.get(key):
+            category_datasets.append({
+                "label": full_label, "data": [threshold_c] * len(steps),
+                "borderColor": color, "backgroundColor": color, "fill": False,
+                "pointRadius": 0, "tension": 0, "borderWidth": 1.5, "borderDash": [3, 3],
+            })
+            category_lines_for_labels.append({"name": short_name, "value": threshold_c, "color": color})
+            category_full_labels.append(full_label)
+    datasets = category_datasets + datasets
+
     datasets_json = json.dumps(datasets)
+    category_lines_json = json.dumps(category_lines_for_labels)
+    category_full_labels_json = json.dumps(category_full_labels)
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
@@ -1131,10 +1241,39 @@ def render_temperature_chart_html(
     (function() {{
       const labels = {labels_json};
       const datasets = {datasets_json};
+      const categoryLines = {category_lines_json};
+      const categoryFullLabels = new Set({category_full_labels_json});
+
+      // Custom draw plugin -- no new CDN dependency needed for this.
+      // Draws each shown Heat Index category's short name just inside
+      // the plot area, right next to the y-axis, positioned a few
+      // pixels ABOVE its reference line (not centered on it, so the
+      // text doesn't sit on top of the dashed line itself). Skips any
+      // line currently outside the visible y-range, same as the line
+      // itself already does.
+      const categoryLabelPlugin = {{
+        id: "categoryLabelPlugin",
+        afterDatasetsDraw(chart) {{
+          const {{ ctx, chartArea, scales }} = chart;
+          const yScale = scales.y;
+          ctx.save();
+          ctx.font = "600 10px {FONT_STACK}";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          categoryLines.forEach((cat) => {{
+            if (cat.value < yScale.min || cat.value > yScale.max) return;
+            const y = yScale.getPixelForValue(cat.value);
+            ctx.fillStyle = cat.color;
+            ctx.fillText(cat.name, chartArea.left + 4, y - 2);
+          }});
+          ctx.restore();
+        }},
+      }};
 
       new Chart(document.getElementById("tempChart"), {{
         type: "line",
         data: {{ labels: labels, datasets: datasets }},
+        plugins: [categoryLabelPlugin],
         options: {{
           responsive: true,
           maintainAspectRatio: false,
@@ -1151,10 +1290,23 @@ def render_temperature_chart_html(
                 filter: (item) => !item.text.includes("P10") && !item.text.includes("P90"),
               }},
             }},
-            tooltip: {{ callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }} }},
+            tooltip: {{
+              // Heat Index category reference lines are visible in the
+              // graph and labeled on it directly (see categoryLabelPlugin
+              // above), but deliberately excluded from the hover tooltip
+              // -- they're fixed constants, not data, so repeating their
+              // value on every hover is just noise.
+              filter: (item) => !categoryFullLabels.has(item.dataset.label),
+              callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }},
+            }},
           }},
           scales: {{
-            y: {{ ticks: {{ callback: (v) => v + "\\u00b0C", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
+            y: {{
+              min: {y_min},
+              max: {y_max},
+              ticks: {{ stepSize: {y_step}, callback: (v) => v + "\\u00b0C", color: "#666666" }},
+              grid: {{ color: "#e5e5e5" }},
+            }},
             x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
           }},
         }},
@@ -1355,7 +1507,8 @@ if view_mode == "Threshold Forecast":
     col1, col2 = st.columns([2, 1])
     with col1:
         location_name = st.selectbox("Location", list(LOCATIONS.keys()))
-        lat, lon = LOCATIONS[location_name]
+        lat, lon = get_query_point(location_name)  # what's actually requested
+        true_lat, true_lon = get_true_point(location_name)  # for the "(exact)" display below
     with col2:
         lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
@@ -1386,6 +1539,8 @@ if view_mode == "Threshold Forecast":
         st.session_state["last_location_name"] = location_name
         st.session_state["last_lat"] = lat
         st.session_state["last_lon"] = lon
+        st.session_state["last_true_lat"] = true_lat
+        st.session_state["last_true_lon"] = true_lon
         st.session_state["last_elapsed"] = elapsed
 
     if "last_fetch_out" in st.session_state:
@@ -1393,6 +1548,8 @@ if view_mode == "Threshold Forecast":
         location_name = st.session_state["last_location_name"]
         lat = st.session_state["last_lat"]
         lon = st.session_state["last_lon"]
+        true_lat = st.session_state["last_true_lat"]
+        true_lon = st.session_state["last_true_lon"]
         elapsed = st.session_state["last_elapsed"]
 
         ens_result, ens_was_cached = fetch_out["ifs"]
@@ -1489,7 +1646,7 @@ if view_mode == "Threshold Forecast":
             st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
             st.markdown(
                 f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
-                f"&nbsp;·&nbsp; **{location_name} (exact):** {lat:.6f}°N, {lon:.6f}°E"
+                f"&nbsp;·&nbsp; **{location_name} (exact):** {true_lat:.6f}°N, {true_lon:.6f}°E"
             )
         with info_col2:
             now_utc = datetime.now(timezone.utc)
@@ -1532,7 +1689,7 @@ elif view_mode == "Percentile Rainfall Forecast":
     pct_col1, pct_col2 = st.columns([2, 1])
     with pct_col1:
         pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
-        pct_lat, pct_lon = LOCATIONS[pct_location_name]
+        pct_lat, pct_lon = get_query_point(pct_location_name)
     with pct_col2:
         pct_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
@@ -1658,7 +1815,7 @@ elif view_mode == "Temperature Forecast":
     temp_col1, temp_col2 = st.columns([2, 1])
     with temp_col1:
         temp_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="temp_location")
-        temp_lat, temp_lon = LOCATIONS[temp_location_name]
+        temp_lat, temp_lon = get_query_point(temp_location_name)
     with temp_col2:
         temp_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
@@ -1712,12 +1869,19 @@ elif view_mode == "Temperature Forecast":
             with cb1:
                 show_temp_series = st.checkbox("Temperature", value=True, key="temp_show_temp_series")
             with cb2:
-                show_hi_series = st.checkbox("Feels Like", value=True, key="temp_show_hi_series")
+                show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
             with cb3:
                 show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
 
+            show_all_categories = st.checkbox(
+                "Show Heat Index reference lines", value=False, key="temp_show_categories"
+            )
+            show_categories = {
+                key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
+            }
+
             if not show_temp_series and not show_hi_series:
-                st.info("Select at least one of Temperature or Feels Like to show the graph.")
+                st.info("Select at least one of Temperature or Heat Index to show the graph.")
             else:
                 components.html(
                     render_temperature_chart_html(
@@ -1725,6 +1889,7 @@ elif view_mode == "Temperature Forecast":
                         show_temp=show_temp_series,
                         show_heat_index=show_hi_series,
                         show_ranges=show_ranges,
+                        show_categories=show_categories,
                     ),
                     height=380,
                 )
