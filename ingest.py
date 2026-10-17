@@ -179,9 +179,19 @@ def ingest_percentile_data() -> str | None:
         max_lead_hours=120,
         progress_callback=lambda frac, msg: print(f"[percentile] {frac:.0%} {msg}"),
     )
-    print(f"[percentile] Fetched. run_time={ds.attrs.get('run_time')}, shape={dict(ds.sizes)}")
+    print(f"[percentile] Fetched. run_time={ds.attrs.get('run_time')}, dims={dict(ds.sizes)}, coords={list(ds.coords)}")
     print(f"[percentile] Writing locally to {PERCENTILE_NC_PATH}")
     _write_netcdf_locally(ds, PERCENTILE_NC_PATH)
+
+    # Diagnostic: immediately re-read the just-written file (from local
+    # disk, not over HTTP) to check whether step_instant survives the
+    # NetCDF write/read round-trip -- isolates a write/read-format problem
+    # from a construction problem in fetch_percentile_grid() itself.
+    # Temporary; remove once the step_instant issue is confirmed resolved.
+    verify_ds = xr.open_dataset(PERCENTILE_NC_PATH, engine="h5netcdf")
+    print(f"[percentile] Round-trip check -- dims={dict(verify_ds.sizes)}, coords={list(verify_ds.coords)}")
+    verify_ds.close()
+
     print("[percentile] Done.")
     return ds.attrs.get("run_time")
 
