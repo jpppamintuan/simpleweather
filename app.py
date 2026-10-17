@@ -21,6 +21,7 @@ from ecmwf_client import (
     read_threshold_result_from_store,
     read_percentile_raw_from_store,
     read_temperature_percentiles_from_store,
+    PH_BBOX,
 )
 import github_data_source
 
@@ -74,6 +75,49 @@ def get_true_point(location_name: str) -> tuple[float, float]:
     the true location) -- NOT what's used to request data."""
     loc = LOCATIONS[location_name]
     return loc["lat"], loc["lon"]
+
+
+_CUSTOM_COORDS_OPTION = "Custom coordinates"
+
+
+def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
+    """Shared location picker used by all three views: the preset
+    LOCATIONS dropdown, plus a "Custom coordinates" option that reveals
+    two number inputs (hard-bounded to PH_BBOX -- the same box every
+    stored grid is actually cropped to, so a point outside it has no
+    data to look up at all) and a small st.map() preview so the point
+    can be sanity-checked before fetching.
+
+    Returns (location_name, query_lat, query_lon, true_lat, true_lon) --
+    for a preset location this is exactly get_query_point()/
+    get_true_point() as before; for a custom point, query and true are
+    identical (there's no override concept for a point the person typed
+    in themselves -- that's specifically for correcting a PRESET
+    location's auto-selected grid cell, e.g. Bambang's).
+    """
+    options = list(LOCATIONS.keys()) + [_CUSTOM_COORDS_OPTION]
+    selected = st.selectbox("Location", options, key=f"{key_prefix}_location")
+
+    if selected != _CUSTOM_COORDS_OPTION:
+        query_lat, query_lon = get_query_point(selected)
+        true_lat, true_lon = get_true_point(selected)
+        return selected, query_lat, query_lon, true_lat, true_lon
+
+    coord_col1, coord_col2 = st.columns(2)
+    with coord_col1:
+        custom_lat = st.number_input(
+            "Latitude", min_value=PH_BBOX["lat_min"], max_value=PH_BBOX["lat_max"],
+            value=14.6, step=0.01, format="%.4f", key=f"{key_prefix}_custom_lat",
+        )
+    with coord_col2:
+        custom_lon = st.number_input(
+            "Longitude", min_value=PH_BBOX["lon_min"], max_value=PH_BBOX["lon_max"],
+            value=121.0, step=0.01, format="%.4f", key=f"{key_prefix}_custom_lon",
+        )
+    st.map(pd.DataFrame({"lat": [custom_lat], "lon": [custom_lon]}), zoom=9)
+
+    location_name = f"Custom ({custom_lat:.4f}\u00b0N, {custom_lon:.4f}\u00b0E)"
+    return location_name, custom_lat, custom_lon, custom_lat, custom_lon
 
 CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
 
@@ -1506,9 +1550,7 @@ view_mode = st.session_state["view_mode"]
 if view_mode == "Threshold Forecast":
     col1, col2 = st.columns([2, 1])
     with col1:
-        location_name = st.selectbox("Location", list(LOCATIONS.keys()))
-        lat, lon = get_query_point(location_name)  # what's actually requested
-        true_lat, true_lon = get_true_point(location_name)  # for the "(exact)" display below
+        location_name, lat, lon, true_lat, true_lon = location_picker("threshold")
     with col2:
         lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
@@ -1688,8 +1730,7 @@ elif view_mode == "Percentile Rainfall Forecast":
 
     pct_col1, pct_col2 = st.columns([2, 1])
     with pct_col1:
-        pct_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="pct_location")
-        pct_lat, pct_lon = get_query_point(pct_location_name)
+        pct_location_name, pct_lat, pct_lon, _pct_true_lat, _pct_true_lon = location_picker("percentile")
     with pct_col2:
         pct_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
@@ -1814,8 +1855,7 @@ elif view_mode == "Temperature Forecast":
 
     temp_col1, temp_col2 = st.columns([2, 1])
     with temp_col1:
-        temp_location_name = st.selectbox("Location", list(LOCATIONS.keys()), key="temp_location")
-        temp_lat, temp_lon = get_query_point(temp_location_name)
+        temp_location_name, temp_lat, temp_lon, _temp_true_lat, _temp_true_lon = location_picker("temperature")
     with temp_col2:
         temp_lead_hours = st.slider(
             "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
