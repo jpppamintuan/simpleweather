@@ -127,22 +127,27 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
 
     if selected == _SEARCH_PLACE_OPTION:
         places = _load_ph_locations()
-        place_names = [p["display_name"] for p in places]
-        # Defaults to the first alphabetical entry rather than an empty
-        # placeholder -- an empty selection would need an early st.stop(),
-        # which would also block the range slider and button that sit
-        # alongside this picker in every view's layout, making the page
-        # look broken rather than just "waiting for input." Every other
-        # mode here (presets, custom coordinates) also always has SOME
-        # valid default for the same reason.
-        chosen_name = st.selectbox(
-            "Type to search (city/municipality, province)",
-            place_names,
-            key=f"{key_prefix}_place_search",
-        )
-        place = next(p for p in places if p["display_name"] == chosen_name)
+        provinces = sorted({p["province"] for p in places})
+        search_col1, search_col2 = st.columns(2)
+        with search_col1:
+            # Defaults to the first alphabetical entry rather than an
+            # empty placeholder -- an empty selection would need an early
+            # st.stop(), which would also block the range slider and
+            # button that sit alongside this picker in every view's
+            # layout, making the page look broken rather than just
+            # "waiting for input." Every mode here always has SOME valid
+            # default for the same reason.
+            chosen_province = st.selectbox("Province", provinces, key=f"{key_prefix}_province_search")
+        places_in_province = [p for p in places if p["province"] == chosen_province]
+        with search_col2:
+            chosen_name = st.selectbox(
+                "City/Municipality",
+                [p["name"] for p in places_in_province],
+                key=f"{key_prefix}_place_search_{chosen_province}",  # resets the pick when province changes
+            )
+        place = next(p for p in places_in_province if p["name"] == chosen_name)
         st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=9)
-        return chosen_name, place["lat"], place["lon"], place["lat"], place["lon"]
+        return place["display_name"], place["lat"], place["lon"], place["lat"], place["lon"]
 
     coord_col1, coord_col2 = st.columns(2)
     with coord_col1:
