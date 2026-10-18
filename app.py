@@ -78,30 +78,71 @@ def get_true_point(location_name: str) -> tuple[float, float]:
 
 
 _CUSTOM_COORDS_OPTION = "Custom coordinates"
+_SEARCH_PLACE_OPTION = "Search Philippine city/municipality"
+_PH_LOCATIONS_FILE = Path(__file__).parent / "ph_locations.json"
+
+# Loaded once per process and cached -- this is static reference data
+# (PSA-sourced city/municipality names and coordinates, see
+# ph_locations.json's own provenance notes) that never changes at
+# runtime, unlike everything else this app reads, so a plain module-level
+# cache (no TTL, no invalidation) is correct here, not a simplification
+# to revisit later.
+_ph_locations_cache: list[dict] | None = None
+
+
+def _load_ph_locations() -> list[dict]:
+    global _ph_locations_cache
+    if _ph_locations_cache is None:
+        with open(_PH_LOCATIONS_FILE, encoding="utf-8") as f:
+            _ph_locations_cache = json.load(f)
+    return _ph_locations_cache
 
 
 def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
     """Shared location picker used by all three views: the preset
-    LOCATIONS dropdown, plus a "Custom coordinates" option that reveals
-    two number inputs (hard-bounded to PH_BBOX -- the same box every
-    stored grid is actually cropped to, so a point outside it has no
-    data to look up at all) and a small st.map() preview so the point
-    can be sanity-checked before fetching.
+    LOCATIONS dropdown, a "Search Philippine city/municipality" option
+    covering ~1,655 PSA-sourced places nationwide (searchable via
+    Streamlit's own built-in type-to-filter selectbox -- no custom search
+    logic needed), and a "Custom coordinates" option with two number
+    inputs (hard-bounded to PH_BBOX -- the same box every stored grid is
+    actually cropped to, so a point outside it has no data to look up at
+    all). Both of the latter two show a small st.map() preview so the
+    point can be sanity-checked before fetching.
 
     Returns (location_name, query_lat, query_lon, true_lat, true_lon) --
     for a preset location this is exactly get_query_point()/
-    get_true_point() as before; for a custom point, query and true are
-    identical (there's no override concept for a point the person typed
-    in themselves -- that's specifically for correcting a PRESET
-    location's auto-selected grid cell, e.g. Bambang's).
+    get_true_point() as before; for a searched place or a custom point,
+    query and true are identical (there's no override concept for a
+    point looked up or typed in directly -- that's specifically for
+    correcting a PRESET location's auto-selected grid cell, e.g.
+    Bambang's).
     """
-    options = list(LOCATIONS.keys()) + [_CUSTOM_COORDS_OPTION]
+    options = list(LOCATIONS.keys()) + [_SEARCH_PLACE_OPTION, _CUSTOM_COORDS_OPTION]
     selected = st.selectbox("Location", options, key=f"{key_prefix}_location")
 
-    if selected != _CUSTOM_COORDS_OPTION:
+    if selected not in (_SEARCH_PLACE_OPTION, _CUSTOM_COORDS_OPTION):
         query_lat, query_lon = get_query_point(selected)
         true_lat, true_lon = get_true_point(selected)
         return selected, query_lat, query_lon, true_lat, true_lon
+
+    if selected == _SEARCH_PLACE_OPTION:
+        places = _load_ph_locations()
+        place_names = [p["display_name"] for p in places]
+        # Defaults to the first alphabetical entry rather than an empty
+        # placeholder -- an empty selection would need an early st.stop(),
+        # which would also block the range slider and button that sit
+        # alongside this picker in every view's layout, making the page
+        # look broken rather than just "waiting for input." Every other
+        # mode here (presets, custom coordinates) also always has SOME
+        # valid default for the same reason.
+        chosen_name = st.selectbox(
+            "Type to search (city/municipality, province)",
+            place_names,
+            key=f"{key_prefix}_place_search",
+        )
+        place = next(p for p in places if p["display_name"] == chosen_name)
+        st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=9)
+        return chosen_name, place["lat"], place["lon"], place["lat"], place["lon"]
 
     coord_col1, coord_col2 = st.columns(2)
     with coord_col1:
