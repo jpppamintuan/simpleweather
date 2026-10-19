@@ -1377,7 +1377,12 @@ def render_temperature_chart_html(
                 // Hides the band-boundary series (P10/P90) from the legend --
                 // they're visually obvious as shading, listing them by name
                 // just clutters the legend with near-duplicate entries.
-                filter: (item) => !item.text.includes("P10") && !item.text.includes("P90"),
+                // Heat Index category reference lines are ALSO hidden here --
+                // they're already labeled directly on the chart (see
+                // categoryLabelPlugin above), so listing them again in the
+                // legend is redundant.
+                filter: (item) => !item.text.includes("P10") && !item.text.includes("P90")
+                  && !categoryFullLabels.has(item.text),
               }},
             }},
             tooltip: {{
@@ -1387,6 +1392,26 @@ def render_temperature_chart_html(
               // -- they're fixed constants, not data, so repeating their
               // value on every hover is just noise.
               filter: (item) => !categoryFullLabels.has(item.dataset.label),
+              // Display order P90 -> median -> P10 within each series
+              // (Temperature, then Heat Index), independent of the
+              // underlying dataset array order -- that array order is
+              // fixed by the P90-then-P10 adjacency the shaded-band fill
+              // mechanism needs (fill: "+1" means "fill to the next
+              // dataset"), so reordering the array itself would break the
+              // bands. itemSort only changes how items are LISTED in the
+              // tooltip popup, not how they're drawn.
+              itemSort: (a, b) => {{
+                const seriesRank = (label) => label.toLowerCase().includes("heat index") ? 1 : 0;
+                const statRank = (label) => {{
+                  if (label.includes("P90")) return 0;
+                  if (label.includes("median")) return 1;
+                  if (label.includes("P10")) return 2;
+                  return 3;
+                }};
+                const sr = seriesRank(a.dataset.label) - seriesRank(b.dataset.label);
+                if (sr !== 0) return sr;
+                return statRank(a.dataset.label) - statRank(b.dataset.label);
+              }},
               callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }},
             }},
           }},
@@ -1581,6 +1606,14 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
 
 
 
+# Location is chosen ONCE here, shared across all three feature views
+# below -- switching features no longer loses the selected location,
+# since this is a single picker/session-state entry rather than each
+# view running its own independent copy.
+location_name, lat, lon, true_lat, true_lon = location_picker("shared")
+
+st.divider()
+
 if "view_mode" not in st.session_state:
     st.session_state["view_mode"] = "Threshold Forecast"
 
@@ -1594,11 +1627,7 @@ if _selected_mode is not None:
 view_mode = st.session_state["view_mode"]
 
 if view_mode == "Threshold Forecast":
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        location_name, lat, lon, true_lat, true_lon = location_picker("threshold")
-    with col2:
-        lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
+    lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
     get_forecast_clicked = st.button("Get forecast", type="primary")
 
@@ -1774,13 +1803,10 @@ elif view_mode == "Percentile Rainfall Forecast":
         "since the raw member data involved is far too heavy to fetch on demand."
     )
 
-    pct_col1, pct_col2 = st.columns([2, 1])
-    with pct_col1:
-        pct_location_name, pct_lat, pct_lon, _pct_true_lat, _pct_true_lon = location_picker("percentile")
-    with pct_col2:
-        pct_lead_hours = st.slider(
-            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
-        )
+    pct_location_name, pct_lat, pct_lon = location_name, lat, lon  # shared picker, see above
+    pct_lead_hours = st.slider(
+        "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
+    )
 
     pct_clicked = st.button("Get percentile forecast", key="pct_button")
     pct_elapsed_placeholder = st.empty()
@@ -1899,13 +1925,10 @@ elif view_mode == "Temperature Forecast":
         "scheduled ingestion job, same as the views above -- no live fetch."
     )
 
-    temp_col1, temp_col2 = st.columns([2, 1])
-    with temp_col1:
-        temp_location_name, temp_lat, temp_lon, _temp_true_lat, _temp_true_lon = location_picker("temperature")
-    with temp_col2:
-        temp_lead_hours = st.slider(
-            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
-        )
+    temp_location_name, temp_lat, temp_lon = location_name, lat, lon  # shared picker, see above
+    temp_lead_hours = st.slider(
+        "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
+    )
 
     temp_clicked = st.button("Get temperature forecast", key="temp_button")
     temp_elapsed_placeholder = st.empty()
@@ -1953,14 +1976,14 @@ elif view_mode == "Temperature Forecast":
         if temp_show_graph:
             cb1, cb2, cb3 = st.columns(3)
             with cb1:
-                show_temp_series = st.checkbox("Temperature", value=True, key="temp_show_temp_series")
+                show_temp_series = st.checkbox("Temperature", value=False, key="temp_show_temp_series")
             with cb2:
                 show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
             with cb3:
                 show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
 
             show_all_categories = st.checkbox(
-                "Show Heat Index reference lines", value=False, key="temp_show_categories"
+                "Show Heat Index reference lines", value=True, key="temp_show_categories"
             )
             show_categories = {
                 key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
