@@ -1002,146 +1002,137 @@ def render_ribbon_chart_html(result: dict) -> str:
     """
 
 
-def _pct_detail_html_for_period(day: dict, percentiles: list[int]) -> str:
-    """One period's detail-panel content: a header (the date range) plus
-    one row per stat (mean, median, each percentile), matching the style
-    of _tooltip_html_for_window() for the threshold ribbon chart -- same
-    idea, just no color tiers here since these are mm amounts, not
-    probabilities."""
-    header = (
-        f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;"
-        f"color:{BASE_TEXT};background-color:#ffffff;"
-        f"border-bottom:1px solid rgba(0,0,0,0.12);'>{_fmt_ph(day['start_utc'])} to {_fmt_ph(day['end_utc'])}</div>"
-    )
-    stat_rows = [("Mean", "mean"), ("Median", "median")] + [(f"P{p}", f"p{p}") for p in percentiles]
-    rows = ""
-    for label, key in stat_rows:
-        val = day["stats"].get(key)
-        val_str = f"{val:.1f} mm" if val is not None else "—"
-        rows += (
-            f"<div style='padding:6px 10px;display:flex;justify-content:space-between;"
-            f"font-size:12px;color:{BASE_TEXT};border-bottom:1px solid rgba(0,0,0,0.08);'>"
-            f"<span>{label}</span><span style='font-weight:600;'>{val_str}</span></div>"
-        )
-    return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
+def _rain_bar_color(mm: float) -> str:
+    """Maps a period's representative rainfall amount to a single
+    lighter-to-darker blue gradient. Uses a FIXED absolute 0-100mm scale
+    (the same span as the app's existing threshold buckets), not a scale
+    relative to whatever's currently on screen -- so a given color always
+    means the same rainfall amount across every chart load, rather than
+    an ordinary day looking artificially severe just because it happens
+    to be the wettest day in THIS particular forecast window. Values
+    above 100mm clamp to the deepest color rather than continuing to
+    scale indefinitely."""
+    t = max(0.0, min(mm / 100.0, 1.0))
+    light = (227, 242, 253)  # soft near-white blue
+    dark = (10, 61, 145)  # deep, saturated blue
+    r = round(light[0] + (dark[0] - light[0]) * t)
+    g = round(light[1] + (dark[1] - light[1]) * t)
+    b = round(light[2] + (dark[2] - light[2]) * t)
+    return f"rgb({r},{g},{b})"
 
 
 def render_percentile_chart_html(pct_result: dict) -> str:
-    """Nested P10/P25-P75/P90 bands + median line for the raw-ensemble
-    percentile feature. Uses the same fill-between-adjacent-datasets
-    technique proven on the main ribbon chart (each dataset fills to the
-    NEXT dataset's line, not to a shared baseline) -- this data is
-    monotonic the same way (P10 <= P25 <= median <= P75 <= P90 always),
-    so the same trick avoids the alpha-blending-produces-wrong-colors bug
-    that approach was built to fix in the first place: P90 fills to P75
-    (light outer band), P75 fills to P25 (darker inner/interquartile
-    band), P25 fills to P10 (light outer band), P10 and Median are plain
-    lines with no further fill.
+    """Floating range bars (P10-P90 per period) -- replaces an earlier
+    nested-line-band design. Rainfall is a discrete per-period
+    accumulated amount, not a continuous quantity the way temperature
+    is, so a bar per period is a more natural fit than a continuous
+    line/band. Each bar is colored on a single blue gradient (see
+    _rain_bar_color()) driven by that period's MEDIAN, not its P90 --
+    the bar's SPAN already shows the worst-case spread, so coloring by
+    median keeps the two visual channels complementary (height =
+    uncertainty, color = typical severity) instead of redundant.
 
-    Also has a persistent per-period detail panel below the chart,
-    updating on hover/tap (same technique as the threshold ribbon
-    chart's dayDetailPanel) -- defaults to showing the first period as
-    soon as the chart loads.
+    The median is also drawn as a small dot per period, deliberately
+    NOT connected by a line across periods -- a connecting line would
+    visually imply a trend between discrete, independent periods, which
+    isn't a real thing here.
+
+    No persistent detail panel (unlike the old version, or the
+    threshold ribbon chart) -- the tooltip already shows the full
+    P10/median/P90 breakdown for whichever bar is hovered, which is
+    enough context for a deliberately minimal chart.
     """
     days = pct_result["days"]
     if not days:
         return ""
 
-    percentiles = pct_result["percentiles"]
-
-    # Day-only labels ("Fri 28") are ambiguous when each period is
-    # shorter than 24h -- multiple periods can land on the same calendar
-    # day. Showing each period's start time (e.g. "Fri 28, 12PM")
-    # disambiguates; harmless when period_hours == 24 too.
     day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
-    p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
-    p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
     p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
     median = [d["stats"]["median"] for d in days]
 
-    day_detail_html_by_day = [_pct_detail_html_for_period(d, percentiles) for d in days]
+    range_data = [[lo, hi] for lo, hi in zip(p10, p90)]
+    bar_colors = [_rain_bar_color(m) for m in median]
 
     labels_json = json.dumps(day_labels)
-    p10_json = json.dumps(p10)
-    p25_json = json.dumps(p25)
-    p75_json = json.dumps(p75)
-    p90_json = json.dumps(p90)
+    range_data_json = json.dumps(range_data)
+    bar_colors_json = json.dumps(bar_colors)
     median_json = json.dumps(median)
-    day_details_json = json.dumps(day_detail_html_by_day)
-
-    # P25/P75 keep the original P10/P90 shade; P10/P90 become lighter,
-    # since they now bound the outer (less central) bands.
-    inner_border = "rgba(0,123,255,0.4)"
-    inner_fill = "rgba(0,123,255,0.15)"
-    outer_border = "rgba(0,123,255,0.12)"
-    outer_fill = "rgba(0,123,255,0.04)"
+    p10_json = json.dumps(p10)
+    p90_json = json.dumps(p90)
 
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
     <div style="background-color:#ffffff;padding:8px;">
-      <div style="position:relative;width:100%;height:300px;">
-        <canvas id="pctChart"></canvas>
+      <div style="position:relative;width:100%;height:320px;">
+        <canvas id="pctBarChart"></canvas>
       </div>
-      <div id="pctDetailPanel" style="margin-top:10px;border-radius:6px;overflow:hidden;
-        border:1px solid rgba(0,0,0,0.12);"></div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script>
     (function() {{
       const labels = {labels_json};
-      const p10 = {p10_json};
-      const p25 = {p25_json};
-      const p75 = {p75_json};
-      const p90 = {p90_json};
-      const median = {median_json};
-      const dayDetailHtmlByDay = {day_details_json};
-      const panelEl = document.getElementById("pctDetailPanel");
+      const rangeData = {range_data_json};
+      const barColors = {bar_colors_json};
+      const medianData = {median_json};
+      const p10Data = {p10_json};
+      const p90Data = {p90_json};
 
-      function showPeriodDetail(context) {{
-        const {{ tooltip }} = context;
-        if (tooltip.opacity === 0 || tooltip.dataPoints.length === 0) {{
-          return;  // leave the panel showing whatever period it last showed
-        }}
-        const idx = tooltip.dataPoints[0].dataIndex;
-        panelEl.innerHTML = dayDetailHtmlByDay[idx];
-      }}
-
-      new Chart(document.getElementById("pctChart"), {{
-        type: "line",
+      new Chart(document.getElementById("pctBarChart"), {{
+        type: "bar",
         data: {{
           labels: labels,
           datasets: [
-            {{ label: "P90", data: p90, borderColor: "{outer_border}",
-               backgroundColor: "{outer_fill}", fill: "+1",
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "P75", data: p75, borderColor: "{inner_border}",
-               backgroundColor: "{inner_fill}", fill: "+1",
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "P25", data: p25, borderColor: "{inner_border}",
-               backgroundColor: "{outer_fill}", fill: "+1",
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "P10", data: p10, borderColor: "{outer_border}",
-               backgroundColor: "{outer_fill}", fill: false,
-               pointRadius: 0, tension: 0.3, borderWidth: 1 }},
-            {{ label: "Median", data: median, borderColor: "#0056b3",
-               backgroundColor: "#0056b3", fill: false,
-               pointRadius: 3, tension: 0.3, borderWidth: 2 }},
+            {{
+              type: "bar",
+              label: "Range (P10-P90)",
+              data: rangeData,
+              backgroundColor: barColors,
+              borderWidth: 0,
+              borderRadius: 3,
+              barPercentage: 0.7,
+              categoryPercentage: 0.8,
+            }},
+            {{
+              // A "line" dataset with showLine:false, NOT a scatter
+              // dataset -- scatter datasets want a numeric x-axis, which
+              // would conflict with the bar dataset's category axis
+              // (the `labels` array). A hidden-line dataset shares the
+              // same category axis as the bars, so the dots land
+              // exactly centered on each bar.
+              type: "line",
+              label: "Median",
+              data: medianData,
+              showLine: false,
+              pointRadius: 4,
+              pointBackgroundColor: "#0a1f44",
+              pointBorderColor: "#ffffff",
+              pointBorderWidth: 1.5,
+            }},
           ],
         }},
         options: {{
           responsive: true,
           maintainAspectRatio: false,
-          interaction: {{ mode: "index", intersect: false }},
           plugins: {{
             colors: {{ enabled: false, forceOverride: false }},
-            legend: {{ display: true, position: "bottom",
-              labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }} }},
-            // No floating tooltip -- the same content goes into the
-            // persistent panel below the graph instead (see
-            // showPeriodDetail), via this same hover/tap detection.
-            tooltip: {{ enabled: false, external: showPeriodDetail }},
+            legend: {{ display: false }},  // color/shape already carry the meaning; kept minimal
+            tooltip: {{
+              callbacks: {{
+                title: (items) => labels[items[0].dataIndex],
+                label: (ctx) => {{
+                  const i = ctx.dataIndex;
+                  if (ctx.dataset.label === "Median") {{
+                    return "Median: " + medianData[i].toFixed(1) + " mm";
+                  }}
+                  return [
+                    "P90 (worst case): " + p90Data[i].toFixed(1) + " mm",
+                    "P10 (best case): " + p10Data[i].toFixed(1) + " mm",
+                  ];
+                }},
+              }},
+            }},
           }},
           scales: {{
             y: {{ min: 0, ticks: {{ callback: (v) => v + " mm", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
@@ -1149,9 +1140,6 @@ def render_percentile_chart_html(pct_result: dict) -> str:
           }},
         }},
       }});
-
-      // Default to period 1 as soon as the chart is ready, before any hover.
-      panelEl.innerHTML = dayDetailHtmlByDay[0];
     }})();
     </script>
     """
@@ -1894,7 +1882,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         st.subheader(f"Percentile rainfall for {pct_location_name}")
         show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
         if show_graph:
-            components.html(render_percentile_chart_html(pct_result), height=600)
+            components.html(render_percentile_chart_html(pct_result), height=380)
         else:
             stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
             stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
