@@ -1026,21 +1026,29 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     nested-line-band design. Rainfall is a discrete per-period
     accumulated amount, not a continuous quantity the way temperature
     is, so a bar per period is a more natural fit than a continuous
-    line/band. Each bar is colored on a single blue gradient (see
-    _rain_bar_color()) driven by that period's MEDIAN, not its P90 --
-    the bar's SPAN already shows the worst-case spread, so coloring by
-    median keeps the two visual channels complementary (height =
-    uncertainty, color = typical severity) instead of redundant.
+    line/band. The outer bar (P10-P90) is colored on a single blue
+    gradient (see _rain_bar_color()) driven by that period's MEDIAN, not
+    its P90 -- the bar's SPAN already shows the worst-case spread, so
+    coloring by median keeps the two visual channels complementary
+    (height = uncertainty, color = typical severity) instead of
+    redundant.
 
-    The median is also drawn as a small dot per period, deliberately
-    NOT connected by a line across periods -- a connecting line would
-    visually imply a trend between discrete, independent periods, which
-    isn't a real thing here.
+    The P25-P75 interquartile range is drawn as a narrower, darker bar
+    nested inside the outer one, and the median as a small dot --
+    BOTH via a custom canvas-drawing plugin (afterDatasetsDraw, reading
+    each bar's actual rendered pixel geometry from
+    chart.getDatasetMeta(0).data[i]), not as separate Chart.js datasets.
+    An earlier version used a second "line" dataset (showLine:false) for
+    the median, which didn't reliably render when mixed with a floating
+    bar dataset -- drawing everything directly on the canvas, using the
+    exact same technique already proven for the Heat Index category
+    labels elsewhere in this file, sidesteps that uncertainty entirely
+    rather than guessing at another dataset-mixing fix.
 
     No persistent detail panel (unlike the old version, or the
     threshold ribbon chart) -- the tooltip already shows the full
-    P10/median/P90 breakdown for whichever bar is hovered, which is
-    enough context for a deliberately minimal chart.
+    P10/P25/median/P75/P90 breakdown for whichever bar is hovered, which
+    is enough context for a deliberately minimal chart.
     """
     days = pct_result["days"]
     if not days:
@@ -1048,6 +1056,8 @@ def render_percentile_chart_html(pct_result: dict) -> str:
 
     day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
+    p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
+    p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
     p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
     median = [d["stats"]["median"] for d in days]
 
@@ -1059,6 +1069,8 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     bar_colors_json = json.dumps(bar_colors)
     median_json = json.dumps(median)
     p10_json = json.dumps(p10)
+    p25_json = json.dumps(p25)
+    p75_json = json.dumps(p75)
     p90_json = json.dumps(p90)
 
     return f"""
@@ -1077,7 +1089,44 @@ def render_percentile_chart_html(pct_result: dict) -> str:
       const barColors = {bar_colors_json};
       const medianData = {median_json};
       const p10Data = {p10_json};
+      const p25Data = {p25_json};
+      const p75Data = {p75_json};
       const p90Data = {p90_json};
+
+      // Draws the P25-P75 inner bar and the median dot directly on the
+      // canvas, using each outer bar's ACTUAL rendered pixel position
+      // and width (not a guessed/computed layout) -- robust regardless
+      // of chart size, bar spacing settings, or responsive resizing.
+      const innerRangeAndMedianPlugin = {{
+        id: "innerRangeAndMedianPlugin",
+        afterDatasetsDraw(chart) {{
+          const {{ ctx, scales }} = chart;
+          const yScale = scales.y;
+          const meta = chart.getDatasetMeta(0);  // the P10-P90 outer bar dataset
+          ctx.save();
+          for (let i = 0; i < meta.data.length; i++) {{
+            const bar = meta.data[i];
+            if (!bar) continue;
+            const centerX = bar.x;
+            const innerWidth = Math.max(bar.width * 0.45, 4);
+
+            const yTop = yScale.getPixelForValue(p75Data[i]);
+            const yBottom = yScale.getPixelForValue(p25Data[i]);
+            ctx.fillStyle = "rgba(10,61,145,0.6)";
+            ctx.fillRect(centerX - innerWidth / 2, yTop, innerWidth, Math.max(yBottom - yTop, 1));
+
+            const medianY = yScale.getPixelForValue(medianData[i]);
+            ctx.beginPath();
+            ctx.arc(centerX, medianY, 4, 0, Math.PI * 2);
+            ctx.fillStyle = "#0a1f44";
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = "#ffffff";
+            ctx.stroke();
+          }}
+          ctx.restore();
+        }},
+      }};
 
       new Chart(document.getElementById("pctBarChart"), {{
         type: "bar",
@@ -1085,7 +1134,6 @@ def render_percentile_chart_html(pct_result: dict) -> str:
           labels: labels,
           datasets: [
             {{
-              type: "bar",
               label: "Range (P10-P90)",
               data: rangeData,
               backgroundColor: barColors,
@@ -1094,24 +1142,9 @@ def render_percentile_chart_html(pct_result: dict) -> str:
               barPercentage: 0.7,
               categoryPercentage: 0.8,
             }},
-            {{
-              // A "line" dataset with showLine:false, NOT a scatter
-              // dataset -- scatter datasets want a numeric x-axis, which
-              // would conflict with the bar dataset's category axis
-              // (the `labels` array). A hidden-line dataset shares the
-              // same category axis as the bars, so the dots land
-              // exactly centered on each bar.
-              type: "line",
-              label: "Median",
-              data: medianData,
-              showLine: false,
-              pointRadius: 4,
-              pointBackgroundColor: "#0a1f44",
-              pointBorderColor: "#ffffff",
-              pointBorderWidth: 1.5,
-            }},
           ],
         }},
+        plugins: [innerRangeAndMedianPlugin],
         options: {{
           responsive: true,
           maintainAspectRatio: false,
@@ -1123,11 +1156,11 @@ def render_percentile_chart_html(pct_result: dict) -> str:
                 title: (items) => labels[items[0].dataIndex],
                 label: (ctx) => {{
                   const i = ctx.dataIndex;
-                  if (ctx.dataset.label === "Median") {{
-                    return "Median: " + medianData[i].toFixed(1) + " mm";
-                  }}
                   return [
                     "P90 (worst case): " + p90Data[i].toFixed(1) + " mm",
+                    "P75: " + p75Data[i].toFixed(1) + " mm",
+                    "Median: " + medianData[i].toFixed(1) + " mm",
+                    "P25: " + p25Data[i].toFixed(1) + " mm",
                     "P10 (best case): " + p10Data[i].toFixed(1) + " mm",
                   ];
                 }},
