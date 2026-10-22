@@ -1002,6 +1002,17 @@ def render_ribbon_chart_html(result: dict) -> str:
     """
 
 
+def _fmt_period_range(d: dict) -> str:
+    """'Wed 21, 08AM - 11AM' (same-day period) or 'Wed 21, 10PM - Thu 22, 01AM'
+    (a period that crosses midnight) -- the full, unambiguous start-end
+    range for one period, for the percentile bar chart's tooltip title."""
+    start = d["start_utc"].astimezone(PH_TZ)
+    end = d["end_utc"].astimezone(PH_TZ)
+    start_str = start.strftime("%a %d, %I%p")
+    end_str = end.strftime("%I%p") if start.date() == end.date() else end.strftime("%a %d, %I%p")
+    return f"{start_str} \u2013 {end_str}"
+
+
 def _rain_bar_color(mm: float) -> str:
     """Maps a period's representative rainfall amount to a single
     lighter-to-darker blue gradient. Uses a FIXED absolute 0-100mm scale
@@ -1055,6 +1066,13 @@ def render_percentile_chart_html(pct_result: dict) -> str:
         return ""
 
     day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
+    # Full start-end range, used for the tooltip TITLE specifically --
+    # the x-axis label alone (e.g. "Wed 21, 08AM") only shows each
+    # period's START, which was genuinely ambiguous about whether the
+    # bar covers the hours before or after that time. Spelling out the
+    # full range on hover removes that ambiguity without cluttering the
+    # x-axis itself with longer text.
+    period_range_labels = [_fmt_period_range(d) for d in days]
     p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
     p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
     p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
@@ -1065,6 +1083,7 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     bar_colors = [_rain_bar_color(m) for m in median]
 
     labels_json = json.dumps(day_labels)
+    period_range_labels_json = json.dumps(period_range_labels)
     range_data_json = json.dumps(range_data)
     bar_colors_json = json.dumps(bar_colors)
     median_json = json.dumps(median)
@@ -1085,6 +1104,7 @@ def render_percentile_chart_html(pct_result: dict) -> str:
     <script>
     (function() {{
       const labels = {labels_json};
+      const periodRangeLabels = {period_range_labels_json};
       const rangeData = {range_data_json};
       const barColors = {bar_colors_json};
       const medianData = {median_json};
@@ -1108,7 +1128,7 @@ def render_percentile_chart_html(pct_result: dict) -> str:
             const bar = meta.data[i];
             if (!bar) continue;
             const centerX = bar.x;
-            const innerWidth = Math.max(bar.width * 0.45, 4);
+            const innerWidth = bar.width;  // same width as the outer P10-P90 bar
 
             const yTop = yScale.getPixelForValue(p75Data[i]);
             const yBottom = yScale.getPixelForValue(p25Data[i]);
@@ -1141,6 +1161,12 @@ def render_percentile_chart_html(pct_result: dict) -> str:
               borderRadius: 3,
               barPercentage: 0.7,
               categoryPercentage: 0.8,
+              // Caps how wide a bar can get in pixels, regardless of how
+              // much category space is available -- without this, bars
+              // get visually oversized with a short forecast range or a
+              // long time step, where few categories means each one gets
+              // a lot of horizontal room by default.
+              maxBarThickness: 48,
             }},
           ],
         }},
@@ -1153,15 +1179,15 @@ def render_percentile_chart_html(pct_result: dict) -> str:
             legend: {{ display: false }},  // color/shape already carry the meaning; kept minimal
             tooltip: {{
               callbacks: {{
-                title: (items) => labels[items[0].dataIndex],
+                title: (items) => periodRangeLabels[items[0].dataIndex],
                 label: (ctx) => {{
                   const i = ctx.dataIndex;
                   return [
-                    "P90 (worst case): " + p90Data[i].toFixed(1) + " mm",
+                    "P90: " + p90Data[i].toFixed(1) + " mm",
                     "P75: " + p75Data[i].toFixed(1) + " mm",
                     "Median: " + medianData[i].toFixed(1) + " mm",
                     "P25: " + p25Data[i].toFixed(1) + " mm",
-                    "P10 (best case): " + p10Data[i].toFixed(1) + " mm",
+                    "P10: " + p10Data[i].toFixed(1) + " mm",
                   ];
                 }},
               }},
