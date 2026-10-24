@@ -737,6 +737,37 @@ def fetch_threshold_grid(
         _notify(progress_callback, 0.6, "Decoding GRIB2 data...")
         ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
 
+        # Sanity-check the decode BEFORE trusting it. cfgrib silently skips
+        # corrupted GRIB messages ("skipping corrupted Message" to stdout)
+        # rather than raising -- a real, observed failure mode (ECMWF
+        # occasionally serves a file with some bad messages in it) that
+        # otherwise looks exactly like success: no exception, just a
+        # quietly incomplete dataset. Without this check, ingestion would
+        # write that incomplete data to storage and report success,
+        # leaving every subsequent app read broken until the next good
+        # ingestion run overwrote it. Two things are checked: every
+        # expected threshold variable is present, and the step count is
+        # at least close to what was requested (a wrong/incomplete count
+        # is exactly what corrupted-message skipping produces).
+        missing_vars = [p for p in params if p not in ds.data_vars]
+        if missing_vars:
+            raise RuntimeError(
+                f"Threshold grid for model={model} is missing expected variable(s) "
+                f"{missing_vars} (decoded dataset has: {list(ds.data_vars)}) -- likely "
+                f"cfgrib silently skipped corrupted GRIB messages in the downloaded "
+                f"file rather than raising an error. Treating this as a failed fetch "
+                f"rather than writing incomplete data to storage."
+            )
+        actual_step_count = ds.sizes.get("step", 0)
+        expected_step_count = len(step_labels)
+        if actual_step_count < expected_step_count * 0.9:  # small tolerance, not an exact match requirement
+            raise RuntimeError(
+                f"Threshold grid for model={model} decoded with only {actual_step_count} "
+                f"of {expected_step_count} expected steps -- likely the same corrupted-"
+                f"message issue. Treating this as a failed fetch rather than writing "
+                f"incomplete data to storage."
+            )
+
         run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
 
         _notify(progress_callback, 0.8, "Cropping to bounding box...")
