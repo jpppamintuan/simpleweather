@@ -43,7 +43,7 @@ MAX_MANIFEST_AGE_HOURS = 2
 
 # Module-level cache for the manifest fetch, shared across every dataset
 # freshness check within the same process. Previously each check
-# (threshold-IFS, threshold-AIFS, percentile) called _fetch_manifest()
+# (threshold, percentile, temperature) called _fetch_manifest()
 # independently -- up to 3 separate HTTP requests for the SAME file per
 # page load, meaning one transient network hiccup could make everything
 # look stale at once. One shared, short-lived cache fixes that.
@@ -135,9 +135,9 @@ def _fetch_manifest(timeout_seconds: float = 8.0) -> dict | None:
 
 
 def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
-    """Returns (is_fresh, manifest). dataset_name is 'threshold_ifs',
-    'threshold_aifs-ens', or 'percentile', matching the keys ingest.py
-    writes into run_times.
+    """Returns (is_fresh, manifest). dataset_name is 'threshold',
+    'percentile' or 'temperature', matching the keys ingest.py writes
+    into run_times.
 
     is_fresh checks how recently ingestion itself last ran/checked
     (manifest["generated_at"]), NOT how old the underlying model run is
@@ -173,53 +173,51 @@ def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
     return is_fresh, manifest
 
 
-def _open_remote_netcdf(relative_path: str, timeout_seconds: float = 30.0) -> xr.Dataset:
-    """Fetches a NetCDF file via a single, plain HTTP GET -- the same
-    simple, proven pattern _fetch_manifest() has always used successfully
-    -- and opens it from the downloaded bytes. No remote-filesystem
-    abstraction, no multi-file layout, no consolidated metadata: just one
-    file, one request. Replaces an earlier Zarr-based approach that ran
-    into a persistent, never-fully-diagnosed KeyError('.zmetadata') --
-    see ingest.py's module docstring for the full story."""
+def _open_remote_netcdf(relative_path: str, timeout_seconds: float = 60.0, lazy: bool = False) -> xr.Dataset:
+    """Fetches a NetCDF file via a single, plain HTTP GET and opens it from
+    the downloaded bytes. No remote-filesystem abstraction, no multi-file
+    layout -- see ingest.py's module docstring for why (an earlier Zarr
+    approach hit a never-diagnosed KeyError('.zmetadata')).
+
+    lazy=False reads everything into memory (fine for the small threshold
+    grid). lazy=True keeps only the compressed file bytes in memory and
+    decompresses on access -- used for the per-member percentile and
+    temperature grids, which are hundreds of MB once decompressed at
+    0.1 deg but only need one location's chunks read per request."""
     url = f"{_base_url()}/{relative_path}"
     resp = requests.get(url, timeout=timeout_seconds)
     resp.raise_for_status()
-    return xr.open_dataset(io.BytesIO(resp.content), engine="h5netcdf").load()
+    ds = xr.open_dataset(io.BytesIO(resp.content), engine="h5netcdf")
+    return ds if lazy else ds.load()
 
 
-def load_threshold_grid(model: str = "ifs") -> xr.Dataset | None:
-    """Returns the stored threshold grid for the given model ('ifs' or
-    'aifs-ens') if fresh, else None (the normal, expected case when
-    there's nothing fresh yet -- app.py's caller falls back to a live
-    fetch for this, no error involved).
+def load_threshold_grid() -> xr.Dataset | None:
+    """Returns the stored threshold grid (0.25 or 0.1 deg, whichever
+    ingestion last published -- see ds.attrs["resolution"]) if fresh, else
+    None (the normal, expected case when there's nothing fresh yet --
+    app.py's caller falls back to a live 0.25 deg fetch, no error).
 
-    Does NOT catch exceptions from _open_remote_netcdf() itself -- unlike
-    the "not fresh yet" case above, a real read/parse failure is a bug,
-    and should surface loudly via app.py's existing error display rather
-    than silently degrading into another "just live fetch" case. That
-    silent swallowing here (an earlier version of this function) is
-    exactly what hid a persistent read-side bug for weeks: every store
-    read was failing, but it just looked like "still slow, guess the
-    store isn't fresh yet" instead of a visible, diagnosable error."""
-    is_fresh, _ = check_dataset_freshness(f"threshold_{model}")
+    Does NOT catch exceptions from _open_remote_netcdf() itself: unlike
+    "not fresh yet", a real read/parse failure is a bug and should surface
+    loudly rather than degrade silently into "just live fetch" (that
+    silent swallowing is exactly what hid a read-side bug for weeks)."""
+    is_fresh, _ = check_dataset_freshness("threshold")
     if not is_fresh:
         return None
-    return _open_remote_netcdf(f"{model}/threshold_latest.nc")
+    return _open_remote_netcdf("ifs/threshold_latest.nc")
 
 
 def load_percentile_grid() -> xr.Dataset:
-    """Returns the stored percentile grid. Deliberately does NOT gate on
-    freshness the way load_threshold_grid() does -- there's no live
-    fetch fallback for percentile anymore (the raw-member fetch is ~1.7GB
-    and takes 10+ minutes, completely inappropriate as an on-demand
-    fallback for a user request), so showing whatever ingestion most
-    recently produced is always better than showing nothing. Freshness is
-    entirely the scheduled ingestion job's responsibility now (see
-    ingest.yml's schedule -- it already chases every run, 00/06/12/18Z).
+    """Returns the stored per-member rainfall grid (lazily opened).
+    Deliberately does NOT gate on freshness the way load_threshold_grid()
+    does -- there's no live-fetch fallback for this (the raw-member fetch
+    is far too heavy for an on-demand request), so showing whatever
+    ingestion most recently produced beats showing nothing. Raises on
+    failure rather than swallowing, so a real read-side problem shows up
+    as a visible traceback."""
+    return _open_remote_netcdf("ifs/percentile_latest.nc", lazy=True)
 
-    Raises on failure rather than swallowing to None -- kept deliberately
-    loud (unlike load_threshold_grid()) so a real read-side problem shows
-    up as a visible traceback via the app's existing error-details
-    expander, instead of silently degrading into an opaque "not
-    available" message with no diagnostic value."""
-    return _open_remote_netcdf("ifs/percentile_latest.nc")
+
+def load_temperature_grid() -> xr.Dataset:
+    """Same, for the per-member temperature / heat-index grid."""
+    return _open_remote_netcdf("ifs/temperature_latest.nc", lazy=True)
