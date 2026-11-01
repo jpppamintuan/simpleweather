@@ -7,13 +7,14 @@ fields for 24h accumulated total precipitation: tpg1, tpg5, tpg10, tpg20,
 tpg25, tpg50, tpg100 (mm). These are fixed thresholds baked into the model
 output, computed from a 50-member ensemble.
 
-Supports two ECMWF ensemble models via the `model` parameter: "ifs" (the
-default physics-based ENS) and "aifs-ens" (ECMWF's newer AI-based
-ensemble). Both publish the same product structure and parameter names --
-only the Client's `model=` kwarg differs between them.
+IFS ENS is published at 0.25 deg and (from 20 Oct 2026) 0.1 deg, the
+latter ~2 hours after the former, as separate -sfc/-pl files. The
+ingestion-side grid fetchers below take a `resol` ("0p25" / "0p1") and a
+pinned run time; the live-fetch path (the app's last-resort fallback)
+stays at 0.25 deg. The AIFS ensemble is no longer used.
 
 All 5 thresholds used by the app (1/5/20/50/100 mm) are fetched in a single
-combined request per model (one file, one network round trip) rather than
+combined request (one file, one network round trip) rather than
 one request per threshold -- this is the main optimization over the earlier
 version. If the combined request fails for any reason, the client falls
 back to fetching thresholds one at a time so the app still works, just
@@ -42,12 +43,34 @@ THRESHOLD_COLORS = {
     100: "#800080",
 }
 
-# ECMWF's physics-based ensemble (the original/default) vs. their newer
-# AI-based ensemble model. Both publish the same "ep" (probability) product
-# type with the same tpg1/tpg5/tpg20/tpg50/tpg100 parameter names -- the
-# only difference in the request is the `model=` kwarg on the Client.
-MODEL_LABELS = {"ifs": "ECMWF ENS", "aifs-ens": "AIFS ENS"}
-DEFAULT_MODEL = "ifs"
+# Grid spacings IFS ENS open data is published at. 0.25 deg arrives first;
+# 0.1 deg follows ~2h later as separate -sfc/-pl files (everything this app
+# uses is surface-level, so only the -sfc file is ever requested).
+RESOLUTIONS = ["0p25", "0p1"]  # ascending order of preference
+RESOLUTION_RANK = {r: i for i, r in enumerate(RESOLUTIONS)}
+RESOLUTION_LABELS = {"0p25": "0.25\u00b0", "0p1": "0.1\u00b0"}
+DEFAULT_RESOLUTION = "0p25"
+
+# 0.1 deg fields are ~6x bigger, so the grid fetchers download them in small
+# batches of steps -- cropping each batch to the bbox and deleting its GRIB
+# file before the next -- instead of one multi-GB file. None = one request.
+STEPS_PER_CHUNK = {"0p25": None, "0p1": 6}
+
+
+def _make_client(resol: str = DEFAULT_RESOLUTION) -> Client:
+    return Client(source="ecmwf", resol=resol)
+
+
+def _request_extras(resol: str) -> dict:
+    """0.1 deg files are split into -sfc/-pl, so the level type must be
+    named; 0.25 deg files are combined and need no such keyword."""
+    return {"levtype": "sfc"} if resol == "0p1" else {}
+
+
+def _run_kwargs(run_dt) -> dict:
+    """Pins a request to one specific run (instead of 'latest'), so the run
+    that was checked is the run that gets downloaded and labeled."""
+    return {"date": run_dt.strftime("%Y%m%d"), "time": run_dt.hour}
 
 # Generous bounding box around the Philippines -- covers all preset
 # locations with plenty of room to spare, sized for arbitrary-point
@@ -78,14 +101,10 @@ def _request_step_labels(max_lead_days: int, increment_hours: int = 12, max_step
     alignment in _aligned_end_steps() below rather than more buffer here.
     General formula: buffer = 24 - increment_hours.
 
-    max_step_hours matters specifically for AIFS: per ECMWF's own
-    documentation, AIFS ENS publishes the ep product at 12h-spaced steps
-    for all four run times (00/06/12/18Z) -- same increment as IFS, not
-    the 6h I'd assumed in an earlier attempt at this fix. The actual
-    limitation is that 06Z and 18Z runs are capped at step 144 (day 6),
-    while 00Z/12Z runs go to the full step 360 (day 15). Requesting beyond
-    a run's actual cap is what caused "no aligned windows" -- the request
-    for out-of-range steps was failing silently rather than erroring."""
+    max_step_hours: 06Z and 18Z runs are capped at step 144 (day 6), while
+    00Z/12Z runs go to the full step 360 (day 15). Requesting beyond a
+    run's actual cap fails silently, which shows up later as "no aligned
+    windows"."""
     target_hours = max_lead_days * 24
     buffer_hours = 24 - increment_hours
     buffered_hours = min(target_hours + buffer_hours, max_step_hours)
@@ -107,10 +126,10 @@ def _extract_point_series(ds: xr.Dataset, var_name: str, point) -> dict[int, flo
     return values
 
 
-def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn, model: str):
+def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
     """Single request for all thresholds at once. Raises on any failure so the
     caller can fall back to per-threshold requests."""
-    client = Client(source="ecmwf", model=model)
+    client = _make_client(DEFAULT_RESOLUTION)
     params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
     target = str(Path(tmpdir) / "combined.grib2")
 
@@ -149,9 +168,9 @@ def _fetch_combined(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn
     return run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes
 
 
-def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn, model: str):
+def _fetch_separate(lat, lon, step_labels, tmpdir, progress_callback: ProgressFn):
     """Fallback: one request per threshold (slower, but more forgiving)."""
-    client = Client(source="ecmwf", model=model)
+    client = _make_client(DEFAULT_RESOLUTION)
     run_time = grid_lat = grid_lon = None
     raw_by_threshold: dict[int, dict[int, float]] = {}
     size_bytes = 0
@@ -232,31 +251,26 @@ def _dissemination_available_time(run_time):
         return run_time + timedelta(hours=8, minutes=1)
 
 
-def _effective_threshold_request(model: str, requested_max_lead_days: int) -> tuple[int, bool]:
-    """Both IFS ENS and AIFS ENS publish 4x/day (00/06/12/18Z), but only
-    the 00Z/12Z runs carry the full 15-day threshold product -- 06Z/18Z
-    runs for EITHER model are capped at day 6 (step 144). (An earlier
-    version of this only applied the cap to AIFS, on the mistaken
-    assumption that regular IFS ENS only ever publishes at 00Z/12Z -- it
-    doesn't; 06Z/18Z IFS runs exist and have the same day-6 cap.)
+def _cap_for_run_hour(run_hour, requested_max_lead_days: int) -> tuple[int, bool]:
+    """00Z/12Z runs carry the full 15-day threshold product; 06Z/18Z runs
+    are capped at day 6 (step 144). Returns (lead days actually safe to
+    request, whether a cap was applied). An unknown run hour gets the
+    conservative 6-day cap."""
+    if run_hour is None or run_hour in (6, 18):
+        return min(requested_max_lead_days, 6), requested_max_lead_days > 6
+    return requested_max_lead_days, False
 
-    Since we don't know in advance which run is currently latest, this
-    does one cheap metadata-only check (Client.latest(), no data
-    download) to find out, and returns the lead days actually safe to
-    request plus whether a cap was applied. On check failure, defaults
-    to the conservative 6-day cap rather than risking a request for
-    steps that may not exist for whatever run turns out to be latest."""
+
+def _effective_threshold_request(requested_max_lead_days: int) -> tuple[int, bool]:
+    """Live-fetch path only (ingestion knows its run hour up front): one
+    cheap metadata-only check for the latest 0.25 deg run, then the cap
+    above."""
     try:
-        latest = check_latest_threshold_run(model)
-        latest_dt = getattr(latest, "datetime", latest)
-        run_hour = latest_dt.hour
+        latest = check_latest_threshold_run(DEFAULT_RESOLUTION)
+        run_hour = getattr(latest, "datetime", latest).hour
     except Exception:
         run_hour = None
-
-    if run_hour is None or run_hour in (6, 18):
-        effective = min(requested_max_lead_days, 6)
-        return effective, requested_max_lead_days > 6
-    return requested_max_lead_days, False
+    return _cap_for_run_hour(run_hour, requested_max_lead_days)
 
 
 def fetch_forecast_table(
@@ -264,10 +278,10 @@ def fetch_forecast_table(
     lon: float,
     max_lead_days: int = 15,
     progress_callback: ProgressFn = None,
-    model: str = DEFAULT_MODEL,
 ) -> dict:
     """
-    Fetch all thresholds for a location and return a structured result:
+    Live fetch (0.25 deg only) of all thresholds for ONE location -- the
+    app's last-resort fallback when the ingested store isn't fresh. Returns:
 
     {
         "run_time": datetime (UTC),
@@ -278,23 +292,13 @@ def fetch_forecast_table(
         "next_expected": datetime (UTC),
         "downloaded_bytes": int | None,
         "fetch_mode": "combined" | "separate",
-        "model": str,
+        "resolution": "0p25",
     }
 
     progress_callback, if given, is called as progress_callback(fraction, message)
-    at various points during the fetch (fraction in [0, 1]).
-
-    model selects which ECMWF ensemble to query: "ifs" (the default
-    physics-based ENS) or "aifs-ens" (ECMWF's newer AI-based ensemble).
-    Note: available_since/next_expected are estimated from IFS's published
-    dissemination schedule regardless of which model is requested -- AIFS
-    runs on a different production pipeline with its own (undocumented,
-    as far as this app knows) timing, so those two fields are a rougher
-    estimate for AIFS than for IFS. Everything else (the actual forecast
-    data, run time, grid point) comes directly from the fetched file and
-    is exact either way.
+    (fraction in [0, 1]).
     """
-    effective_max_lead_days, capped_to_day6 = _effective_threshold_request(model, max_lead_days)
+    effective_max_lead_days, capped_to_day6 = _effective_threshold_request(max_lead_days)
     max_step_hours = 144 if capped_to_day6 else 360
     step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=max_step_hours)
 
@@ -303,7 +307,7 @@ def fetch_forecast_table(
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_combined(
-                lat, lon, step_labels, tmpdir, progress_callback, model
+                lat, lon, step_labels, tmpdir, progress_callback
             )
             fetch_mode = "combined"
         except Exception:
@@ -313,7 +317,7 @@ def fetch_forecast_table(
                 "Combined request failed, retrying per threshold...",
             )
             run_time, grid_lat, grid_lon, raw_by_threshold, size_bytes = _fetch_separate(
-                lat, lon, step_labels, tmpdir, progress_callback, model
+                lat, lon, step_labels, tmpdir, progress_callback
             )
             fetch_mode = "separate"
 
@@ -327,7 +331,7 @@ def fetch_forecast_table(
         raw_by_threshold=raw_by_threshold,
         end_steps=end_steps,
         max_lead_days=max_lead_days,
-        model=model,
+        resolution=DEFAULT_RESOLUTION,
         downloaded_bytes=size_bytes,
         fetch_mode=fetch_mode,
         capped_to_day6=capped_to_day6,
@@ -343,7 +347,7 @@ def _build_threshold_result(
     raw_by_threshold: dict,
     end_steps: list[int],
     max_lead_days: int,
-    model: str,
+    resolution: str,
     downloaded_bytes,
     fetch_mode: str,
     capped_to_day6: bool,
@@ -361,10 +365,8 @@ def _build_threshold_result(
 
     if not aligned_end_steps:
         # 12h-spaced steps from a 06Z or 18Z run can never land on a 00 UTC
-        # boundary (only 06/18 UTC ones) -- this happens for AIFS, which
-        # runs 4x/day, unlike IFS which only ever produces this product at
-        # 00Z/12Z. Rather than show nothing, align to the run's own hour
-        # instead of insisting on exactly midnight UTC.
+        # boundary (only 06/18 UTC ones). Rather than show nothing, align
+        # to the run's own hour instead of insisting on exactly midnight UTC.
         aligned_end_steps = _aligned_end_steps(run_hour, end_steps, target_hour=run_hour)
         aligned_to_utc_midnight = False
 
@@ -405,7 +407,7 @@ def _build_threshold_result(
         "next_expected": next_expected,
         "downloaded_bytes": downloaded_bytes,
         "fetch_mode": fetch_mode,
-        "model": model,
+        "resolution": resolution,
         "aligned_to_utc_midnight": aligned_to_utc_midnight,
         "capped_to_day6": capped_to_day6,
     }
@@ -416,20 +418,23 @@ PERCENTILE_BIN_HOURS = 3  # ECMWF's native accumulation granularity for this pro
 AVAILABLE_PERIOD_HOURS = [3, 6, 12, 24]
 
 
-def check_latest_threshold_run(model: str = DEFAULT_MODEL):
+def check_latest_threshold_run(resol: str = DEFAULT_RESOLUTION):
     """Cheap metadata-only check for the most recent available threshold
-    (ep) run -- does NOT download any data, per ecmwf-opendata's
-    documented Client.latest() behavior. Used by ingestion to decide
-    whether a full fetch is actually needed before paying for one."""
-    client = Client(source="ecmwf", model=model)
-    return client.latest(stream="enfo", type="ep", param=_param_for(AVAILABLE_THRESHOLDS_MM[0]))
+    (ep) run at the given resolution -- does NOT download any data (per
+    ecmwf-opendata's documented Client.latest() behavior). Raises or
+    returns None if that product isn't published at that resolution."""
+    return _make_client(resol).latest(
+        stream="enfo", type="ep", param=_param_for(AVAILABLE_THRESHOLDS_MM[0]),
+        **_request_extras(resol),
+    )
 
 
-def check_latest_percentile_run():
-    """Cheap metadata-only check for the most recent available raw-member
-    (pf) run -- does NOT download any data."""
-    client = Client(source="ecmwf")
-    return client.latest(stream="enfo", type="pf", param="tp")
+def check_latest_pf_run(resol: str = DEFAULT_RESOLUTION):
+    """Same, for the raw-member (pf) product that precipitation and
+    temperature percentiles are computed from."""
+    return _make_client(resol).latest(
+        stream="enfo", type="pf", param="tp", **_request_extras(resol),
+    )
 
 
 def fetch_percentile_rainfall(
@@ -667,6 +672,7 @@ def aggregate_percentile_bins(
         "period_hours": period_hours,
         "percentiles": percentiles,
         "downloaded_bytes": raw_result.get("downloaded_bytes"),
+        "resolution": raw_result.get("resolution"),
     }
 
 
@@ -697,88 +703,130 @@ def _crop_to_bbox(ds: xr.Dataset, bbox: dict) -> xr.Dataset:
     return ds.sel(latitude=lat_slice, longitude=slice(lon_min, lon_max))
 
 
+_CORE_COORDS = {"number", "step", "latitude", "longitude", "time"}
+
+
+def _keep_core_coords(ds: xr.Dataset) -> xr.Dataset:
+    """Drops the extra scalar coordinates cfgrib attaches (heightAboveGround,
+    surface, valid_time, ...). None are used downstream (times are derived
+    from `time` + `step`), and they only add merge/serialization noise."""
+    extra = [c for c in ds.coords if c not in _CORE_COORDS]
+    return ds.drop_vars(extra) if extra else ds
+
+
+def _verify_run_time(ds: xr.Dataset, expected_run_dt):
+    """Ingestion pins each request to a specific run; confirms what came
+    back really is that run, rather than trusting the pin silently."""
+    run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
+    if run_time.replace(tzinfo=None) != expected_run_dt.replace(tzinfo=None):
+        raise RuntimeError(
+            f"Downloaded data is for run {run_time.isoformat()}, "
+            f"expected {expected_run_dt.isoformat()}"
+        )
+    return run_time
+
+
+def _retrieve_cropped(
+    *, resol: str, run_dt, request: dict, steps: list, bbox: dict, tmpdir: str,
+    progress_callback: ProgressFn = None, progress_span=(0.1, 0.8), label: str = "data",
+) -> xr.Dataset:
+    """Downloads `steps` for `request` at `resol` in batches (see
+    STEPS_PER_CHUNK), cropping each batch to `bbox` and deleting its GRIB
+    file before fetching the next, then stitches the batches back together
+    along `step`. At 0.25 deg that's one batch, i.e. the same single
+    request as before."""
+    client = _make_client(resol)
+    extras = {**_request_extras(resol), **_run_kwargs(run_dt)}
+    per_chunk = STEPS_PER_CHUNK.get(resol) or len(steps)
+    chunks = [steps[i:i + per_chunk] for i in range(0, len(steps), per_chunk)]
+    lo, hi = progress_span
+
+    pieces = []
+    total_bytes = 0
+    for i, chunk in enumerate(chunks):
+        _notify(progress_callback, lo + (hi - lo) * i / len(chunks),
+                f"Fetching {label} at {resol}, batch {i + 1}/{len(chunks)}...")
+        target = Path(tmpdir) / f"{label}_{i}.grib2"
+        result = client.retrieve(step=chunk, target=str(target), **request, **extras)
+        total_bytes += getattr(result, "size", 0) or 0
+
+        ds = xr.open_dataset(str(target), engine="cfgrib", backend_kwargs={"indexpath": ""})
+        try:
+            piece = _crop_to_bbox(ds, bbox).load()  # resolve into memory before the file goes
+        finally:
+            ds.close()
+        target.unlink(missing_ok=True)
+
+        piece = piece.drop_vars("valid_time", errors="ignore")
+        if "step" not in piece.dims:  # cfgrib squeezes a 1-step batch to a scalar coordinate
+            piece = piece.expand_dims("step")
+        pieces.append(piece)
+
+    print(f"[{label}] downloaded {total_bytes / 1e9:.2f} GB at {resol} in {len(chunks)} batch(es)", flush=True)
+    if len(pieces) == 1:
+        return pieces[0].sortby("step")
+    return xr.concat(pieces, dim="step", coords="minimal", compat="override").sortby("step")
+
+
 def fetch_threshold_grid(
     bbox: dict,
+    run_dt,
+    resol: str = DEFAULT_RESOLUTION,
     max_lead_days: int = 15,
-    model: str = DEFAULT_MODEL,
     progress_callback: ProgressFn = None,
 ) -> xr.Dataset:
     """
     Ingestion counterpart to fetch_forecast_table(): fetches the same
-    precomputed threshold-exceedance product (the 5 combined thresholds),
-    but returns the CROPPED GRID over `bbox` instead of a single
-    nearest-neighbor point.
+    precomputed threshold-exceedance product (the 5 combined thresholds)
+    for one specific run (`run_dt`, naive UTC) at `resol`, and returns the
+    CROPPED GRID over `bbox` instead of a single nearest-neighbor point.
 
     bbox: {"lat_min":, "lat_max":, "lon_min":, "lon_max":} in degrees,
     longitude in -180..180 (converted internally if the source grid uses
     0..360).
 
     Deliberately does NOT do the 24h-window alignment fetch_forecast_table()
-    does (aligning 12h-spaced steps to 00 UTC boundaries etc.) -- that's a
-    display/query concern, kept out of ingestion the same way percentile
-    aggregation was kept out of fetch_percentile_rainfall() above. The
-    returned dataset's "step" dimension is the raw request steps in hours;
-    whatever reads this later (the Worker, in Phase 2) does that alignment
-    at query time.
+    does -- that's a display/query concern. The returned dataset's "step"
+    dimension is the raw request steps in hours.
     """
-    effective_max_lead_days, capped_to_day6 = _effective_threshold_request(model, max_lead_days)
+    effective_max_lead_days, capped_to_day6 = _cap_for_run_hour(run_dt.hour, max_lead_days)
     max_step_hours = 144 if capped_to_day6 else 360
     step_labels = _request_step_labels(effective_max_lead_days, increment_hours=12, max_step_hours=max_step_hours)
+    params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
+
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        client = Client(source="ecmwf", model=model)
-        params = [_param_for(t) for t in AVAILABLE_THRESHOLDS_MM]
-        target = str(Path(tmpdir) / "combined.grib2")
+        ds = _retrieve_cropped(
+            resol=resol, run_dt=run_dt, request=dict(stream="enfo", type="ep", param=params),
+            steps=step_labels, bbox=bbox, tmpdir=tmpdir,
+            progress_callback=progress_callback, progress_span=(0.1, 0.9), label="threshold",
+        )
 
-        _notify(progress_callback, 0.15, "Requesting latest forecast (5 thresholds, full grid)...")
-        client.retrieve(stream="enfo", type="ep", step=step_labels, param=params, target=target)
+    # Sanity-check the decode BEFORE trusting it. cfgrib silently skips
+    # corrupted GRIB messages rather than raising -- a real, observed
+    # failure mode that otherwise looks exactly like success. Checks every
+    # expected threshold variable is present and the step count is close
+    # to what was requested.
+    missing_vars = [p for p in params if p not in ds.data_vars]
+    if missing_vars:
+        raise RuntimeError(
+            f"Threshold grid ({resol}) is missing expected variable(s) {missing_vars} "
+            f"(decoded dataset has: {list(ds.data_vars)}) -- likely cfgrib silently "
+            f"skipped corrupted GRIB messages. Treating this as a failed fetch."
+        )
+    actual_step_count = ds.sizes.get("step", 0)
+    expected_step_count = len(step_labels)
+    if actual_step_count < expected_step_count * 0.9:
+        raise RuntimeError(
+            f"Threshold grid ({resol}) decoded with only {actual_step_count} of "
+            f"{expected_step_count} expected steps -- likely the same corrupted-"
+            f"message issue (or an incomplete cycle). Treating this as a failed fetch."
+        )
 
-        _notify(progress_callback, 0.6, "Decoding GRIB2 data...")
-        ds = xr.open_dataset(target, engine="cfgrib", backend_kwargs={"indexpath": ""})
-
-        # Sanity-check the decode BEFORE trusting it. cfgrib silently skips
-        # corrupted GRIB messages ("skipping corrupted Message" to stdout)
-        # rather than raising -- a real, observed failure mode (ECMWF
-        # occasionally serves a file with some bad messages in it) that
-        # otherwise looks exactly like success: no exception, just a
-        # quietly incomplete dataset. Without this check, ingestion would
-        # write that incomplete data to storage and report success,
-        # leaving every subsequent app read broken until the next good
-        # ingestion run overwrote it. Two things are checked: every
-        # expected threshold variable is present, and the step count is
-        # at least close to what was requested (a wrong/incomplete count
-        # is exactly what corrupted-message skipping produces).
-        missing_vars = [p for p in params if p not in ds.data_vars]
-        if missing_vars:
-            raise RuntimeError(
-                f"Threshold grid for model={model} is missing expected variable(s) "
-                f"{missing_vars} (decoded dataset has: {list(ds.data_vars)}) -- likely "
-                f"cfgrib silently skipped corrupted GRIB messages in the downloaded "
-                f"file rather than raising an error. Treating this as a failed fetch "
-                f"rather than writing incomplete data to storage."
-            )
-        actual_step_count = ds.sizes.get("step", 0)
-        expected_step_count = len(step_labels)
-        if actual_step_count < expected_step_count * 0.9:  # small tolerance, not an exact match requirement
-            raise RuntimeError(
-                f"Threshold grid for model={model} decoded with only {actual_step_count} "
-                f"of {expected_step_count} expected steps -- likely the same corrupted-"
-                f"message issue. Treating this as a failed fetch rather than writing "
-                f"incomplete data to storage."
-            )
-
-        run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
-
-        _notify(progress_callback, 0.8, "Cropping to bounding box...")
-        ds = _crop_to_bbox(ds, bbox).load()  # .load() -- resolve into memory before the tmpdir is deleted
-
+    run_time = _verify_run_time(ds, run_dt)
     ds.attrs["run_time"] = run_time.isoformat()
-    ds.attrs["model"] = model
-    # int, not bool -- NetCDF/h5netcdf has no boolean attribute type and
-    # raises CompatibilityError on write if given one. 0/1 round-trips
-    # through .attrs.get(...) fine for the truthy checks that consume this
-    # downstream (read_threshold_result_from_store, app.py's UI caption).
+    ds.attrs["resolution"] = resol
+    # int, not bool -- NetCDF/h5netcdf has no boolean attribute type.
     ds.attrs["capped_to_day6"] = int(capped_to_day6)
     _notify(progress_callback, 1.0, "Done")
     return ds
@@ -877,166 +925,118 @@ def _find_var(ds: xr.Dataset, candidates: list[str]) -> str:
     raise KeyError(f"None of {candidates} found in dataset (has: {list(ds.data_vars)})")
 
 
-def fetch_percentile_grid(
+def fetch_precip_grid(
     bbox: dict,
+    run_dt,
+    resol: str = DEFAULT_RESOLUTION,
     max_lead_hours: int = 120,
     progress_callback: ProgressFn = None,
 ) -> xr.Dataset:
     """
-    Ingestion counterpart to fetch_percentile_rainfall(): fetches raw tp
-    (precipitation), 2t (2m temperature), and 2d (2m dewpoint temperature)
-    from all 50 members at every native 3-hourly step, and returns the
-    CROPPED GRID over `bbox` with per-member values for all three --
-    precipitation as 3-hour bin totals, temperature/heat index as direct
-    per-step instantaneous values (see below for why those use different
-    step dimensions).
+    Ingestion counterpart to fetch_percentile_rainfall(): raw tp from all
+    50 ENS perturbed members at every native 3-hourly step, for one
+    specific run at `resol`, cropped to `bbox`, diffed from cumulative-
+    since-start into true per-3-hour-bin amounts (see
+    fetch_percentile_rainfall()'s docstring for why diffing consecutive
+    steps is required). Variable: precip_3h_mm(number, step, lat, lon).
 
-    tp and 2t/2d are fetched via SEPARATE retrieve calls and merged
-    afterward, rather than one combined request -- tp is an accumulated
-    field (stepType=accum) while 2t/2d are instantaneous (stepType=instant);
-    mixing stepTypes in one GRIB file is a known source of cfgrib decode
-    issues, and this couldn't be tested against the live API ahead of
-    time, so the safer two-request approach is used deliberately.
-
-    PRECIPITATION: diffs consecutive cumulative steps into true
-    per-3-hour-bin amounts (see fetch_percentile_rainfall()'s docstring
-    for why diffing against the previous step is required) -- "step"
-    dimension, 3-hour bins, bin_hours stored as an attr.
-
-    TEMPERATURE / HEAT INDEX: 2t and 2d are already instantaneous values
-    at each step (no diffing needed) -- relative humidity is derived from
-    temperature + dewpoint (_relative_humidity_from_temp_dewpoint()),
-    then combined with temperature into Heat Index
-    (_heat_index_celsius()). Stored on a separate "step_instant"
-    dimension (same 3-hourly spacing, but including step=0 -- the
-    analysis/"right now" reading -- which precipitation's diffed bins
-    don't have) to avoid a dimension-size conflict with precipitation's
-    "step" dimension in the same Dataset.
-
-    Storing per-member values (not already-computed percentiles) is
-    deliberate: percentiles for an arbitrary future query point get
-    computed on demand by whatever reads this (the Worker, in Phase 2),
-    the same way aggregate_percentile_bins() and
-    read_temperature_percentiles_from_store() do it today for the live
-    app -- ingestion's job is just getting the raw numbers stored.
+    Per-member values (not precomputed percentiles) are stored on purpose:
+    percentiles for an arbitrary point, and sums into 6/12/24h periods,
+    are computed on demand by whatever reads this.
     """
     max_lead_hours = min(max_lead_hours, 120)
-    bin_hours = PERCENTILE_BIN_HOURS
-    steps = list(range(0, max_lead_hours + 1, bin_hours))
+    steps = list(range(0, max_lead_hours + 1, PERCENTILE_BIN_HOURS))
     numbers = list(range(1, 51))
 
     _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
-
     with tempfile.TemporaryDirectory() as tmpdir:
-        client = Client(source="ecmwf")
-
-        # --- Precipitation ---
-        tp_target = str(Path(tmpdir) / "tp_members.grib2")
-        _notify(progress_callback, 0.1, f"Requesting {len(steps)} steps x 50 members (precipitation)...")
-        client.retrieve(stream="enfo", type="pf", param="tp", step=steps, number=numbers, target=tp_target)
-
-        _notify(progress_callback, 0.35, "Decoding precipitation GRIB2 data...")
-        ds_tp = xr.open_dataset(tp_target, engine="cfgrib", backend_kwargs={"indexpath": ""})
-        run_time = pd.Timestamp(ds_tp.time.values).to_pydatetime().replace(tzinfo=UTC)
-
-        ds_tp = _crop_to_bbox(ds_tp, bbox).sortby("step")
-        tp_var = _find_var(ds_tp, ["tp"])
-        tp_mm = ds_tp[tp_var] * 1000.0
-        period_mm = tp_mm.diff(dim="step")  # each entry = precip during that specific 3h bin
-        period_mm = period_mm.clip(min=0)  # guard tiny negative float noise
-        ds_precip = period_mm.to_dataset(name="precip_3h_mm").load()
-
-        # --- Temperature / dewpoint -> relative humidity -> heat index ---
-        t2m_target = str(Path(tmpdir) / "t2m_members.grib2")
-        _notify(progress_callback, 0.45, f"Requesting {len(steps)} steps x 50 members (temperature, dewpoint)...")
-        client.retrieve(
-            stream="enfo", type="pf", param=["2t", "2d"], step=steps, number=numbers, target=t2m_target
+        ds_tp = _retrieve_cropped(
+            resol=resol, run_dt=run_dt,
+            request=dict(stream="enfo", type="pf", param="tp", number=numbers),
+            steps=steps, bbox=bbox, tmpdir=tmpdir,
+            progress_callback=progress_callback, progress_span=(0.05, 0.9), label="precipitation",
         )
 
-        _notify(progress_callback, 0.7, "Decoding temperature GRIB2 data...")
-        ds_t = xr.open_dataset(t2m_target, engine="cfgrib", backend_kwargs={"indexpath": ""})
-        ds_t = _crop_to_bbox(ds_t, bbox).sortby("step")
-
-        t2m_var = _find_var(ds_t, ["t2m", "2t"])
-        d2m_var = _find_var(ds_t, ["d2m", "2d"])
-        temp_c = ds_t[t2m_var] - 273.15
-        dewpoint_c = ds_t[d2m_var] - 273.15
-
-        print(
-            f"[fetch_percentile_grid] raw temp_c range: "
-            f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
-            f"dewpoint_c range: [{float(dewpoint_c.min()):.1f}, {float(dewpoint_c.max()):.1f}]"
-        )
-
-        # Defensive clip to a physically plausible range BEFORE computing
-        # RH/Heat Index. Both the Magnus-Tetens approximation and the
-        # Rothfusz Heat Index regression are empirical fits, only
-        # valid/stable within a bounded input range -- extrapolating
-        # either on a wildly out-of-range value (e.g. a rare bad grid
-        # point, or data right at the Magnus-Tetens formula's
-        # near-singularity as dewpoint_c approaches -243.04) can produce
-        # physically absurd outputs rather than a graceful error (this is
-        # the actual, confirmed cause of the ~-20,000C heat index values
-        # seen in practice). Bounds are generous for Philippines
-        # near-surface conditions, not tight physical limits -- the point
-        # is to guard the formulas' valid domain, not to be a precise
-        # climatology check.
-        temp_c = temp_c.clip(-10, 50)
-        dewpoint_c = dewpoint_c.clip(-10, 40)
-
-        _notify(progress_callback, 0.85, "Computing relative humidity and heat index...")
-        rh_pct = _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c)
-        heat_index_c = _heat_index_celsius(temp_c, rh_pct)
-
-        print(
-            f"[fetch_percentile_grid] clipped temp_c range: "
-            f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
-            f"rh_pct range: [{float(rh_pct.min()):.1f}, {float(rh_pct.max()):.1f}], "
-            f"heat_index_c range: [{float(heat_index_c.min()):.1f}, {float(heat_index_c.max()):.1f}]"
-        )
-
-        ds_temp = xr.Dataset({"temperature_c": temp_c, "heat_index_c": heat_index_c})
-        # rename_dims + rename_vars done explicitly and separately (rather
-        # than the combined .rename() shorthand) so it's unambiguous that
-        # BOTH the dimension itself and its associated dimension-coordinate
-        # end up renamed -- easier to reason about than relying on the
-        # shorthand to handle both implicitly.
-        ds_temp = ds_temp.rename_dims({"step": "step_instant"})
-        if "step" in ds_temp.coords:
-            ds_temp = ds_temp.rename_vars({"step": "step_instant"})
-
-        # Drop non-essential coordinates cfgrib auto-attaches (valid_time,
-        # heightAboveGround, etc.) BEFORE merging with ds_precip. Renaming
-        # the "step" dimension above does NOT rename these -- they're
-        # separately-named coordinates that merely depend on that
-        # dimension, so e.g. "valid_time" still ends up as a same-named
-        # coordinate in both ds_precip and ds_temp, holding genuinely
-        # different values (40 diffed bin-end-times vs. 41 raw
-        # instant-times) -- xr.merge correctly refuses to silently pick
-        # one and raises MergeError instead. None of these are used
-        # downstream (read_temperature_percentiles_from_store computes
-        # times directly from run_time + the step hours).
-        #
-        # Keeping only the dimension coordinates plus the scalar "time"
-        # reference (NOT a blanket reset_coords(drop=True), which would
-        # also strip "time" itself, breaking run_time downstream) --
-        # programmatic rather than hardcoding "valid_time" specifically,
-        # so a different extra coordinate cfgrib attaches in the future
-        # can't cause this same collision again.
-        needed_coords = {"number", "step_instant", "latitude", "longitude", "time"}
-        extra_coords = [c for c in ds_temp.coords if c not in needed_coords]
-        if extra_coords:
-            ds_temp = ds_temp.drop_vars(extra_coords)
-
-        ds_temp = ds_temp.load()
-
-        print(f"[fetch_percentile_grid] ds_temp dims: {dict(ds_temp.sizes)}, coords: {list(ds_temp.coords)}")
-
-        ds_out = xr.merge([ds_precip, ds_temp])
-        print(f"[fetch_percentile_grid] ds_out dims: {dict(ds_out.sizes)}, coords: {list(ds_out.coords)}")
+    run_time = _verify_run_time(ds_tp, run_dt)
+    tp_mm = ds_tp[_find_var(ds_tp, ["tp"])] * 1000.0
+    period_mm = tp_mm.diff(dim="step").clip(min=0)  # clip: guard tiny negative float noise
+    ds_out = _keep_core_coords(period_mm.to_dataset(name="precip_3h_mm"))
 
     ds_out.attrs["run_time"] = run_time.isoformat()
-    ds_out.attrs["bin_hours"] = bin_hours
+    ds_out.attrs["resolution"] = resol
+    ds_out.attrs["bin_hours"] = PERCENTILE_BIN_HOURS
+    print(f"[fetch_precip_grid] dims={dict(ds_out.sizes)}, coords={list(ds_out.coords)}")
+    _notify(progress_callback, 1.0, "Done")
+    return ds_out
+
+
+def fetch_temperature_grid(
+    bbox: dict,
+    run_dt,
+    resol: str = DEFAULT_RESOLUTION,
+    max_lead_hours: int = 120,
+    progress_callback: ProgressFn = None,
+) -> xr.Dataset:
+    """
+    2m temperature and 2m dewpoint from all 50 ENS perturbed members at
+    every native 3-hourly step (including step=0, the analysis), for one
+    specific run at `resol`, cropped to `bbox`. Both are instantaneous
+    values, so no diffing. Relative humidity is derived from temperature +
+    dewpoint (ECMWF doesn't publish 2m RH directly), then combined with
+    temperature into Heat Index. Variables: temperature_c and
+    heat_index_c, each (number, step, lat, lon).
+
+    Stored as its own dataset (not merged with precipitation, as an
+    earlier version did): the two views are independent, each file stays
+    small enough to publish and to read, and there's no longer a
+    dimension-size conflict to work around.
+    """
+    max_lead_hours = min(max_lead_hours, 120)
+    steps = list(range(0, max_lead_hours + 1, PERCENTILE_BIN_HOURS))
+    numbers = list(range(1, 51))
+
+    _notify(progress_callback, 0.05, "Connecting to ECMWF Open Data...")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ds_t = _retrieve_cropped(
+            resol=resol, run_dt=run_dt,
+            request=dict(stream="enfo", type="pf", param=["2t", "2d"], number=numbers),
+            steps=steps, bbox=bbox, tmpdir=tmpdir,
+            progress_callback=progress_callback, progress_span=(0.05, 0.85), label="temperature",
+        )
+
+    run_time = _verify_run_time(ds_t, run_dt)
+    temp_c = ds_t[_find_var(ds_t, ["t2m", "2t"])] - 273.15
+    dewpoint_c = ds_t[_find_var(ds_t, ["d2m", "2d"])] - 273.15
+
+    print(
+        f"[fetch_temperature_grid] raw temp_c range: "
+        f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
+        f"dewpoint_c range: [{float(dewpoint_c.min()):.1f}, {float(dewpoint_c.max()):.1f}]"
+    )
+
+    # Defensive clip to a physically plausible range BEFORE computing
+    # RH/Heat Index: both the Magnus-Tetens approximation and the Rothfusz
+    # regression are empirical fits that produce absurd outputs (this was
+    # the confirmed cause of ~-20,000C heat index values) if extrapolated
+    # on a wildly out-of-range input.
+    temp_c = temp_c.clip(-10, 50)
+    dewpoint_c = dewpoint_c.clip(-10, 40)
+
+    _notify(progress_callback, 0.9, "Computing relative humidity and heat index...")
+    rh_pct = _relative_humidity_from_temp_dewpoint(temp_c, dewpoint_c)
+    heat_index_c = _heat_index_celsius(temp_c, rh_pct)
+
+    print(
+        f"[fetch_temperature_grid] clipped temp_c range: "
+        f"[{float(temp_c.min()):.1f}, {float(temp_c.max()):.1f}], "
+        f"rh_pct range: [{float(rh_pct.min()):.1f}, {float(rh_pct.max()):.1f}], "
+        f"heat_index_c range: [{float(heat_index_c.min()):.1f}, {float(heat_index_c.max()):.1f}]"
+    )
+
+    ds_out = _keep_core_coords(xr.Dataset({"temperature_c": temp_c, "heat_index_c": heat_index_c}))
+    ds_out.attrs["run_time"] = run_time.isoformat()
+    ds_out.attrs["resolution"] = resol
+    print(f"[fetch_temperature_grid] dims={dict(ds_out.sizes)}, coords={list(ds_out.coords)}")
     _notify(progress_callback, 1.0, "Done")
     return ds_out
 
@@ -1092,7 +1092,7 @@ def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max
         raw_by_threshold=raw_by_threshold,
         end_steps=end_steps,
         max_lead_days=max_lead_days,
-        model=ds.attrs.get("model", DEFAULT_MODEL),
+        resolution=str(ds.attrs.get("resolution", DEFAULT_RESOLUTION)),
         downloaded_bytes=None,  # not meaningful here -- the heavy download already happened during ingestion
         fetch_mode="store",
         capped_to_day6=bool(ds.attrs.get("capped_to_day6", False)),  # stored as int 0/1, see write side
@@ -1112,9 +1112,11 @@ def read_percentile_raw_from_store(ds: xr.Dataset, lat: float, lon: float, max_l
     # rejects that, so cast explicitly here rather than relying on it staying a plain int.
 
     lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
-    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+    # .load() on just this point: the store dataset is opened lazily (it's
+    # large at 0.1 deg), so this reads only the chunks covering one location.
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest").load()
 
-    var_name = list(ds.data_vars)[0]  # 'precip_3h_mm'
+    var_name = "precip_3h_mm"
     step_hours = (pd.to_timedelta(ds.step.values) / pd.Timedelta(hours=1)).astype(int)
     order = np.argsort(step_hours)
 
@@ -1141,6 +1143,7 @@ def read_percentile_raw_from_store(ds: xr.Dataset, lat: float, lon: float, max_l
         "bins": bins,
         "bin_hours": bin_hours,
         "downloaded_bytes": None,  # heavy download already happened during ingestion
+        "resolution": str(ds.attrs.get("resolution", DEFAULT_RESOLUTION)),
     }
 
 
@@ -1153,7 +1156,7 @@ def read_temperature_percentiles_from_store(
 ) -> dict:
     """Reads per-member temperature and heat index values from the stored
     percentile grid (the temperature_c/heat_index_c variables written by
-    fetch_percentile_grid(), computed from 2m temperature + derived
+    fetch_temperature_grid(), computed from 2m temperature + derived
     relative humidity) and computes percentile stats across the 50
     members at each native 3-hourly step directly.
 
@@ -1171,9 +1174,9 @@ def read_temperature_percentiles_from_store(
     run_time = pd.Timestamp(ds.time.values).to_pydatetime().replace(tzinfo=UTC)
 
     lon_query = lon % 360 if float(ds.longitude.max()) > 180 else lon
-    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest")
+    point = ds.sel(latitude=lat, longitude=lon_query, method="nearest").load()  # lazy store, see above
 
-    step_hours = (pd.to_timedelta(point.step_instant.values) / pd.Timedelta(hours=1)).astype(int)
+    step_hours = (pd.to_timedelta(point.step.values) / pd.Timedelta(hours=1)).astype(int)
     order = np.argsort(step_hours)
     max_steps = max_lead_hours // PERCENTILE_BIN_HOURS + 1  # +1 -- step=0 is included here, unlike precip's bins
 
@@ -1187,8 +1190,8 @@ def read_temperature_percentiles_from_store(
     for idx in order[:max_steps]:
         idx = int(idx)
         h = int(step_hours[idx])
-        temp_vals = point["temperature_c"].isel(step_instant=idx).values
-        hi_vals = point["heat_index_c"].isel(step_instant=idx).values
+        temp_vals = point["temperature_c"].isel(step=idx).values
+        hi_vals = point["heat_index_c"].isel(step=idx).values
         steps_out.append({
             "time_utc": run_time + timedelta(hours=h),
             "temperature_stats": _stats(temp_vals),
@@ -1201,4 +1204,5 @@ def read_temperature_percentiles_from_store(
         "grid_lon": float(point.longitude.values) if float(point.longitude.values) <= 180 else float(point.longitude.values) - 360,
         "steps": steps_out,
         "percentiles": percentiles,
+        "resolution": str(ds.attrs.get("resolution", DEFAULT_RESOLUTION)),
     }
