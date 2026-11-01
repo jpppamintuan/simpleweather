@@ -1,6 +1,5 @@
 import json
 import math
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +11,7 @@ import streamlit.components.v1 as components
 from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
     THRESHOLD_COLORS,
-    MODEL_LABELS,
+    RESOLUTION_LABELS,
     PH_TZ,
     DEFAULT_PERCENTILES,
     AVAILABLE_PERIOD_HOURS,
@@ -165,7 +164,9 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
     location_name = f"Custom ({custom_lat:.4f}\u00b0N, {custom_lon:.4f}\u00b0E)"
     return location_name, custom_lat, custom_lon, custom_lat, custom_lon
 
-CACHE_TTL_SECONDS = 3 * 60 * 60  # ENS updates twice a day (00/12 UTC)
+# Short on purpose: ingestion upgrades a run from 0.25 deg to 0.1 deg ~2h after
+# it first appears, and a long TTL would keep serving the 0.25 deg copy.
+CACHE_TTL_SECONDS = 15 * 60
 
 # Shared across ALL browser sessions on this running server process (unlike
 # st.session_state, which is per-session). This is what makes repeat
@@ -179,7 +180,7 @@ _GLOBAL_CACHE: dict = {}
 # a full redeploy (new git push) or the app moving to a different host
 # would still reset it, since it's a plain file next to the script, not an
 # external database.
-_CACHE_FILE = Path(__file__).parent / "forecast_cache.json"
+_CACHE_FILE = Path(__file__).parent / "forecast_cache_v2.json"  # v2: no model in the key; an old-format file is never read
 
 
 def _serialize_result(result: dict) -> dict:
@@ -200,7 +201,7 @@ def _serialize_result(result: dict) -> dict:
         "next_expected": dt(result["next_expected"]),
         "downloaded_bytes": result.get("downloaded_bytes"),
         "fetch_mode": result.get("fetch_mode"),
-        "model": result.get("model"),
+        "resolution": result.get("resolution"),
     }
 
 
@@ -222,18 +223,18 @@ def _deserialize_result(d: dict) -> dict:
         "next_expected": pdt(d["next_expected"]),
         "downloaded_bytes": d.get("downloaded_bytes"),
         "fetch_mode": d.get("fetch_mode"),
-        "model": d.get("model"),
+        "resolution": d.get("resolution"),
     }
 
 
 def _cache_key_to_str(key: tuple) -> str:
-    lat, lon, lead_days, model = key
-    return f"{lat}|{lon}|{lead_days}|{model}"
+    lat, lon, lead_days = key
+    return f"{lat}|{lon}|{lead_days}"
 
 
 def _cache_key_from_str(s: str) -> tuple:
-    lat, lon, lead_days, model = s.split("|")
-    return (float(lat), float(lon), int(lead_days), model)
+    lat, lon, lead_days = s.split("|")
+    return (float(lat), float(lon), int(lead_days))
 
 
 def _load_disk_cache() -> None:
@@ -309,6 +310,7 @@ def _serialize_pct_result(result: dict) -> dict:
         ],
         "bin_hours": result["bin_hours"],
         "downloaded_bytes": result.get("downloaded_bytes"),
+        "resolution": result.get("resolution"),
     }
 
 
@@ -330,6 +332,7 @@ def _deserialize_pct_result(d: dict) -> dict:
         ],
         "bin_hours": d["bin_hours"],
         "downloaded_bytes": d.get("downloaded_bytes"),
+        "resolution": d.get("resolution"),
     }
 
 
@@ -401,30 +404,35 @@ def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
     return truncated
 
 
-# The single percentile_latest.nc file now carries precipitation AND
-# temperature/heat-index data together (see fetch_percentile_grid() in
-# ecmwf_client.py). Both features read from it independently, so this
-# small cache avoids fetching the same remote file twice if a person
-# loads both the rainfall-percentile and temperature views in one
-# session. Short TTL -- just enough to dedupe a burst of nearby requests,
-# not a substitute for the per-location caches below.
-_PCT_STORE_DS_CACHE_TTL_SECONDS = 60
-_pct_store_ds_cache: dict = {"ts": 0.0, "ds": None}
+# Rainfall and temperature/heat-index live in separate store files (each
+# kept under GitHub's 100 MB file limit). Each is opened lazily, so what
+# sits in memory is the compressed file, not the decompressed grid. Short
+# TTL -- just enough to dedupe a burst of nearby requests, not a substitute
+# for the per-location caches below.
+_STORE_DS_CACHE_TTL_SECONDS = 60
+_store_ds_cache: dict = {
+    "precip": {"ts": 0.0, "ds": None},
+    "temperature": {"ts": 0.0, "ds": None},
+}
 
 
-def _load_percentile_store_cached():
-    """Returns the shared percentile Dataset, fetching it at most once per
-    _PCT_STORE_DS_CACHE_TTL_SECONDS regardless of how many features ask
-    for it. Deliberately does NOT catch exceptions -- same reasoning as
-    the direct load_percentile_grid() call this replaces: a real read
-    failure should surface loudly, not be swallowed here."""
+def _load_store_cached(kind: str):
+    """Returns the shared store Dataset for 'precip' or 'temperature',
+    fetching it at most once per _STORE_DS_CACHE_TTL_SECONDS. Deliberately
+    does NOT catch exceptions -- a real read failure should surface loudly."""
+    entry = _store_ds_cache[kind]
     now = time.time()
-    if _pct_store_ds_cache["ds"] is not None and (now - _pct_store_ds_cache["ts"] < _PCT_STORE_DS_CACHE_TTL_SECONDS):
-        return _pct_store_ds_cache["ds"]
-    ds = github_data_source.load_percentile_grid()
-    _pct_store_ds_cache["ts"] = now
-    _pct_store_ds_cache["ds"] = ds
-    return ds
+    if entry["ds"] is not None and (now - entry["ts"] < _STORE_DS_CACHE_TTL_SECONDS):
+        return entry["ds"]
+    loader = github_data_source.load_percentile_grid if kind == "precip" else github_data_source.load_temperature_grid
+    entry["ds"] = loader()
+    entry["ts"] = now
+    return entry["ds"]
+
+
+def _resolution_suffix(result: dict) -> str:
+    label = RESOLUTION_LABELS.get(result.get("resolution"))
+    return f" \u00b7 {label} grid" if label else ""
 
 
 def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
@@ -472,7 +480,7 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     # try/except + st.exception() in the UI) instead of degrading into
     # an opaque "not available" message. Revisit once this path has
     # actually been proven to work at least once.
-    store_ds = _load_percentile_store_cached()
+    store_ds = _load_store_cached("precip")
     store_result = read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
 
     if store_result is None:
@@ -495,10 +503,9 @@ _TEMP_GLOBAL_CACHE: dict = {}
 def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours: int):
     """Store-only (no live-fetch fallback), same reasoning as
     get_percentile_raw_with_progress(): the underlying fetch is the same
-    heavy raw-member download, now also carrying temperature/dewpoint, so
-    it's equally inappropriate to trigger on demand. Shares the cached
-    store dataset with the rainfall percentile path via
-    _load_percentile_store_cached() -- both read the same file."""
+    heavy raw-member download (temperature/dewpoint this time), so it's
+    equally inappropriate to trigger on demand. Reads its own store file,
+    separate from the rainfall one."""
     key = (lat, lon, lead_hours)
     now = time.time()
     session_cache = st.session_state.setdefault("_temp_forecast_cache", {})
@@ -512,7 +519,7 @@ def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours
         session_cache[key] = global_entry
         return global_entry["result"], True
 
-    store_ds = _load_percentile_store_cached()
+    store_ds = _load_store_cached("temperature")
     result = read_temperature_percentiles_from_store(store_ds, lat, lon, lead_hours)
 
     entry = {"ts": now, "result": result}
@@ -521,15 +528,15 @@ def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours
     return result, True
 
 
-def _find_superset_entry(cache_dict: dict, lat: float, lon: float, model: str, requested_lead_days: int, now: float):
+def _find_superset_entry(cache_dict: dict, lat: float, lon: float, requested_lead_days: int, now: float):
     """A cache entry for MORE days than requested still contains everything
     a shorter request needs -- e.g. a cached 5-day fetch already has days
     1-3 of a 3-day request. Finds the smallest cached lead_days that's
-    still >= what's requested, for the same location+model."""
+    still >= what's requested, for the same location."""
     candidates = []
     for key, entry in cache_dict.items():
-        k_lat, k_lon, k_lead_days, k_model = key
-        if k_lat == lat and k_lon == lon and k_model == model and k_lead_days >= requested_lead_days:
+        k_lat, k_lon, k_lead_days = key
+        if k_lat == lat and k_lon == lon and k_lead_days >= requested_lead_days:
             if now - entry["ts"] < CACHE_TTL_SECONDS:
                 candidates.append((k_lead_days, entry))
     if not candidates:
@@ -545,7 +552,7 @@ def _truncate_threshold_result(result: dict, lead_days: int) -> dict:
 
 
 def _cache_lookup(key: tuple):
-    lat, lon, lead_days, model = key
+    lat, lon, lead_days = key
     now = time.time()
     session_cache = st.session_state.setdefault("_forecast_cache", {})
     cached = session_cache.get(key)
@@ -557,8 +564,8 @@ def _cache_lookup(key: tuple):
         return global_entry["result"]
 
     superset = (
-        _find_superset_entry(session_cache, lat, lon, model, lead_days, now)
-        or _find_superset_entry(_GLOBAL_CACHE, lat, lon, model, lead_days, now)
+        _find_superset_entry(session_cache, lat, lon, lead_days, now)
+        or _find_superset_entry(_GLOBAL_CACHE, lat, lon, lead_days, now)
     )
     if superset:
         trimmed = _truncate_threshold_result(superset["result"], lead_days)
@@ -573,121 +580,40 @@ def _cache_store(key: tuple, result: dict) -> None:
     _GLOBAL_CACHE[key] = entry
 
 
-def get_forecast_with_progress(lat: float, lon: float, lead_days: int, load_aifs: bool):
-    """Fetches ENS, and AIFS too if load_aifs is set (the app always
-    passes True now, so both models load together -- the model SELECTOR
-    in the UI just switches which already-fetched result is displayed,
-    it doesn't trigger a new fetch). Three optimizations over a naive
-    "just fetch both" approach:
-      1. Each model is cached independently (by lat/lon/lead_days/model),
-         and each is tried against the GitHub-hosted store before falling
-         back to a live fetch -- so a model that's already cached or
-         already in the store costs nothing extra.
-      2. When a model genuinely needs a live fetch, both run concurrently
-         in separate threads -- wall time is ~max(ens_time, aifs_time)
-         instead of the sum, since these are I/O-bound network requests.
-      3. Reuses the existing single-request-per-model optimization (5
-         thresholds combined into 1 file) underneath, so worst case is 2
-         requests total (1 per model), not 10.
+def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
+    """Returns (result, was_cached). Lookup order: session/global cache,
+    then the GitHub-hosted store (0.25 deg or 0.1 deg, whichever ingestion
+    last published -- result["resolution"] says which), then -- only if the
+    store isn't fresh -- a live 0.25 deg fetch with a progress bar."""
+    key = (lat, lon, lead_days)
+    cached = _cache_lookup(key)
+    if cached is not None:
+        return cached, True
 
-    Returns {"ifs": (result, was_cached), "aifs-ens": (result_or_None, was_cached)}
-    -- the aifs-ens entry is only present if load_aifs was True.
-    """
-    models = ["ifs"] + (["aifs-ens"] if load_aifs else [])
-    keys = {m: (lat, lon, lead_days, m) for m in models}
-    cached_results = {m: _cache_lookup(keys[m]) for m in models}
-
-    # Fast path: try the GitHub-hosted store for each model not already
-    # cached. Both IFS and AIFS threshold data are ingested now, so this
-    # applies per-model -- a model with no (or stale) stored data simply
-    # falls through to the live fetch below, independent of the other.
-    for m in models:
-        if cached_results[m] is not None:
-            continue
-        store_ds = github_data_source.load_threshold_grid(model=m)
-        if store_ds is not None:
-            # Deliberately NOT catching exceptions here -- load_threshold_grid()
-            # returning None (stale/not-yet-ingested) is the normal,
-            # expected unavailability case and still falls through to the
-            # live fetch below untouched. But a real exception from the
-            # parsing/extraction step is a bug, and should surface loudly
-            # via the button-click handler's existing try/except +
-            # st.exception(), not get silently converted into "just live
-            # fetch instead" -- that exact silent-masking pattern is what
-            # hid the analogous percentile bug until its live-fetch
-            # fallback was removed and the error had nowhere left to hide.
-            store_result = read_threshold_result_from_store(store_ds, lat, lon, lead_days)
-            cached_results[m] = store_result
-            _cache_store(keys[m], store_result)
-
-    to_fetch = [m for m in models if cached_results[m] is None]
-
-    if not to_fetch:
-        return {m: (cached_results[m], True) for m in models}
+    # Deliberately NOT catching exceptions around the store read:
+    # load_threshold_grid() returning None (stale / not yet ingested) is the
+    # normal unavailability case and falls through to the live fetch below,
+    # but a real parse/extraction error is a bug and should surface loudly
+    # via the caller's try/except + st.exception().
+    store_ds = github_data_source.load_threshold_grid()
+    if store_ds is not None:
+        store_result = read_threshold_result_from_store(store_ds, lat, lon, lead_days)
+        _cache_store(key, store_result)
+        return store_result, True
 
     progress = st.progress(0, text="Connecting to ECMWF Open Data...")
-    progress_lock = threading.Lock()
-    progress_state = {m: (0.0, "Waiting...") for m in to_fetch}
 
-    fetched = {}
-    errors = {}
+    def on_progress(frac: float, msg: str):
+        progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
 
-    def worker(m: str):
-        # Runs on a background thread. Must NOT call any Streamlit UI
-        # function (st.*, or methods on an element like `progress`) --
-        # those require a script-run context that background threads
-        # don't have by default, which silently breaks every fetch (this
-        # was the actual bug: even the single-model/ENS-only path went
-        # through this same threaded code, so it broke everything, not
-        # just AIFS). This callback only writes to a plain dict; the only
-        # place that touches the real `progress` element is the polling
-        # loop below, which runs on the main thread.
-        def on_progress(frac: float, msg: str):
-            with progress_lock:
-                progress_state[m] = (frac, msg)
+    try:
+        result = fetch_forecast_table(lat, lon, max_lead_days=lead_days, progress_callback=on_progress)
+    finally:
+        progress.empty()
 
-        try:
-            fetched[m] = fetch_forecast_table(
-                lat, lon, max_lead_days=lead_days, progress_callback=on_progress, model=m
-            )
-        except Exception as e:
-            errors[m] = e
-
-    threads = [threading.Thread(target=worker, args=(m,), daemon=True) for m in to_fetch]
-    for t in threads:
-        t.start()
-
-    while any(t.is_alive() for t in threads):
-        with progress_lock:
-            fracs = [v[0] for v in progress_state.values()]
-            combined_frac = sum(fracs) / len(fracs) if fracs else 0.0
-            msg = "  |  ".join(f"{MODEL_LABELS[m]}: {progress_state[m][1]}" for m in to_fetch)
-        progress.progress(min(max(int(combined_frac * 100), 0), 100), text=msg)
-        time.sleep(0.1)
-
-    for t in threads:
-        t.join()
-
-    progress.progress(100, text="Done!")
-    time.sleep(0.2)
-    progress.empty()
-
-    if "ifs" in to_fetch and "ifs" in errors:
-        raise errors["ifs"]  # ENS is required -- surface the failure
-
-    out = {}
-    for m in models:
-        if cached_results[m] is not None:
-            out[m] = (cached_results[m], True)
-        elif m in fetched:
-            _cache_store(keys[m], fetched[m])
-            out[m] = (fetched[m], False)
-        else:
-            out[m] = (None, False)  # AIFS failed -- app degrades to ENS-only, not a crash
-
-    if fetched:
-        _save_disk_cache()
-    return out
+    _cache_store(key, result)
+    _save_disk_cache()
+    return result, False
 
 
 def _hex_to_rgb(hex_color: str):
@@ -1683,15 +1609,7 @@ if view_mode == "Threshold Forecast":
     if get_forecast_clicked:
         request_started_at = time.time()
         try:
-            # Always fetch both models -- with both ingested and served
-            # from the store, this is normally just as fast as fetching
-            # one. The one place this costs something is the rare live-
-            # fetch fallback (store missing/stale for a model): fetching
-            # both there takes max(ens_time, aifs_time) instead of just
-            # ens_time, since they still run concurrently -- a real but
-            # bounded cost, traded for a simpler "always both are there
-            # to switch between" UI.
-            fetch_out = get_forecast_with_progress(lat, lon, lead_days, True)
+            fetch_out = get_forecast_with_progress(lat, lon, lead_days)
         except Exception as e:
             st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
             with st.expander("Full error details"):
@@ -1716,52 +1634,13 @@ if view_mode == "Threshold Forecast":
         true_lon = st.session_state["last_true_lon"]
         elapsed = st.session_state["last_elapsed"]
 
-        ens_result, ens_was_cached = fetch_out["ifs"]
-        aifs_result, aifs_was_cached = fetch_out.get("aifs-ens", (None, False))
-
-        any_fresh_fetch = not ens_was_cached or not aifs_was_cached
+        result, was_cached = fetch_out
         elapsed_placeholder.caption(
-            f"⏱️ Loaded in {elapsed:.1f}s" + ("" if any_fresh_fetch else " (from cache)")
+            f"\u23f1\ufe0f Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
         )
 
-        # --- Model selector, styled like the View mode control above:
-        # canonical choice lives in session_state, the widget just
-        # reflects/updates it. ---
-        available_models = ["ifs"]
-        if aifs_result is not None:
-            available_models.append("aifs-ens")
-        else:
-            st.warning("AIFS data couldn't be loaded for this request; showing ECMWF ENS only.")
-
-        if "threshold_model_label" not in st.session_state:
-            st.session_state["threshold_model_label"] = MODEL_LABELS["ifs"]
-
-        if len(available_models) > 1:
-            model_labels = [MODEL_LABELS[m] for m in available_models]
-            # If the currently-stored label isn't among today's available
-            # options (e.g. AIFS just became unavailable), reset it -- but
-            # otherwise leave session_state alone entirely here. The widget's
-            # key IS the state; passing default= AND separately writing back
-            # to session_state after reading the widget's return value (the
-            # previous approach) is what caused the revert-after-one-click
-            # bug -- Streamlit re-derives the widget's identity from `default`
-            # each render, so recomputing default from a value we just wrote
-            # made the widget's own interaction state and our tracked value
-            # fight each other. Binding key= directly to this session_state
-            # entry lets Streamlit own persistence with no manual syncing.
-            if st.session_state["threshold_model_label"] not in model_labels:
-                st.session_state["threshold_model_label"] = model_labels[0]
-            st.segmented_control("Model", model_labels, key="threshold_model_label")
-
-        selected_label = st.session_state["threshold_model_label"]
-        selected_model = next(
-            (m for m in available_models if MODEL_LABELS[m] == selected_label),
-            "ifs",
-        )
-
-        result = ens_result if selected_model == "ifs" else aifs_result
-        was_cached = ens_was_cached if selected_model == "ifs" else aifs_was_cached
-        model_label = MODEL_LABELS[selected_model]
+        resolution = result.get("resolution") or "0p25"
+        model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
 
         if not result["windows"]:
             st.warning("No aligned 00 UTC windows available for this range.")
@@ -1830,10 +1709,15 @@ if view_mode == "Threshold Forecast":
             "\"Last updated\" and \"Next update\" are estimated from ECMWF's published IFS "
             "dissemination schedule, not a live timestamp from the server."
         )
-        if selected_model == "aifs-ens":
+        if resolution == "0p1":
             schedule_note += (
-                " AIFS runs on a separate production pipeline with its own timing, so this "
-                "estimate is rougher for AIFS than for ENS."
+                " The 0.1\u00b0 grid is published about 2 hours after the 0.25\u00b0 one, so it "
+                "became available later than the time shown."
+            )
+        else:
+            schedule_note += (
+                " The finer 0.1\u00b0 grid for this run is published about 2 hours later and "
+                "replaces this one automatically."
             )
         st.caption(schedule_note)
     else:
@@ -1931,7 +1815,7 @@ elif view_mode == "Percentile Rainfall Forecast":
         pct_percentiles = pct_result["percentiles"]
         pct_run_time = pct_result["run_time"]
 
-        st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`")
+        st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(pct_result)}")
         st.caption(
             f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
             f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
@@ -2016,7 +1900,7 @@ elif view_mode == "Temperature Forecast":
         temp_percentiles = temp_result["percentiles"]
         temp_run_time = temp_result["run_time"]
 
-        st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`")
+        st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(temp_result)}")
 
         st.subheader(f"Temperature & heat index for {temp_location_name}")
         temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
