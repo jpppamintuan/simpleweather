@@ -16,22 +16,24 @@ on:
     # until the next 00Z/12Z run arrives (the app already has UI
     # messaging for this, see the capped_to_day6 caption).
     #
-    # Dense checks (every 15 min) inside each dissemination window (see
-    # _dissemination_available_time() in ecmwf_client.py, which these
-    # mirror -- times are estimates, see that function's docstring for
-    # the "forecast vs derived products" caveat):
-    #   00Z -> ~07:40 UTC        12Z -> ~19:40 UTC
-    #   06Z -> ~13:20 UTC        18Z -> ~01:20 UTC (next day)
-    - cron: "*/15 7-10 * * *"
-    - cron: "*/15 13-15 * * *"
-    - cron: "*/15 19-22 * * *"
-    - cron: "*/15 1-3 * * *"
-    # Sparse hourly fallback for the remaining hours, in case any
-    # dissemination runs unusually late outside its normal window.
-    # Offset to :17 past the hour rather than :00 -- GitHub's own docs
-    # flag the top of the hour as the highest-delay-risk time for
-    # scheduled jobs, since every repo's hourly crons queue up at once.
-    - cron: "17 0,4-6,11,12,16-18,23 * * *"
+    # Dense checks (every 15 min) inside each dissemination window. The
+    # 0.25-degree product lands at about (see _dissemination_available_time()
+    # in ecmwf_client.py, times are estimates):
+    #   00Z -> ~07:40 UTC   06Z -> ~13:20 UTC   12Z -> ~19:40 UTC   18Z -> ~01:20 UTC
+    # and the 0.1-degree product about two hours after that:
+    #   00Z -> ~09:40 UTC   06Z -> ~15:20 UTC   12Z -> ~21:40 UTC   18Z -> ~03:20 UTC
+    # ECMWF's own listing shows the 0.1-degree member files (pf) appearing
+    # ~2h after the 0.25 release and the 0.1-degree probability files (ep)
+    # ~20 min after that (00Z run: 09:40 and 10:01 UTC). Each window below
+    # runs from just before the 0.25 release to about 1h45 past the 0.1 ep
+    # file, so a late release doesn't fall outside it.
+    - cron: "*/15 7-11 * * *"
+    - cron: "*/15 13-17 * * *"
+    - cron: "*/15 19-23 * * *"
+    - cron: "*/15 1-5 * * *"
+    # Sparse hourly fallback for the remaining hours (offset to :17 -- the
+    # top of the hour is GitHub's highest-delay-risk time for scheduled jobs).
+    - cron: "17 0,6,12,18 * * *"
   workflow_dispatch:
     inputs:
       force_refresh:
@@ -59,12 +61,12 @@ concurrency:
 jobs:
   ingest:
     runs-on: ubuntu-latest
-    # Bumped from 30 -- adding temperature/dewpoint to the percentile
-    # fetch roughly doubled its download size (tp alone was already
-    # ~1.7-2GB; 2t+2d together add another ~2.5GB+), pushing a genuine
-    # full-fetch run close to or past 30 minutes even without any network
-    # slowdown. 60 gives real headroom rather than being barely enough.
-    timeout-minutes: 60
+    # 0.1-degree member data is ~6x the volume of 0.25-degree (tens of GB
+    # of GRIB per full percentile + temperature refresh, fetched in small
+    # batches), so a genuine full fetch can run far longer than before.
+    # Generous on purpose; a run that finds nothing new still finishes in
+    # seconds.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
