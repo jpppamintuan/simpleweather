@@ -43,17 +43,7 @@ LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
     "Makati City, Metro Manila": {"lat": 14.555539, "lon": 121.002918},
-    # query_lat/query_lon override the grid point actually requested for
-    # this location, distinct from its true coordinates above --
-    # Bambang's nearest ECMWF grid point (16.5, 121.0) falls on
-    # mountainous terrain, while the town itself sits in a flat valley;
-    # (16.5, 121.25) -- one grid cell east, slightly farther in raw
-    # distance -- is a much closer topographic/geographic match despite
-    # not being the nearest point.
-    "Bambang, Nueva Vizcaya": {
-        "lat": 16.389440, "lon": 121.106919,
-        "query_lat": 16.5, "query_lon": 121.25,
-    },
+    "Bambang, Nueva Vizcaya": {"lat": 16.389440, "lon": 121.106919},
     "Bacoor, Cavite": {"lat": 14.454261, "lon": 120.941266},
 }
 
