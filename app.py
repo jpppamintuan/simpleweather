@@ -43,28 +43,42 @@ LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
     "Makati City, Metro Manila": {"lat": 14.555539, "lon": 121.002918},
-    "Bambang, Nueva Vizcaya": {"lat": 16.389440, "lon": 121.106919},
+    # query_overrides: {resolution: (lat, lon)} -- the grid point actually
+    # requested for this location AT THAT RESOLUTION, distinct from its true
+    # coordinates. Per-resolution because the store alternates between the
+    # 0.25 deg and 0.1 deg grids (see ingest.py) and the best cell differs
+    # between them. A resolution with no entry simply uses nearest-neighbour
+    # to the true coordinates. Resolution keys: "0p25", "0p1".
+    "Bambang, Nueva Vizcaya": {
+        "lat": 16.389440, "lon": 121.106919,
+        # 0.25 deg: the nearest cell (16.5, 121.0) is mountainous terrain
+        # while the town sits in a flat valley; (16.5, 121.25) -- one cell
+        # east, slightly farther -- is a much closer geographic match.
+        # At 0.1 deg the nearest cell is fine, so no entry.
+        "query_overrides": {"0p25": (16.5, 121.25)},
+    },
     "Bacoor, Cavite": {
         "lat": 14.454261, "lon": 120.941266,
-        "query_lat": 14.4, "query_lon": 120.9,
+        "query_overrides": {"0p1": (14.4, 120.9)},  # 0.25 deg: nearest-neighbour as usual
     },
 }
 
 
-def get_query_point(location_name: str) -> tuple[float, float]:
-    """Returns the (lat, lon) to actually request forecast data for --
-    a location's query_lat/query_lon override if one is set, else its
-    true coordinates (which is what nearest-neighbor grid selection
-    would have picked anyway, so this is a no-op for every location
-    without an override). Use this for every fetch/store-read call."""
-    loc = LOCATIONS[location_name]
-    return loc.get("query_lat", loc["lat"]), loc.get("query_lon", loc["lon"])
+def resolve_query_point(lat: float, lon: float, resolution: str) -> tuple[float, float]:
+    """The (lat, lon) to actually read from data of the given resolution.
+    Applied AFTER the store has been loaded, because which resolution is
+    being served (0.25 deg or 0.1 deg) is only known then -- it changes
+    over a run's life as the 0.1 deg upgrade lands. Presets are matched by
+    their true coordinates; anything else (searched place, custom point)
+    has no override and is returned unchanged."""
+    for loc in LOCATIONS.values():
+        if loc["lat"] == lat and loc["lon"] == lon:
+            return loc.get("query_overrides", {}).get(resolution, (lat, lon))
+    return lat, lon
 
 
 def get_true_point(location_name: str) -> tuple[float, float]:
-    """Returns a location's actual real-world coordinates, for display
-    purposes only (e.g. showing how far the queried grid point sits from
-    the true location) -- NOT what's used to request data."""
+    """Returns a location's actual real-world coordinates."""
     loc = LOCATIONS[location_name]
     return loc["lat"], loc["lon"]
 
@@ -102,8 +116,8 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
     point can be sanity-checked before fetching.
 
     Returns (location_name, query_lat, query_lon, true_lat, true_lon) --
-    for a preset location this is exactly get_query_point()/
-    get_true_point() as before; for a searched place or a custom point,
+    for a preset location this is exactly the preset's true coordinates for both (overrides are
+    applied later by resolve_query_point()); for a searched place or a custom point,
     query and true are identical (there's no override concept for a
     point looked up or typed in directly -- that's specifically for
     correcting a PRESET location's auto-selected grid cell, e.g.
@@ -113,9 +127,10 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
     selected = st.selectbox("Location", options, key=f"{key_prefix}_location")
 
     if selected not in (_SEARCH_PLACE_OPTION, _CUSTOM_COORDS_OPTION):
-        query_lat, query_lon = get_query_point(selected)
+        # True coordinates for both: the per-resolution override is applied
+        # later, in resolve_query_point(), once the loaded data's resolution is known.
         true_lat, true_lon = get_true_point(selected)
-        return selected, query_lat, query_lon, true_lat, true_lon
+        return selected, true_lat, true_lon, true_lat, true_lon
 
     if selected == _SEARCH_PLACE_OPTION:
         places = _load_ph_locations()
@@ -195,6 +210,8 @@ def _serialize_result(result: dict) -> dict:
         "downloaded_bytes": result.get("downloaded_bytes"),
         "fetch_mode": result.get("fetch_mode"),
         "resolution": result.get("resolution"),
+        "available_is_measured": result.get("available_is_measured", False),
+        "next_description": result.get("next_description"),
     }
 
 
@@ -217,6 +234,8 @@ def _deserialize_result(d: dict) -> dict:
         "downloaded_bytes": d.get("downloaded_bytes"),
         "fetch_mode": d.get("fetch_mode"),
         "resolution": d.get("resolution"),
+        "available_is_measured": d.get("available_is_measured", False),
+        "next_description": d.get("next_description"),
     }
 
 
@@ -474,7 +493,8 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     # an opaque "not available" message. Revisit once this path has
     # actually been proven to work at least once.
     store_ds = _load_store_cached("precip")
-    store_result = read_percentile_raw_from_store(store_ds, lat, lon, lead_hours)
+    q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
+    store_result = read_percentile_raw_from_store(store_ds, q_lat, q_lon, lead_hours)
 
     if store_result is None:
         return None, False
@@ -513,7 +533,8 @@ def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours
         return global_entry["result"], True
 
     store_ds = _load_store_cached("temperature")
-    result = read_temperature_percentiles_from_store(store_ds, lat, lon, lead_hours)
+    q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
+    result = read_temperature_percentiles_from_store(store_ds, q_lat, q_lon, lead_hours)
 
     entry = {"ts": now, "result": result}
     session_cache[key] = entry
@@ -590,7 +611,8 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
     # via the caller's try/except + st.exception().
     store_ds = github_data_source.load_threshold_grid()
     if store_ds is not None:
-        store_result = read_threshold_result_from_store(store_ds, lat, lon, lead_days)
+        q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
+        store_result = read_threshold_result_from_store(store_ds, q_lat, q_lon, lead_days)
         _cache_store(key, store_result)
         return store_result, True
 
@@ -600,7 +622,8 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
         progress.progress(min(max(int(frac * 100), 0), 100), text=msg)
 
     try:
-        result = fetch_forecast_table(lat, lon, max_lead_days=lead_days, progress_callback=on_progress)
+        q_lat, q_lon = resolve_query_point(lat, lon, "0p25")  # the live fallback is always 0.25 deg
+        result = fetch_forecast_table(q_lat, q_lon, max_lead_days=lead_days, progress_callback=on_progress)
     finally:
         progress.empty()
 
@@ -1686,8 +1709,14 @@ if view_mode == "Threshold Forecast":
             )
         with info_col2:
             now_utc = datetime.now(timezone.utc)
-            available_ph = result["available_since"].astimezone(PH_TZ)
-            next_ph = result["next_expected"].astimezone(PH_TZ)
+
+            def _fmt_when(dt):
+                return dt.astimezone(PH_TZ).strftime("%a, %d %b %Y %I:%M%p") + " (UTC+8)"
+
+            measured = result.get("available_is_measured", False)
+            last_label = "published by ECMWF" if measured else "estimated"
+            st.markdown(f"**Last updated ({last_label}):** {_fmt_when(result['available_since'])}")
+
             remaining = result["next_expected"] - now_utc
             if remaining.total_seconds() > 0:
                 hrs = int(remaining.total_seconds() // 3600)
@@ -1695,23 +1724,23 @@ if view_mode == "Threshold Forecast":
                 remaining_str = f"in ~{hrs}h {mins}m"
             else:
                 remaining_str = "due any time now"
-            st.markdown(f"**Last updated (estimated):** {available_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8)")
-            st.markdown(f"**Next update expected:** {next_ph.strftime('%a, %d %b %Y %I:%M%p')} (UTC+8) — {remaining_str}")
+            next_desc = result.get("next_description")
+            next_label = f"Next update expected ({next_desc})" if next_desc else "Next update expected"
+            st.markdown(f"**{next_label}:** {_fmt_when(result['next_expected'])} \u2014 {remaining_str}")
 
-        schedule_note = (
-            "\"Last updated\" and \"Next update\" are estimated from ECMWF's published IFS "
-            "dissemination schedule, not a live timestamp from the server."
-        )
-        if resolution == "0p1":
-            schedule_note += (
-                " The 0.1\u00b0 grid is published about 2 hours after the 0.25\u00b0 one, so it "
-                "became available later than the time shown."
+        if measured:
+            schedule_note = (
+                "\"Last updated\" is when ECMWF released this data (the files' server timestamp, "
+                "recorded at ingestion). \"Next update\" is estimated from ECMWF's dissemination "
+                "schedule plus the ~2h20 lag the 0.1\u00b0 products have been observed to have."
             )
         else:
-            schedule_note += (
-                " The finer 0.1\u00b0 grid for this run is published about 2 hours later and "
-                "replaces this one automatically."
+            schedule_note = (
+                "Times are estimated from ECMWF's dissemination schedule (plus a ~2h20 lag for the "
+                "0.1\u00b0 products), not a live timestamp from the server."
             )
+        if resolution == "0p25":
+            schedule_note += " The finer 0.1\u00b0 grid for this run replaces this one automatically when it appears."
         st.caption(schedule_note)
     else:
         st.info("Choose a location and click **Get forecast**.")
