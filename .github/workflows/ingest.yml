@@ -39,7 +39,7 @@ on:
       force_refresh:
         description: "Force a full refetch of every dataset, ignoring the check-then-fetch skip logic (use after a storage-format change, e.g. this one)"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write  # needed to push to the `data` branch below
