@@ -23,7 +23,9 @@ slower.
 
 from __future__ import annotations
 
+import os
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -35,6 +37,12 @@ import pandas as pd
 import requests
 import xarray as xr
 from ecmwf.opendata import Client
+
+try:  # run diagnostics (see diag.py); the app doesn't need it
+    from diag import log as _diag
+except ImportError:
+    def _diag(tag: str) -> None:
+        pass
 
 AVAILABLE_THRESHOLDS_MM = [1, 5, 20, 50, 100]
 
@@ -65,6 +73,11 @@ STEPS_PER_CHUNK = {"0p25": None, "0p1": 6}
 # threads -- cfgrib/eccodes decoding stays on the main thread. Keep this
 # modest: the portal caps simultaneous connections for everyone.
 DOWNLOAD_WORKERS = {"0p25": 1, "0p1": 4}
+
+# Diagnose mode (see ingest.py): only the first N batches of each fetch.
+# Deliberately inert unless DIAGNOSE_ONLY is also set, so a stray value in
+# the environment can never truncate a real ingest.
+DEBUG_MAX_BATCHES = int(os.environ.get("DIAGNOSE_BATCHES") or 0) if os.environ.get("DIAGNOSE_ONLY") else 0
 
 
 def _make_client(resol: str = DEFAULT_RESOLUTION) -> Client:
@@ -762,10 +775,19 @@ def _verify_run_time(ds: xr.Dataset, expected_run_dt):
     return run_time
 
 
+_RESULT_LOGGED = False
+
+
 def _download_batch(resol: str, request: dict, extras: dict, chunk: list, target: Path):
     """One batch download; returns (bytes transferred, source URLs). Builds
     its own Client so nothing is shared between threads."""
     result = _make_client(resol).retrieve(step=chunk, target=str(target), **request, **extras)
+    global _RESULT_LOGGED
+    if not _RESULT_LOGGED:  # once: what does this client version actually expose?
+        _RESULT_LOGGED = True
+        public = {k: type(getattr(result, k, None)).__name__ for k in dir(result) if not k.startswith("_")}
+        print(f"[diag] retrieve() returned {type(result).__name__} with attributes {public}; "
+              f"size={getattr(result, 'size', None)!r}", flush=True)
     return (getattr(result, "size", 0) or 0), [str(u) for u in (getattr(result, "urls", None) or [])]
 
 
@@ -807,6 +829,8 @@ def _retrieve_cropped(
     extras = {**_request_extras(resol), **_run_kwargs(run_dt)}
     per_chunk = STEPS_PER_CHUNK.get(resol) or len(steps)
     chunks = [steps[i:i + per_chunk] for i in range(0, len(steps), per_chunk)]
+    if DEBUG_MAX_BATCHES:
+        chunks = chunks[:DEBUG_MAX_BATCHES]
     workers = max(1, DOWNLOAD_WORKERS.get(resol, 1))
     lo, hi = progress_span
 
@@ -829,14 +853,21 @@ def _retrieve_cropped(
         total_bytes += sum(size for size, _ in downloads)
         for _, urls in downloads:
             all_urls.extend(urls)
+        on_disk_mb = sum(targets[i].stat().st_size for i, _ in group) / 1e6
+        _diag(f"{label} batches {group[0][0] + 1}-{group[-1][0] + 1}/{len(chunks)} downloaded "
+              f"({on_disk_mb:.0f} MB on disk)")
 
         for i, _ in group:  # decode serially, in order
+            _diag(f"{label} batch {i + 1}/{len(chunks)}: decoding {targets[i].stat().st_size / 1e6:.0f} MB")
+            t0 = time.time()
             ds = xr.open_dataset(str(targets[i]), engine="cfgrib", backend_kwargs={"indexpath": ""})
+            _diag(f"{label} batch {i + 1}/{len(chunks)}: index built in {time.time() - t0:.0f}s, cropping/loading")
             try:
                 piece = _crop_to_bbox(ds, bbox).load()  # resolve into memory before the file goes
             finally:
                 ds.close()
             targets[i].unlink(missing_ok=True)
+            _diag(f"{label} batch {i + 1}/{len(chunks)}: decoded in {time.time() - t0:.0f}s -> {dict(piece.sizes)}")
 
             piece = piece.drop_vars("valid_time", errors="ignore")
             if "step" not in piece.dims:  # cfgrib squeezes a 1-step batch to a scalar coordinate
