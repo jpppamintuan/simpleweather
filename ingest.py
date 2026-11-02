@@ -59,9 +59,12 @@ from pathlib import Path
 import numpy as np
 import xarray as xr
 
+import diag
+
 # Reuses the exact fetch/decode/crop logic in ecmwf_client.py -- this
 # script is intentionally a thin wrapper, not a reimplementation.
 from ecmwf_client import (
+    DEBUG_MAX_BATCHES,
     DEFAULT_RESOLUTION,
     PH_BBOX,
     RESOLUTION_RANK,
@@ -77,6 +80,13 @@ MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 
 # GitHub's hard per-file limit is 100 MB; stay clear of it.
 MAX_FILE_BYTES = 95 * 1024 * 1024
+
+# Diagnose mode: DIAGNOSE_ONLY="percentile" (comma-separated names) with
+# DIAGNOSE_BATCHES=1 fetches and decodes just the first batch(es) of those
+# datasets, exercises the writer against a temp dir, and touches neither
+# ./output nor the manifest -- a 2-4 minute reproduction instead of an
+# 80-minute full run. Set from the workflow's manual-run inputs.
+DIAGNOSE_ONLY = [n.strip() for n in os.environ.get("DIAGNOSE_ONLY", "").split(",") if n.strip()]
 
 
 def _progress(tag: str):
@@ -237,15 +247,58 @@ def _ingest(name: str, cfg: dict, run_dt: datetime, resol: str) -> tuple[str, st
     """Returns (run_time, published_at) on success -- published_at being
     when ECMWF actually released the files (None if it couldn't be
     determined); raises on failure."""
-    print(f"[{name}] Fetching run {run_dt:%Y-%m-%d %H}Z at {resol}...", flush=True)
+    diag.log(f"[{name}] Fetching run {run_dt:%Y-%m-%d %H}Z at {resol}")
     ds = cfg["fetch"](run_dt, resol)
     print(f"[{name}] Fetched. run_time={ds.attrs.get('run_time')}, resolution={ds.attrs.get('resolution')}, "
           f"dims={dict(ds.sizes)}", flush=True)
+    diag.log(f"[{name}] writing")
     _write_netcdf_locally(ds, cfg["path"], cfg["packing"])
+    diag.log(f"[{name}] done")
     return ds.attrs["run_time"], ds.attrs.get("published_at")
 
 
+def _diagnose() -> int:
+    import tempfile
+    rc = 0
+    for name in DIAGNOSE_ONLY:
+        cfg = DATASETS.get(name)
+        if cfg is None:
+            print(f"[diagnose] unknown dataset {name!r}; choose from {list(DATASETS)}")
+            rc = 1
+            continue
+        candidates, _ = _candidates(name, cfg)
+        if not candidates:
+            print(f"[diagnose:{name}] no available run found")
+            rc = 1
+            continue
+        run_dt, resol = candidates[0]
+        diag.log(f"[diagnose:{name}] fetching run {run_dt:%Y-%m-%d %H}Z at {resol}, "
+                 f"first {DEBUG_MAX_BATCHES or 'all'} batch(es); nothing will be published")
+        try:
+            ds = cfg["fetch"](run_dt, resol)
+            diag.log(f"[diagnose:{name}] fetched, dims={dict(ds.sizes)}")
+            with tempfile.TemporaryDirectory() as tmp:
+                size = _write_netcdf_locally(ds, Path(tmp) / f"{name}.nc", cfg["packing"])
+            diag.log(f"[diagnose:{name}] test file written, {size / 1e6:.1f} MB (partial data if batches were limited)")
+        except Exception:
+            traceback.print_exc()
+            diag.log(f"[diagnose:{name}] FAILED (the threshold step-count check failing on partial data is expected)")
+            rc = 1
+    return rc
+
+
 def main() -> int:
+    diag.install()
+    diag.start_monitor()
+    diag.log(f"start | python {sys.version.split()[0]} | event={os.environ.get('GITHUB_EVENT_NAME', '?')} "
+             f"run={os.environ.get('GITHUB_RUN_ID', '?')} attempt={os.environ.get('GITHUB_RUN_ATTEMPT', '?')}")
+    try:
+        return _diagnose() if DIAGNOSE_ONLY else _run()
+    finally:
+        diag.log("end")
+
+
+def _run() -> int:
     # NOT wiped: the workflow already checked the current `data` branch out
     # into ./output, so it holds the last-published state (including
     # datasets we're about to decide NOT to refetch).
