@@ -267,6 +267,18 @@ def main() -> int:
     failures: list[str] = []          # stored data is behind what's available
     upgrade_failures: list[str] = []  # stored data is current; only the 0.1 deg upgrade failed
 
+    def write_manifest():
+        # Written after EVERY dataset, not just at the end: a run that gets
+        # cut off (timeout, cancel) still publishes a manifest matching the
+        # files it did finish, instead of new files under a stale manifest.
+        MANIFEST_PATH.write_text(json.dumps({
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "run_times": run_times,
+            "resolutions": resolutions,
+            "failures": failures,
+            "upgrade_failures": upgrade_failures,
+        }, indent=2))
+
     for name, cfg in DATASETS.items():
         existing_run = _parse_run_time(run_times.get(name))
         stored_run = None if force_refresh else existing_run
@@ -276,6 +288,7 @@ def main() -> int:
         pending = [(run, res) for run, res in candidates if _is_newer(run, res, stored_run, stored_resol)]
         if not pending:
             print(f"[{name}] Nothing newer than stored run {existing_run} at {stored_resol} -- skipping.")
+            write_manifest()  # keeps generated_at fresh for the app's staleness check
             continue
 
         succeeded = False
@@ -292,17 +305,9 @@ def main() -> int:
         if not succeeded:
             still_current = existing_run is not None and latest_025 is not None and existing_run >= latest_025
             (upgrade_failures if still_current else failures).append(name)
+        write_manifest()
 
-    # Small manifest alongside the data -- lets the Streamlit app check
-    # "how fresh is this?" with one small fetch instead of opening a file.
-    manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "run_times": run_times,
-        "resolutions": resolutions,
-        "failures": failures,
-        "upgrade_failures": upgrade_failures,
-    }
-    MANIFEST_PATH.write_text(json.dumps(manifest, indent=2))
+    write_manifest()
 
     if failures or upgrade_failures:
         print(f"Ingestion finished with failures: {failures}, upgrade failures: {upgrade_failures}",
