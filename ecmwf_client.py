@@ -25,12 +25,14 @@ from __future__ import annotations
 
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 import numpy as np
 import pandas as pd
+import requests
 import xarray as xr
 from ecmwf.opendata import Client
 
@@ -259,6 +261,30 @@ def _dissemination_available_time(run_time):
         return run_time + timedelta(hours=8, minutes=1)
 
 
+# The 0.1 deg threshold (ep) product lands a measured ~2h21 after the 0.25 deg
+# estimate above (portal listing, 00Z run: ep-sfc at 10:01 UTC vs. 07:40).
+# Only a fallback -- ingestion records the real publish time (the file's
+# Last-Modified header) whenever it can, and that is shown in preference.
+RELEASE_LAG_0P1 = timedelta(hours=2, minutes=21)
+
+
+def _estimated_release_time(run_time, resolution: str):
+    base = _dissemination_available_time(run_time)
+    return base + RELEASE_LAG_0P1 if resolution == "0p1" else base
+
+
+def _next_update(run_time, resolution: str):
+    """(when, description) of the next change to expect in the threshold
+    data. Showing 0.25 deg: the 0.1 deg grid of the SAME run is next.
+    Showing 0.1 deg: the next run's 0.25 deg release (6h later -- every
+    run, 00/06/12/18Z, is chased) is next, with its 0.1 deg upgrade
+    following ~2h21 after that."""
+    if resolution != "0p1":
+        return _estimated_release_time(run_time, "0p1"), f"0.1\u00b0 grid of the {run_time:%H}Z run"
+    next_run = run_time + timedelta(hours=6)
+    return _dissemination_available_time(next_run), f"{next_run:%H}Z run (0.25\u00b0 first)"
+
+
 def _cap_for_run_hour(run_hour, requested_max_lead_days: int) -> tuple[int, bool]:
     """00Z/12Z runs carry the full 15-day threshold product; 06Z/18Z runs
     are capped at day 6 (step 144). Returns (lead days actually safe to
@@ -359,6 +385,7 @@ def _build_threshold_result(
     downloaded_bytes,
     fetch_mode: str,
     capped_to_day6: bool,
+    published_at=None,
 ) -> dict:
     """Shared tail logic for building the fetch_forecast_table() result
     shape (windows/data/metadata) from already-decoded per-threshold point
@@ -399,11 +426,10 @@ def _build_threshold_result(
         for threshold_mm in AVAILABLE_THRESHOLDS_MM
     }
 
-    available_since = _dissemination_available_time(run_time)
-    # 6h, not 12h -- now that every run (00/06/12/18Z) is chased, not just
-    # 00Z/12Z, the next run in sequence is always 6h later.
-    next_run_time = run_time + timedelta(hours=6)
-    next_expected = _dissemination_available_time(next_run_time)
+    # Prefer the measured publish time (file Last-Modified, recorded at
+    # ingestion); fall back to the schedule-based estimate for this resolution.
+    available_since = published_at or _estimated_release_time(run_time, resolution)
+    next_expected, next_description = _next_update(run_time, resolution)
 
     return {
         "run_time": run_time,
@@ -412,7 +438,9 @@ def _build_threshold_result(
         "windows": windows,
         "data": data,
         "available_since": available_since,
+        "available_is_measured": published_at is not None,
         "next_expected": next_expected,
+        "next_description": next_description,
         "downloaded_bytes": downloaded_bytes,
         "fetch_mode": fetch_mode,
         "resolution": resolution,
@@ -734,11 +762,36 @@ def _verify_run_time(ds: xr.Dataset, expected_run_dt):
     return run_time
 
 
-def _download_batch(resol: str, request: dict, extras: dict, chunk: list, target: Path) -> int:
-    """One batch download; returns bytes transferred. Builds its own Client
-    so nothing is shared between threads."""
+def _download_batch(resol: str, request: dict, extras: dict, chunk: list, target: Path):
+    """One batch download; returns (bytes transferred, source URLs). Builds
+    its own Client so nothing is shared between threads."""
     result = _make_client(resol).retrieve(step=chunk, target=str(target), **request, **extras)
-    return getattr(result, "size", 0) or 0
+    return (getattr(result, "size", 0) or 0), [str(u) for u in (getattr(result, "urls", None) or [])]
+
+
+def _published_at(urls) -> str | None:
+    """When ECMWF actually published these files: the latest Last-Modified
+    header among them (a plain HEAD request each). The GRIB messages only
+    carry the forecast BASE time, not a release time, so the portal's HTTP
+    metadata is the only place the real publish time exists. Best effort --
+    returns None if the client exposed no URLs or the server sent no
+    Last-Modified, and the app then falls back to schedule estimates."""
+    latest = None
+    failures = 0
+    for url in sorted(set(urls)):
+        try:
+            resp = requests.head(url, timeout=10, allow_redirects=True)
+            header = resp.headers.get("Last-Modified")
+            if not header:
+                continue
+            modified = parsedate_to_datetime(header)
+            if latest is None or modified > latest:
+                latest = modified
+        except Exception:
+            failures += 1
+            if failures >= 3:
+                break
+    return latest.astimezone(UTC).isoformat() if latest else None
 
 
 def _retrieve_cropped(
@@ -759,6 +812,7 @@ def _retrieve_cropped(
 
     pieces = []
     total_bytes = 0
+    all_urls: list[str] = []
     for g in range(0, len(chunks), workers):
         group = list(enumerate(chunks))[g:g + workers]
         _notify(progress_callback, lo + (hi - lo) * g / len(chunks),
@@ -767,12 +821,14 @@ def _retrieve_cropped(
 
         if len(group) == 1:
             i, chunk = group[0]
-            sizes = [_download_batch(resol, request, extras, chunk, targets[i])]
+            downloads = [_download_batch(resol, request, extras, chunk, targets[i])]
         else:
             with ThreadPoolExecutor(max_workers=len(group)) as pool:
-                sizes = list(pool.map(
+                downloads = list(pool.map(
                     lambda ic: _download_batch(resol, request, extras, ic[1], targets[ic[0]]), group))
-        total_bytes += sum(sizes)
+        total_bytes += sum(size for size, _ in downloads)
+        for _, urls in downloads:
+            all_urls.extend(urls)
 
         for i, _ in group:  # decode serially, in order
             ds = xr.open_dataset(str(targets[i]), engine="cfgrib", backend_kwargs={"indexpath": ""})
@@ -787,10 +843,14 @@ def _retrieve_cropped(
                 piece = piece.expand_dims("step")
             pieces.append(piece)
 
-    print(f"[{label}] downloaded {total_bytes / 1e9:.2f} GB at {resol} in {len(chunks)} batch(es)", flush=True)
-    if len(pieces) == 1:
-        return pieces[0].sortby("step")
-    return xr.concat(pieces, dim="step", coords="minimal", compat="override").sortby("step")
+    published = _published_at(all_urls)
+    print(f"[{label}] downloaded {total_bytes / 1e9:.2f} GB at {resol} in {len(chunks)} batch(es); "
+          f"ECMWF published: {published or 'unknown (no URLs / Last-Modified)'}", flush=True)
+    out = pieces[0].sortby("step") if len(pieces) == 1 else \
+        xr.concat(pieces, dim="step", coords="minimal", compat="override").sortby("step")
+    if published:
+        out.attrs["published_at"] = published
+    return out
 
 
 def fetch_threshold_grid(
@@ -987,6 +1047,8 @@ def fetch_precip_grid(
     period_mm = tp_mm.diff(dim="step").clip(min=0)  # clip: guard tiny negative float noise
     ds_out = _keep_core_coords(period_mm.to_dataset(name="precip_3h_mm"))
 
+    if ds_tp.attrs.get("published_at"):
+        ds_out.attrs["published_at"] = ds_tp.attrs["published_at"]
     ds_out.attrs["run_time"] = run_time.isoformat()
     ds_out.attrs["resolution"] = resol
     ds_out.attrs["bin_hours"] = PERCENTILE_BIN_HOURS
@@ -1059,6 +1121,8 @@ def fetch_temperature_grid(
     )
 
     ds_out = _keep_core_coords(xr.Dataset({"temperature_c": temp_c, "heat_index_c": heat_index_c}))
+    if ds_t.attrs.get("published_at"):
+        ds_out.attrs["published_at"] = ds_t.attrs["published_at"]
     ds_out.attrs["run_time"] = run_time.isoformat()
     ds_out.attrs["resolution"] = resol
     print(f"[fetch_temperature_grid] dims={dict(ds_out.sizes)}, coords={list(ds_out.coords)}")
@@ -1118,6 +1182,7 @@ def read_threshold_result_from_store(ds: xr.Dataset, lat: float, lon: float, max
         end_steps=end_steps,
         max_lead_days=max_lead_days,
         resolution=str(ds.attrs.get("resolution", DEFAULT_RESOLUTION)),
+        published_at=(datetime.fromisoformat(ds.attrs["published_at"]) if ds.attrs.get("published_at") else None),
         downloaded_bytes=None,  # not meaningful here -- the heavy download already happened during ingestion
         fetch_mode="store",
         capped_to_day6=bool(ds.attrs.get("capped_to_day6", False)),  # stored as int 0/1, see write side
