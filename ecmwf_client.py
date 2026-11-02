@@ -24,6 +24,7 @@ slower.
 from __future__ import annotations
 
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import timedelta, timezone
 from typing import Callable, Optional
@@ -55,6 +56,13 @@ DEFAULT_RESOLUTION = "0p25"
 # batches of steps -- cropping each batch to the bbox and deleting its GRIB
 # file before the next -- instead of one multi-GB file. None = one request.
 STEPS_PER_CHUNK = {"0p25": None, "0p1": 6}
+
+# ECMWF's portal serves roughly 3 MB/s per connection (observed on GitHub
+# runners), so a ~600 MB batch takes ~3-4 min. Batches are independent, so
+# at 0.1 deg several are downloaded at once. Only the DOWNLOAD runs in
+# threads -- cfgrib/eccodes decoding stays on the main thread. Keep this
+# modest: the portal caps simultaneous connections for everyone.
+DOWNLOAD_WORKERS = {"0p25": 1, "0p1": 4}
 
 
 def _make_client(resol: str = DEFAULT_RESOLUTION) -> Client:
@@ -726,41 +734,58 @@ def _verify_run_time(ds: xr.Dataset, expected_run_dt):
     return run_time
 
 
+def _download_batch(resol: str, request: dict, extras: dict, chunk: list, target: Path) -> int:
+    """One batch download; returns bytes transferred. Builds its own Client
+    so nothing is shared between threads."""
+    result = _make_client(resol).retrieve(step=chunk, target=str(target), **request, **extras)
+    return getattr(result, "size", 0) or 0
+
+
 def _retrieve_cropped(
     *, resol: str, run_dt, request: dict, steps: list, bbox: dict, tmpdir: str,
     progress_callback: ProgressFn = None, progress_span=(0.1, 0.8), label: str = "data",
 ) -> xr.Dataset:
     """Downloads `steps` for `request` at `resol` in batches (see
     STEPS_PER_CHUNK), cropping each batch to `bbox` and deleting its GRIB
-    file before fetching the next, then stitches the batches back together
-    along `step`. At 0.25 deg that's one batch, i.e. the same single
-    request as before."""
-    client = _make_client(resol)
+    file once decoded, then stitches the batches together along `step`.
+    Up to DOWNLOAD_WORKERS batches download concurrently; decoding is
+    serial. At 0.25 deg that's one batch, i.e. the same single request as
+    before."""
     extras = {**_request_extras(resol), **_run_kwargs(run_dt)}
     per_chunk = STEPS_PER_CHUNK.get(resol) or len(steps)
     chunks = [steps[i:i + per_chunk] for i in range(0, len(steps), per_chunk)]
+    workers = max(1, DOWNLOAD_WORKERS.get(resol, 1))
     lo, hi = progress_span
 
     pieces = []
     total_bytes = 0
-    for i, chunk in enumerate(chunks):
-        _notify(progress_callback, lo + (hi - lo) * i / len(chunks),
-                f"Fetching {label} at {resol}, batch {i + 1}/{len(chunks)}...")
-        target = Path(tmpdir) / f"{label}_{i}.grib2"
-        result = client.retrieve(step=chunk, target=str(target), **request, **extras)
-        total_bytes += getattr(result, "size", 0) or 0
+    for g in range(0, len(chunks), workers):
+        group = list(enumerate(chunks))[g:g + workers]
+        _notify(progress_callback, lo + (hi - lo) * g / len(chunks),
+                f"Fetching {label} at {resol}, batches {group[0][0] + 1}-{group[-1][0] + 1} of {len(chunks)}...")
+        targets = {i: Path(tmpdir) / f"{label}_{i}.grib2" for i, _ in group}
 
-        ds = xr.open_dataset(str(target), engine="cfgrib", backend_kwargs={"indexpath": ""})
-        try:
-            piece = _crop_to_bbox(ds, bbox).load()  # resolve into memory before the file goes
-        finally:
-            ds.close()
-        target.unlink(missing_ok=True)
+        if len(group) == 1:
+            i, chunk = group[0]
+            sizes = [_download_batch(resol, request, extras, chunk, targets[i])]
+        else:
+            with ThreadPoolExecutor(max_workers=len(group)) as pool:
+                sizes = list(pool.map(
+                    lambda ic: _download_batch(resol, request, extras, ic[1], targets[ic[0]]), group))
+        total_bytes += sum(sizes)
 
-        piece = piece.drop_vars("valid_time", errors="ignore")
-        if "step" not in piece.dims:  # cfgrib squeezes a 1-step batch to a scalar coordinate
-            piece = piece.expand_dims("step")
-        pieces.append(piece)
+        for i, _ in group:  # decode serially, in order
+            ds = xr.open_dataset(str(targets[i]), engine="cfgrib", backend_kwargs={"indexpath": ""})
+            try:
+                piece = _crop_to_bbox(ds, bbox).load()  # resolve into memory before the file goes
+            finally:
+                ds.close()
+            targets[i].unlink(missing_ok=True)
+
+            piece = piece.drop_vars("valid_time", errors="ignore")
+            if "step" not in piece.dims:  # cfgrib squeezes a 1-step batch to a scalar coordinate
+                piece = piece.expand_dims("step")
+            pieces.append(piece)
 
     print(f"[{label}] downloaded {total_bytes / 1e9:.2f} GB at {resol} in {len(chunks)} batch(es)", flush=True)
     if len(pieces) == 1:
