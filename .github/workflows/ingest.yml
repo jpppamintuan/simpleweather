@@ -105,6 +105,7 @@ jobs:
       - name: Run ingestion
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
+          TQDM_DISABLE: "1"  # the download progress bars alone were ~4,000 log lines per 14 min
         run: python ingest.py
 
       # Publishes ./output to a dedicated `data` branch as a single fresh
