@@ -44,7 +44,10 @@ LOCATIONS = {
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
     "Makati City, Metro Manila": {"lat": 14.555539, "lon": 121.002918},
     "Bambang, Nueva Vizcaya": {"lat": 16.389440, "lon": 121.106919},
-    "Bacoor, Cavite": {"lat": 14.454261, "lon": 120.941266},
+    "Bacoor, Cavite": {
+        "lat": 14.454261, "lon": 120.941266,
+        "query_lat": 14.4, "query_lon": 120.9,
+    },
 }
 
 
