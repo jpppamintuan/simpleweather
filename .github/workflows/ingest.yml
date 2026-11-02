@@ -39,10 +39,19 @@ on:
       force_refresh:
         description: "Force a full refetch of every dataset, ignoring the check-then-fetch skip logic (use after a storage-format change, e.g. this one)"
         type: boolean
-        default: true
+        default: false
+      diagnose_dataset:
+        description: "Diagnose mode: dataset(s) to test, e.g. percentile (comma-separated; threshold / percentile / temperature). Fetches and decodes only the first batch(es), publishes NOTHING. Leave empty for a normal run."
+        type: string
+        default: ""
+      diagnose_batches:
+        description: "Diagnose mode: number of batches to fetch (each is ~6 steps x 50 members)"
+        type: string
+        default: "1"
 
 permissions:
   contents: write  # needed to push to the `data` branch below
+  actions: read    # lets the diagnostics step list recent runs (overlap check)
 
 # Prevents overlapping runs. A genuine full fetch can now take up to the
 # full timeout (see above), while scheduled triggers fire every 15
@@ -102,11 +111,42 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements-ingest.txt
 
+      # Context for diagnosing runs that end in a bare "The operation was
+      # canceled": the machine's size, and which other runs of this workflow
+      # were queued/in progress right now (overlap is one way a run gets cancelled).
+      - name: Runner info and recent runs
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "event=${{ github.event_name }} run_id=${{ github.run_id }} attempt=${{ github.run_attempt }}"
+          nproc; free -m; df -h /
+          gh run list --workflow ingest.yml --limit 8 --json databaseId,status,conclusion,event,createdAt \
+            --template '{{range .}}{{.databaseId}} {{.status}} {{.conclusion}} {{.event}} {{.createdAt}}{{"\n"}}{{end}}'
+
       - name: Run ingestion
         env:
           FORCE_REFRESH: ${{ github.event.inputs.force_refresh || 'false' }}
-          TQDM_DISABLE: "1"  # the download progress bars alone were ~4,000 log lines per 14 min
+          DIAGNOSE_ONLY: ${{ github.event.inputs.diagnose_dataset }}
+          DIAGNOSE_BATCHES: ${{ github.event.inputs.diagnose_batches }}
+          TQDM_DISABLE: "1"  # NOTE: the download bars still appear (multiurl ignores this); grep the log for "[diag" / "[percentile" etc.
+          PYTHONUNBUFFERED: "1"
         run: python ingest.py
+
+      # Runs even when the step above was cancelled or killed. An out-of-memory
+      # kill leaves a line in the kernel log; the run list shows what else was going on.
+      - name: Post-mortem
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          free -m; df -h /
+          echo "--- kernel log: OOM / kills ---"
+          sudo dmesg 2>/dev/null | grep -i -E "out of memory|oom-kill|killed process" | tail -20 || true
+          echo "--- recent runs ---"
+          gh run list --workflow ingest.yml --limit 8 --json databaseId,status,conclusion,event,createdAt \
+            --template '{{range .}}{{.databaseId}} {{.status}} {{.conclusion}} {{.event}} {{.createdAt}}{{"\n"}}{{end}}'
 
       # Publishes ./output to a dedicated `data` branch as a single fresh
       # commit each run (force_orphan: true means no parent history, so
