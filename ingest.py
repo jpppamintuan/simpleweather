@@ -233,14 +233,16 @@ def _is_newer(run, resol, stored_run, stored_resol) -> bool:
     return RESOLUTION_RANK.get(resol, 0) > RESOLUTION_RANK.get(stored_resol, 0)
 
 
-def _ingest(name: str, cfg: dict, run_dt: datetime, resol: str) -> str:
-    """Returns the run_time string on success; raises on failure."""
+def _ingest(name: str, cfg: dict, run_dt: datetime, resol: str) -> tuple[str, str | None]:
+    """Returns (run_time, published_at) on success -- published_at being
+    when ECMWF actually released the files (None if it couldn't be
+    determined); raises on failure."""
     print(f"[{name}] Fetching run {run_dt:%Y-%m-%d %H}Z at {resol}...", flush=True)
     ds = cfg["fetch"](run_dt, resol)
     print(f"[{name}] Fetched. run_time={ds.attrs.get('run_time')}, resolution={ds.attrs.get('resolution')}, "
           f"dims={dict(ds.sizes)}", flush=True)
     _write_netcdf_locally(ds, cfg["path"], cfg["packing"])
-    return ds.attrs["run_time"]
+    return ds.attrs["run_time"], ds.attrs.get("published_at")
 
 
 def main() -> int:
@@ -264,6 +266,7 @@ def main() -> int:
     # first run after this change refetches everything once.
     run_times = {k: v for k, v in existing.get("run_times", {}).items() if k in DATASETS}
     resolutions = {k: v for k, v in existing.get("resolutions", {}).items() if k in DATASETS}
+    published_ats = {k: v for k, v in existing.get("published_at", {}).items() if k in DATASETS}
     failures: list[str] = []          # stored data is behind what's available
     upgrade_failures: list[str] = []  # stored data is current; only the 0.1 deg upgrade failed
 
@@ -275,6 +278,7 @@ def main() -> int:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "run_times": run_times,
             "resolutions": resolutions,
+            "published_at": published_ats,
             "failures": failures,
             "upgrade_failures": upgrade_failures,
         }, indent=2))
@@ -294,8 +298,11 @@ def main() -> int:
         succeeded = False
         for run_dt, resol in pending:
             try:
-                run_times[name] = _ingest(name, cfg, run_dt, resol)
+                run_times[name], published = _ingest(name, cfg, run_dt, resol)
                 resolutions[name] = resol
+                published_ats.pop(name, None)
+                if published:
+                    published_ats[name] = published
                 succeeded = True
                 break
             except Exception:
