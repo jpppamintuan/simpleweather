@@ -16,17 +16,17 @@ on:
     # until the next 00Z/12Z run arrives (the app already has UI
     # messaging for this, see the capped_to_day6 caption).
     #
-    # Dense checks (every 15 min) inside each dissemination window. The
-    # 0.25-degree product lands at about (see _dissemination_available_time()
-    # in ecmwf_client.py, times are estimates):
-    #   00Z -> ~07:40 UTC   06Z -> ~13:20 UTC   12Z -> ~19:40 UTC   18Z -> ~01:20 UTC
-    # and the 0.1-degree product about two hours after that:
-    #   00Z -> ~09:40 UTC   06Z -> ~15:20 UTC   12Z -> ~21:40 UTC   18Z -> ~03:20 UTC
-    # ECMWF's own listing shows the 0.1-degree member files (pf) appearing
-    # ~2h after the 0.25 release and the 0.1-degree probability files (ep)
-    # ~20 min after that (00Z run: 09:40 and 10:01 UTC). Each window below
-    # runs from just before the 0.25 release to about 1h45 past the 0.1 ep
-    # file, so a late release doesn't fall outside it.
+    # Dense checks (every 15 min) inside each release window. Times are from
+    # ECMWF's "Dissemination schedule" (IFS ENS, enfo), UTC, and the 0.1-degree
+    # files appear exactly 2h after their 0.25-degree counterparts (measured on
+    # the open-data portal: 09:40 and 10:01 for the 00Z run):
+    #   run   members(pf) 0.25 / 0.1      probabilities(ep) 0.25 / 0.1
+    #   00Z   07:40 / 09:40               08:01 / 10:01
+    #   06Z   13:04 / 15:04               ~13:20 / ~15:20   (ep estimated, see ecmwf_client.py)
+    #   12Z   19:40 / 21:40               20:01 / 22:01
+    #   18Z   01:04 / 03:04               ~01:20 / ~03:20
+    # Each window below runs from before the earliest 0.25 release to ~1h45
+    # past the latest 0.1 one, so a late release doesn't fall outside it.
     - cron: "*/15 7-11 * * *"
     - cron: "*/15 13-17 * * *"
     - cron: "*/15 19-23 * * *"
