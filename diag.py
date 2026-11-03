@@ -66,6 +66,11 @@ def snapshot(tag: str = "") -> str:
     )
 
 
+def ram_available_mb():
+    """MemAvailable in MB, or None where /proc isn't readable."""
+    return _read_kb_fields("/proc/meminfo", {"MemAvailable"}).get("MemAvailable")
+
+
 def log(tag: str = "") -> None:
     try:
         print(snapshot(tag), flush=True)
