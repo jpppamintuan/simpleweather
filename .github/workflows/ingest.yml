@@ -9,12 +9,9 @@ on:
     # schedule, being late by 15 minutes here just means the NEXT check
     # (15 min later) catches up, not a wait until the next 6-hour slot.
     #
-    # Chasing every run (00/06/12/18Z), not just 00Z/12Z, per the
-    # deliberate choice to trade a stable always-15-day range for
-    # fresher updates 4x/day -- the "Full N-day forecast" section will
-    # legitimately show 6 days for a few hours after a 06Z/18Z run,
-    # until the next 00Z/12Z run arrives (the app already has UI
-    # messaging for this, see the capped_to_day6 caption).
+    # The raw-member datasets (percentile, temperature) exist for all four
+    # daily runs (00/06/12/18Z); the threshold probability product exists for
+    # 00Z and 12Z only, so that dataset updates twice a day.
     #
     # Dense checks (every 15 min) inside each release window. Times are from
     # ECMWF's "Dissemination schedule" (IFS ENS, enfo), UTC, and the 0.1-degree
@@ -22,9 +19,9 @@ on:
     # the open-data portal: 09:40 and 10:01 for the 00Z run):
     #   run   members(pf) 0.25 / 0.1      probabilities(ep) 0.25 / 0.1
     #   00Z   07:40 / 09:40               08:01 / 10:01
-    #   06Z   13:04 / 15:04               ~13:20 / ~15:20   (ep estimated, see ecmwf_client.py)
+    #   06Z   13:04 / 15:04               (no ep product for 06Z)
     #   12Z   19:40 / 21:40               20:01 / 22:01
-    #   18Z   01:04 / 03:04               ~01:20 / ~03:20
+    #   18Z   01:04 / 03:04               (no ep product for 18Z)
     # Each window below runs from before the earliest 0.25 release to ~1h45
     # past the latest 0.1 one, so a late release doesn't fall outside it.
     - cron: "*/15 7-11 * * *"
