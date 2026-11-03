@@ -958,15 +958,16 @@ def render_ribbon_chart_html(result: dict) -> str:
 #     the day total at the right is the same number whether you view 3h, 6h,
 #     12h or 24h slices.
 #   * Fill height is strictly linear against RAIN_BAR_CAP_MM for the chosen
-#     step: solid blue = median, lighter = P75, palest = P90. A dark cap on
-#     top marks a bar whose P90 is beyond the scale.
+#     step: solid blue = median, pale blue = P90 (P75 and the rest are in the
+#     bar's popover). A dark cap on top marks a bar whose P90 is beyond the
+#     scale; slices outside the forecast hours are drawn extra pale.
 #   * Light card, like the app's other tables and charts.
 # ---------------------------------------------------------------------------
 
 RAIN_BAR_CAP_MM = {3: 10, 6: 20, 12: 40, 24: 80}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
-_RAIN_BAR_WIDTH_PX = {8: 22, 4: 34, 2: 52, 1: 72}  # max bar width by slices per row
-_RAIN_TRACK, _RAIN_P90, _RAIN_P75, _RAIN_MED = "#E6E9EE", "#B9D4FF", "#7FB0FF", "#2F7BFF"
+_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17, 2: 26, 1: 36}  # max bar width by slices per row
+_RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#E6E9EE", "#D2E3FF", "#2F7BFF"
 
 
 def _fmt_mm(v: float) -> str:
@@ -982,9 +983,9 @@ def _hour_label(hour: int, compact: bool = False) -> str:
 
 def render_rain_rows_html(pct_result: dict) -> str:
     """The card described above, as a single block of HTML for st.markdown.
-    Bar details come from a pure-CSS popover (hover, or tap on a phone) plus
-    a plain `title` as a fallback -- no JavaScript, so nothing here can react
-    to a tap beyond that.
+    Bar details come from a pure-CSS popover (hover, or tap on a phone) -- no
+    JavaScript, so nothing here can react to a tap beyond that. Deliberately
+    NO `title` attribute: browsers would show their own native tooltip on top.
 
     NOTE: no blank lines or indentation inside the HTML -- Markdown would
     end the HTML block at a blank line and treat indented lines as code."""
@@ -1031,13 +1032,11 @@ def render_rain_rows_html(pct_result: dict) -> str:
         over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
         lines = [f"P90 {_fmt_mm(p90)} mm", f"P75 {_fmt_mm(p75)} mm", f"Median {_fmt_mm(med)} mm",
                  f"P25 {_fmt_mm(p25)} mm", f"P10 {_fmt_mm(p10)} mm"]
-        plain = f"{when}&#10;" + "&#10;".join(lines) + over_note
         cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
         return (
-            f"<div class='rr-slot'><div class='rr-bar' tabindex='0' title='{plain}'>"
+            f"<div class='rr-slot'><div class='rr-bar' tabindex='0'>"
             f"<div class='rr-fill'>"
             f"<span style='height:{pct_of_cap(p90):.1f}%;background:{_RAIN_P90}'></span>"
-            f"<span style='height:{pct_of_cap(p75):.1f}%;background:{_RAIN_P75}'></span>"
             f"<span style='height:{pct_of_cap(med):.1f}%;background:{_RAIN_MED}'></span>{cap_mark}</div>"
             f"<div class='rr-tip{tip_side(slot)}{" rr-tip-b" if below else ""}'><b>{when}</b><br>" + "<br>".join(lines) + f"{over_note}</div>"
             f"</div></div>"
@@ -1070,7 +1069,6 @@ def render_rain_rows_html(pct_result: dict) -> str:
     legend = (
         "<div class='rr-legend'>"
         f"<span><i style='background:{_RAIN_MED}'></i>Median</span>"
-        f"<span><i style='background:{_RAIN_P75}'></i>P75</span>"
         f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
         "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
         f"<span>Full bar = {cap} mm per {step}h</span>"
@@ -1089,11 +1087,11 @@ def render_rain_rows_html(pct_result: dict) -> str:
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        f".rr-bar{{position:relative;width:min(70%,{bar_w}px);height:40px;outline:none;cursor:pointer;}}"
+        f".rr-bar{{position:relative;width:min(70%,{bar_w}px);height:60px;outline:none;cursor:pointer;}}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
-        ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.45;}"
+        ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.25;}"
         ".rr-tot{text-align:right;line-height:1.15;}.rr-tot b{font-size:.82rem;}"
         ".rr-tot small{font-size:.6rem;font-weight:400;color:#6b7280;}"
         ".rr-tot span{display:block;font-size:.6rem;color:#6b7280;}.rr-tot .rr-part{font-style:italic;}"
@@ -1742,19 +1740,11 @@ with main:
             if result.get("fetch_mode") == "separate" and not was_cached:
                 st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
 
-            if not result.get("aligned_to_utc_midnight", True):
-                run_hour_str = f"{result['run_time'].hour:02d} UTC"
-                st.caption(
-                    f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
-                    f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
-                )
-
-            if result.get("capped_to_day6"):
-                st.caption(
-                    f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
-                    f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
-                    f"so it requests the range that's safe either way)."
-                )
+            st.caption(
+                "\u2139\ufe0f ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
+                "(there is no 06Z or 18Z probability product), so this view updates twice a day -- first at 0.25\u00b0, "
+                "then at 0.1\u00b0 about two hours later. The percentile and temperature views use all four daily runs."
+            )
 
             # --- 3-day summary (essential info only) ---
             st.subheader(f"3-day summary for {location_name}")
