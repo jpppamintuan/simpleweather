@@ -23,6 +23,7 @@ slower.
 
 from __future__ import annotations
 
+import gc
 import os
 import tempfile
 import time
@@ -39,10 +40,13 @@ import xarray as xr
 from ecmwf.opendata import Client
 
 try:  # run diagnostics (see diag.py); the app doesn't need it
-    from diag import log as _diag
+    from diag import log as _diag, ram_available_mb as _ram_available_mb
 except ImportError:
     def _diag(tag: str) -> None:
         pass
+
+    def _ram_available_mb():
+        return None
 
 AVAILABLE_THRESHOLDS_MM = [1, 5, 20, 50, 100]
 
@@ -73,6 +77,18 @@ STEPS_PER_CHUNK = {"0p25": None, "0p1": 6}
 # threads -- cfgrib/eccodes decoding stays on the main thread. Keep this
 # modest: the portal caps simultaneous connections for everyone.
 DOWNLOAD_WORKERS = {"0p25": 1, "0p1": 4}
+
+# Steps per batch for the 50-member (pf) fetches. This is a MEMORY limit, not
+# a download one: cfgrib allocates the full, uncropped global array for every
+# variable it loads -- members x steps x 6.48M points x 4 bytes at 0.1 deg,
+# i.e. 7.8 GB for 6 steps -- before the crop is applied. Two steps keeps that
+# transient at ~2.6 GB per variable (it was what exhausted the 16 GB runner).
+PF_STEPS_PER_CHUNK = {"0p25": 6, "0p1": 2}
+
+# Refuse to start decoding a batch with less free RAM than this: a clear
+# MemoryError (handled like any failed fetch) beats the runner being starved
+# and the whole job cancelled with no message.
+MIN_RAM_BEFORE_DECODE_MB = 3000
 
 # Diagnose mode (see ingest.py): only the first N batches of each fetch.
 # Deliberately inert unless DIAGNOSE_ONLY is also set, so a stray value in
@@ -819,6 +835,7 @@ def _published_at(urls) -> str | None:
 def _retrieve_cropped(
     *, resol: str, run_dt, request: dict, steps: list, bbox: dict, tmpdir: str,
     progress_callback: ProgressFn = None, progress_span=(0.1, 0.8), label: str = "data",
+    steps_per_chunk: int | None = None,
 ) -> xr.Dataset:
     """Downloads `steps` for `request` at `resol` in batches (see
     STEPS_PER_CHUNK), cropping each batch to `bbox` and deleting its GRIB
@@ -827,7 +844,7 @@ def _retrieve_cropped(
     serial. At 0.25 deg that's one batch, i.e. the same single request as
     before."""
     extras = {**_request_extras(resol), **_run_kwargs(run_dt)}
-    per_chunk = STEPS_PER_CHUNK.get(resol) or len(steps)
+    per_chunk = steps_per_chunk or STEPS_PER_CHUNK.get(resol) or len(steps)
     chunks = [steps[i:i + per_chunk] for i in range(0, len(steps), per_chunk)]
     if DEBUG_MAX_BATCHES:
         chunks = chunks[:DEBUG_MAX_BATCHES]
@@ -858,15 +875,24 @@ def _retrieve_cropped(
               f"({on_disk_mb:.0f} MB on disk)")
 
         for i, _ in group:  # decode serially, in order
+            avail = _ram_available_mb()
+            if avail is not None and avail < MIN_RAM_BEFORE_DECODE_MB:
+                raise MemoryError(
+                    f"Only {avail:.0f} MB RAM free before decoding {label} batch {i + 1}/{len(chunks)} "
+                    f"(need ~{MIN_RAM_BEFORE_DECODE_MB} MB); stopping instead of letting the runner be starved")
             _diag(f"{label} batch {i + 1}/{len(chunks)}: decoding {targets[i].stat().st_size / 1e6:.0f} MB")
             t0 = time.time()
             ds = xr.open_dataset(str(targets[i]), engine="cfgrib", backend_kwargs={"indexpath": ""})
             _diag(f"{label} batch {i + 1}/{len(chunks)}: index built in {time.time() - t0:.0f}s, cropping/loading")
             try:
-                piece = _crop_to_bbox(ds, bbox).load()  # resolve into memory before the file goes
+                # .copy(deep=True) is the memory fix: .load() leaves the cropped result as a
+                # VIEW into the full global array cfgrib allocated, which would keep all of
+                # it (7.8 GB per 0.1 deg batch) alive for as long as the piece is held.
+                piece = _crop_to_bbox(ds, bbox).load().copy(deep=True)
             finally:
                 ds.close()
             targets[i].unlink(missing_ok=True)
+            gc.collect()
             _diag(f"{label} batch {i + 1}/{len(chunks)}: decoded in {time.time() - t0:.0f}s -> {dict(piece.sizes)}")
 
             piece = piece.drop_vars("valid_time", errors="ignore")
@@ -1071,6 +1097,7 @@ def fetch_precip_grid(
             request=dict(stream="enfo", type="pf", param="tp", number=numbers),
             steps=steps, bbox=bbox, tmpdir=tmpdir,
             progress_callback=progress_callback, progress_span=(0.05, 0.9), label="precipitation",
+            steps_per_chunk=PF_STEPS_PER_CHUNK.get(resol, 2),
         )
 
     run_time = _verify_run_time(ds_tp, run_dt)
@@ -1120,6 +1147,7 @@ def fetch_temperature_grid(
             request=dict(stream="enfo", type="pf", param=["2t", "2d"], number=numbers),
             steps=steps, bbox=bbox, tmpdir=tmpdir,
             progress_callback=progress_callback, progress_span=(0.05, 0.85), label="temperature",
+            steps_per_chunk=PF_STEPS_PER_CHUNK.get(resol, 2),
         )
 
     run_time = _verify_run_time(ds_t, run_dt)
