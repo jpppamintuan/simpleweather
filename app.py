@@ -12,6 +12,9 @@ from ecmwf_client import (
     AVAILABLE_THRESHOLDS_MM,
     THRESHOLD_COLORS,
     RESOLUTION_LABELS,
+    PRODUCTS,
+    estimated_release_time,
+    estimated_next_update,
     PH_TZ,
     DEFAULT_PERCENTILES,
     AVAILABLE_PERIOD_HOURS,
@@ -1595,6 +1598,110 @@ def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
 
 
 
+def _coords_caption(location_name: str, true_lat: float, true_lon: float, result: dict) -> str:
+    """The exact location and the grid point actually read, for one result."""
+    resolution = result.get("resolution") or "0p25"
+    res_label = RESOLUTION_LABELS.get(resolution, resolution)
+    parts = [
+        f"**{location_name}, exact:** {true_lat:.6f}\u00b0N, {true_lon:.6f}\u00b0E",
+        f"**{res_label} grid point used:** {result['grid_lat']:.3f}\u00b0N, {result['grid_lon']:.3f}\u00b0E",
+    ]
+    query = resolve_query_point(true_lat, true_lon, resolution)
+    if query != (true_lat, true_lon):
+        parts.append(f"(query point overridden to {query[0]}\u00b0N, {query[1]}\u00b0E for {res_label} data)")
+    return " \u00b7 ".join(parts)
+
+
+_PRODUCT_LABELS = {
+    "threshold": "Threshold forecast",
+    "percentile": "Percentile rainfall",
+    "temperature": "Temperature / heat index",
+}
+
+
+def _fmt_ph_minutes(dt: datetime) -> str:
+    return dt.astimezone(PH_TZ).strftime("%a %d %b %I:%M%p")
+
+
+def _relative(delta_seconds: float) -> str:
+    if delta_seconds <= 0:
+        return "due now"
+    hours, minutes = int(delta_seconds // 3600), int((delta_seconds % 3600) // 60)
+    return f"in {hours}h {minutes:02d}m" if hours else f"in {minutes}m"
+
+
+def build_status_footer_html(manifest: dict | None, now: datetime) -> str:
+    """Small-print status of the data currently being served, for all three
+    products: cycle, grid, release time, next expected update. Built from
+    the ingestion manifest alone -- no location, no data files -- so it can
+    render the instant the page loads. Pure function (no Streamlit calls).
+
+    NOTE: no newlines/indentation inside the HTML -- st.markdown treats a
+    4-space-indented line as a code block and silently breaks raw HTML."""
+    cell = "padding:2px 10px 2px 0;white-space:nowrap;vertical-align:top;"
+    head = "".join(
+        f"<th style='{cell}text-align:left;font-weight:600;'>{h}</th>"
+        for h in ("Product", "Cycle (UTC)", "Grid", "Released (UTC+8)", "Next update, est. (UTC+8)")
+    )
+    if manifest is None:
+        return ("<div style='font-size:0.72rem;opacity:0.8;'>Data status unavailable "
+                "(couldn't reach the data store).</div>")
+
+    run_times = manifest.get("run_times", {})
+    resolutions = manifest.get("resolutions", {})
+    published = manifest.get("published_at", {})
+    failing = set(manifest.get("failures", []))
+
+    rows = ""
+    for name in PRODUCTS:
+        label = _PRODUCT_LABELS[name] + (" \u26a0" if name in failing else "")
+        if name not in run_times:
+            rows += (f"<tr><td style='{cell}'>{label}</td>"
+                     f"<td colspan='4' style='{cell}'>no data ingested yet</td></tr>")
+            continue
+        run_time = datetime.fromisoformat(run_times[name])
+        if run_time.tzinfo is None:
+            run_time = run_time.replace(tzinfo=timezone.utc)
+        resolution = resolutions.get(name, "0p25")  # a pre-0.1 manifest means 0.25
+        if published.get(name):
+            released = _fmt_ph_minutes(datetime.fromisoformat(published[name])) + " \u2713"
+        else:
+            released = "~" + _fmt_ph_minutes(estimated_release_time(name, run_time, resolution))
+        next_when, next_desc = estimated_next_update(name, run_time, resolution)
+        next_text = (f"~{_fmt_ph_minutes(next_when)} ({_relative((next_when - now).total_seconds())}) "
+                     f"\u2013 {next_desc}")
+        rows += (
+            f"<tr><td style='{cell}'>{label}</td>"
+            f"<td style='{cell}'>{run_time:%HZ %d %b}</td>"
+            f"<td style='{cell}'>{RESOLUTION_LABELS.get(resolution, resolution)}</td>"
+            f"<td style='{cell}'>{released}</td>"
+            f"<td style='{cell}'>{next_text}</td></tr>"
+        )
+
+    checked = ""
+    generated_at = manifest.get("generated_at")
+    if generated_at:
+        age_min = (now - datetime.fromisoformat(generated_at)).total_seconds() / 60
+        checked = f" Store last checked {int(age_min)} min ago."
+    note = (
+        "\u2713 = publish time recorded from ECMWF; ~ = estimated from ECMWF's dissemination schedule. "
+        "Each 0.25\u00b0 cycle is replaced by its 0.1\u00b0 version 2h later." + checked
+    )
+    return (
+        "<div style='font-size:0.72rem;line-height:1.35;opacity:0.85;overflow-x:auto;'>"
+        f"<table style='border-collapse:collapse;'><thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table>"
+        f"<div style='margin-top:4px;opacity:0.8;'>{note}</div></div>"
+    )
+
+
+def render_status_footer() -> None:
+    st.divider()
+    st.markdown(
+        build_status_footer_html(github_data_source.get_manifest(), datetime.now(timezone.utc)),
+        unsafe_allow_html=True,
+    )
+
+
 # Location is chosen ONCE here, shared across all three feature views
 # below -- switching features no longer loses the selected location,
 # since this is a single picker/session-state entry rather than each
@@ -1615,373 +1722,343 @@ if _selected_mode is not None:
     st.session_state["view_mode"] = _selected_mode
 view_mode = st.session_state["view_mode"]
 
-if view_mode == "Threshold Forecast":
-    lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
+# The views live in `main`; the status footer is created right after it and
+# rendered immediately, so it sits at the bottom of every page, appears
+# before any location data loads, and still shows when a view calls st.stop().
+main = st.container()
+footer_slot = st.container()
+with footer_slot:
+    render_status_footer()
 
-    get_forecast_clicked = st.button("Get forecast", type="primary")
+with main:
+    if view_mode == "Threshold Forecast":
+        lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
 
-    elapsed_placeholder = st.empty()
+        get_forecast_clicked = st.button("Get forecast", type="primary")
 
-    if get_forecast_clicked:
-        request_started_at = time.time()
-        try:
-            fetch_out = get_forecast_with_progress(lat, lon, lead_days)
-        except Exception as e:
-            st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
-            with st.expander("Full error details"):
-                st.exception(e)
-            st.stop()
-        elapsed = time.time() - request_started_at
+        elapsed_placeholder = st.empty()
 
-        st.session_state["last_fetch_out"] = fetch_out
-        st.session_state["last_location_name"] = location_name
-        st.session_state["last_lat"] = lat
-        st.session_state["last_lon"] = lon
-        st.session_state["last_true_lat"] = true_lat
-        st.session_state["last_true_lon"] = true_lon
-        st.session_state["last_elapsed"] = elapsed
+        if get_forecast_clicked:
+            request_started_at = time.time()
+            try:
+                fetch_out = get_forecast_with_progress(lat, lon, lead_days)
+            except Exception as e:
+                st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
+                with st.expander("Full error details"):
+                    st.exception(e)
+                st.stop()
+            elapsed = time.time() - request_started_at
 
-    if "last_fetch_out" in st.session_state:
-        fetch_out = st.session_state["last_fetch_out"]
-        location_name = st.session_state["last_location_name"]
-        lat = st.session_state["last_lat"]
-        lon = st.session_state["last_lon"]
-        true_lat = st.session_state["last_true_lat"]
-        true_lon = st.session_state["last_true_lon"]
-        elapsed = st.session_state["last_elapsed"]
+            st.session_state["last_fetch_out"] = fetch_out
+            st.session_state["last_location_name"] = location_name
+            st.session_state["last_lat"] = lat
+            st.session_state["last_lon"] = lon
+            st.session_state["last_true_lat"] = true_lat
+            st.session_state["last_true_lon"] = true_lon
+            st.session_state["last_elapsed"] = elapsed
 
-        result, was_cached = fetch_out
-        elapsed_placeholder.caption(
-            f"\u23f1\ufe0f Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
-        )
+        if "last_fetch_out" in st.session_state:
+            fetch_out = st.session_state["last_fetch_out"]
+            location_name = st.session_state["last_location_name"]
+            lat = st.session_state["last_lat"]
+            lon = st.session_state["last_lon"]
+            true_lat = st.session_state["last_true_lat"]
+            true_lon = st.session_state["last_true_lon"]
+            elapsed = st.session_state["last_elapsed"]
 
-        resolution = result.get("resolution") or "0p25"
-        model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
-
-        if not result["windows"]:
-            st.warning("No aligned 00 UTC windows available for this range.")
-            st.stop()
-
-        if result.get("fetch_mode") == "separate" and not was_cached:
-            st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
-
-        if not result.get("aligned_to_utc_midnight", True):
-            run_hour_str = f"{result['run_time'].hour:02d} UTC"
-            st.caption(
-                f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
-                f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
+            result, was_cached = fetch_out
+            elapsed_placeholder.caption(
+                f"\u23f1\ufe0f Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
             )
 
-        if result.get("capped_to_day6"):
-            st.caption(
-                f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
-                f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
-                f"so it requests the range that's safe either way)."
-            )
+            resolution = result.get("resolution") or "0p25"
+            model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
 
-        # --- 3-day summary (essential info only) ---
-        st.subheader(f"3-day summary for {location_name}")
-        st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
-        st.caption("All dates shown in UTC+8 (Philippine Time).")
+            if not result["windows"]:
+                st.warning("No aligned 00 UTC windows available for this range.")
+                st.stop()
 
-        st.divider()
+            if result.get("fetch_mode") == "separate" and not was_cached:
+                st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
 
-        # --- Full detailed table ---
-        num_days_shown = len(result["windows"])
-        st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
-        show_graph = st.toggle("Show as graph")
-        if show_graph:
-            components.html(render_ribbon_chart_html(result), height=650)
-        else:
-            st.markdown(render_table_html(result), unsafe_allow_html=True)
-        st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
-
-        st.divider()
-
-        # --- Run / location / grid info (moved to the bottom) ---
-        run_time = result["run_time"]
-        info_col1, info_col2 = st.columns(2)
-        with info_col1:
-            st.markdown(f"**Model forecast run ({model_label}):** `{run_time.strftime('%Y-%m-%d %H UTC')}`")
-            st.markdown(
-                f"**Grid point used:** {result['grid_lat']:.3f}°N, {result['grid_lon']:.3f}°E "
-                f"&nbsp;·&nbsp; **{location_name} (exact):** {true_lat:.6f}°N, {true_lon:.6f}°E"
-            )
-        with info_col2:
-            now_utc = datetime.now(timezone.utc)
-
-            def _fmt_when(dt):
-                return dt.astimezone(PH_TZ).strftime("%a, %d %b %Y %I:%M%p") + " (UTC+8)"
-
-            measured = result.get("available_is_measured", False)
-            last_label = "published by ECMWF" if measured else "estimated"
-            st.markdown(f"**Last updated ({last_label}):** {_fmt_when(result['available_since'])}")
-
-            remaining = result["next_expected"] - now_utc
-            if remaining.total_seconds() > 0:
-                hrs = int(remaining.total_seconds() // 3600)
-                mins = int((remaining.total_seconds() % 3600) // 60)
-                remaining_str = f"in ~{hrs}h {mins}m"
-            else:
-                remaining_str = "due any time now"
-            next_desc = result.get("next_description")
-            next_label = f"Next update expected ({next_desc})" if next_desc else "Next update expected"
-            st.markdown(f"**{next_label}:** {_fmt_when(result['next_expected'])} \u2014 {remaining_str}")
-
-        if measured:
-            schedule_note = (
-                "\"Last updated\" is when ECMWF released this data (the files' server timestamp, "
-                "recorded at ingestion). \"Next update\" is estimated from ECMWF's dissemination "
-                "schedule plus the ~2h20 lag the 0.1\u00b0 products have been observed to have."
-            )
-        else:
-            schedule_note = (
-                "Times are estimated from ECMWF's dissemination schedule (plus a ~2h20 lag for the "
-                "0.1\u00b0 products), not a live timestamp from the server."
-            )
-        if resolution == "0p25":
-            schedule_note += " The finer 0.1\u00b0 grid for this run replaces this one automatically when it appears."
-        st.caption(schedule_note)
-    else:
-        st.info("Choose a location and click **Get forecast**.")
-
-
-elif view_mode == "Percentile Rainfall Forecast":
-    st.caption(
-        "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
-        "percentiles, instead of using ECMWF's precomputed threshold probabilities "
-        "like the tables above -- this gives actual mm amounts (not just chance of "
-        "exceeding a fixed threshold). Always reads pre-computed data from the "
-        "scheduled ingestion job, same as the main forecast above -- no live fetch, "
-        "since the raw member data involved is far too heavy to fetch on demand."
-    )
-
-    pct_location_name, pct_lat, pct_lon = location_name, lat, lon  # shared picker, see above
-    pct_lead_hours = st.slider(
-        "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
-    )
-
-    pct_clicked = st.button("Get percentile forecast", key="pct_button")
-    pct_elapsed_placeholder = st.empty()
-
-    if pct_clicked:
-        pct_request_started_at = time.time()
-        try:
-            pct_raw_result, pct_was_cached = get_percentile_raw_with_progress(pct_lat, pct_lon, pct_lead_hours)
-        except Exception as e:
-            st.error(f"Failed to read percentile forecast: {type(e).__name__}: {e}")
-            with st.expander("Full error details"):
-                st.exception(e)
-            st.stop()
-        pct_elapsed = time.time() - pct_request_started_at
-
-        if pct_raw_result is None:
-            # No live-fetch fallback for percentile (see
-            # get_percentile_raw_with_progress) -- if the store genuinely
-            # isn't reachable, that's the whole answer, not a cue to try
-            # a ~1.7GB live fetch. Deliberately doesn't touch
-            # last_pct_raw_result, so a previously-loaded result (from
-            # earlier in the session) stays on screen instead of being
-            # wiped by a transient read failure.
-            st.error(
-                "Percentile data isn't available from the latest ingestion right now "
-                "(store unreachable or not yet published). This view only ever reads "
-                "pre-computed data -- please try again shortly."
-            )
-        else:
-            st.session_state["last_pct_raw_result"] = pct_raw_result
-            st.session_state["last_pct_location_name"] = pct_location_name
-            st.session_state["last_pct_was_cached"] = pct_was_cached
-            st.session_state["last_pct_elapsed"] = pct_elapsed
-
-    if "last_pct_raw_result" in st.session_state:
-        pct_raw_result = st.session_state["last_pct_raw_result"]
-        pct_location_name = st.session_state["last_pct_location_name"]
-        pct_was_cached = st.session_state["last_pct_was_cached"]
-        pct_elapsed = st.session_state["last_pct_elapsed"]
-
-        pct_elapsed_placeholder.caption(
-            f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
-        )
-
-        # --- Time-step control: purely a local recompute, never refetches.
-        # aggregate_percentile_bins() sums the already-downloaded 3-hourly
-        # per-member bins into whichever period the person picks here, so
-        # moving this control is instant even though the underlying fetch
-        # above can take a while.
-        period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
-        if "pct_period_hours" not in st.session_state:
-            st.session_state["pct_period_hours"] = 3
-        selected_period_label = st.segmented_control(
-            "Time step",
-            list(period_labels.values()),
-            default=period_labels[st.session_state["pct_period_hours"]],
-            key="pct_period_control",
-        )
-        if selected_period_label is not None:
-            st.session_state["pct_period_hours"] = next(
-                h for h, label in period_labels.items() if label == selected_period_label
-            )
-        pct_period_hours = st.session_state["pct_period_hours"]
-
-        pct_result = aggregate_percentile_bins(pct_raw_result, period_hours=pct_period_hours)
-        pct_days = pct_result["days"]
-
-        if not pct_days:
-            st.warning(
-                f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
-                f"range -- try a longer range or a shorter time step."
-            )
-            st.stop()
-
-        pct_percentiles = pct_result["percentiles"]
-        pct_run_time = pct_result["run_time"]
-
-        st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(pct_result)}")
-        st.caption(
-            f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
-            f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
-            f"for this first version. Limited to 120 hours ahead for now."
-        )
-
-        st.subheader(f"Percentile rainfall for {pct_location_name}")
-        show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
-        if show_graph:
-            components.html(render_percentile_chart_html(pct_result), height=380)
-        else:
-            stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-            stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-            day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
-
-            table_data = {
-                day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-                for i, d in enumerate(pct_days)
-            }
-            pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-            st.dataframe(pct_df, use_container_width=True)
-
-        downloaded = pct_result.get("downloaded_bytes")
-        if downloaded:
-            size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
-            st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation, 3-hourly).")
-    else:
-        st.info(
-            "Choose a location and click **Get percentile forecast** to see mm-based "
-            "rainfall percentiles."
-        )
-
-
-elif view_mode == "Temperature Forecast":
-    st.caption(
-        "Temperature and heat index (\"feels like\") percentiles across all 50 ECMWF ensemble "
-        "members, at native 3-hourly resolution. Always reads pre-computed data from the "
-        "scheduled ingestion job, same as the views above -- no live fetch."
-    )
-
-    temp_location_name, temp_lat, temp_lon = location_name, lat, lon  # shared picker, see above
-    temp_lead_hours = st.slider(
-        "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
-    )
-
-    temp_clicked = st.button("Get temperature forecast", key="temp_button")
-    temp_elapsed_placeholder = st.empty()
-
-    if temp_clicked:
-        temp_request_started_at = time.time()
-        try:
-            temp_result, temp_was_cached = get_temperature_percentiles_with_progress(
-                temp_lat, temp_lon, temp_lead_hours
-            )
-        except Exception as e:
-            st.error(f"Failed to read temperature forecast: {type(e).__name__}: {e}")
-            with st.expander("Full error details"):
-                st.exception(e)
-            st.stop()
-        temp_elapsed = time.time() - temp_request_started_at
-
-        st.session_state["last_temp_result"] = temp_result
-        st.session_state["last_temp_location_name"] = temp_location_name
-        st.session_state["last_temp_was_cached"] = temp_was_cached
-        st.session_state["last_temp_elapsed"] = temp_elapsed
-
-    if "last_temp_result" in st.session_state:
-        temp_result = st.session_state["last_temp_result"]
-        temp_location_name = st.session_state["last_temp_location_name"]
-        temp_was_cached = st.session_state["last_temp_was_cached"]
-        temp_elapsed = st.session_state["last_temp_elapsed"]
-
-        temp_elapsed_placeholder.caption(
-            f"⏱️ Loaded in {temp_elapsed:.1f}s" + (" (from cache)" if temp_was_cached else "")
-        )
-
-        temp_steps = temp_result["steps"]
-        if not temp_steps:
-            st.warning("No data available for this forecast range.")
-            st.stop()
-
-        temp_percentiles = temp_result["percentiles"]
-        temp_run_time = temp_result["run_time"]
-
-        st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(temp_result)}")
-
-        st.subheader(f"Temperature & heat index for {temp_location_name}")
-        temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
-        if temp_show_graph:
-            cb1, cb2, cb3 = st.columns(3)
-            with cb1:
-                show_temp_series = st.checkbox("Temperature", value=False, key="temp_show_temp_series")
-            with cb2:
-                show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
-            with cb3:
-                show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
-
-            show_all_categories = st.checkbox(
-                "Show Heat Index reference lines", value=True, key="temp_show_categories"
-            )
-            show_categories = {
-                key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
-            }
-
-            if not show_temp_series and not show_hi_series:
-                st.info("Select at least one of Temperature or Heat Index to show the graph.")
-            else:
-                components.html(
-                    render_temperature_chart_html(
-                        temp_result,
-                        show_temp=show_temp_series,
-                        show_heat_index=show_hi_series,
-                        show_ranges=show_ranges,
-                        show_categories=show_categories,
-                    ),
-                    height=380,
+            if not result.get("aligned_to_utc_midnight", True):
+                run_hour_str = f"{result['run_time'].hour:02d} UTC"
+                st.caption(
+                    f"ℹ️ This {model_label} run started at {run_hour_str}, not 00/12 UTC, so windows below "
+                    f"are aligned to that run's own hour rather than the usual 00 UTC boundary."
                 )
-        else:
-            temp_stat_rows = ["mean", "median"] + [f"p{p}" for p in temp_percentiles]
-            temp_stat_display_labels = {
-                "mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in temp_percentiles}
-            }
-            temp_col_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for s in temp_steps]
 
-            temp_table_data = {
-                temp_col_labels[i]: [round(s["temperature_stats"][row], 1) for row in temp_stat_rows]
-                for i, s in enumerate(temp_steps)
-            }
-            hi_table_data = {
-                temp_col_labels[i]: [round(s["heat_index_stats"][row], 1) for row in temp_stat_rows]
-                for i, s in enumerate(temp_steps)
-            }
-            st.caption("Temperature (°C)")
-            st.dataframe(
-                pd.DataFrame(temp_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
-                use_container_width=True,
-            )
-            st.caption("Heat Index / \"feels like\" (°C)")
-            st.dataframe(
-                pd.DataFrame(hi_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
-                use_container_width=True,
-            )
-    else:
-        st.info(
-            "Choose a location and click **Get temperature forecast** to see temperature "
-            "and heat index percentiles."
+            if result.get("capped_to_day6"):
+                st.caption(
+                    f"ℹ️ {model_label} is limited to 6 days here: its 06Z/18Z runs only publish that far out "
+                    f"(00Z/12Z runs go to 15 days, but this app can't tell which one it'll get in advance, "
+                    f"so it requests the range that's safe either way)."
+                )
+
+            # --- 3-day summary (essential info only) ---
+            st.subheader(f"3-day summary for {location_name}")
+            st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
+            st.caption("All dates shown in UTC+8 (Philippine Time).")
+
+            st.divider()
+
+            # --- Full detailed table ---
+            num_days_shown = len(result["windows"])
+            st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
+            show_graph = st.toggle("Show as graph")
+            if show_graph:
+                components.html(render_ribbon_chart_html(result), height=650)
+            else:
+                st.markdown(render_table_html(result), unsafe_allow_html=True)
+            st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
+
+            st.caption(_coords_caption(location_name, true_lat, true_lon, result))
+        else:
+            st.info("Choose a location and click **Get forecast**.")
+
+
+    elif view_mode == "Percentile Rainfall Forecast":
+        st.caption(
+            "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
+            "percentiles, instead of using ECMWF's precomputed threshold probabilities "
+            "like the tables above -- this gives actual mm amounts (not just chance of "
+            "exceeding a fixed threshold). Always reads pre-computed data from the "
+            "scheduled ingestion job, same as the main forecast above -- no live fetch, "
+            "since the raw member data involved is far too heavy to fetch on demand."
         )
+
+        pct_location_name, pct_lat, pct_lon = location_name, lat, lon  # shared picker, see above
+        pct_lead_hours = st.slider(
+            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
+        )
+
+        pct_clicked = st.button("Get percentile forecast", key="pct_button")
+        pct_elapsed_placeholder = st.empty()
+
+        if pct_clicked:
+            pct_request_started_at = time.time()
+            try:
+                pct_raw_result, pct_was_cached = get_percentile_raw_with_progress(pct_lat, pct_lon, pct_lead_hours)
+            except Exception as e:
+                st.error(f"Failed to read percentile forecast: {type(e).__name__}: {e}")
+                with st.expander("Full error details"):
+                    st.exception(e)
+                st.stop()
+            pct_elapsed = time.time() - pct_request_started_at
+
+            if pct_raw_result is None:
+                # No live-fetch fallback for percentile (see
+                # get_percentile_raw_with_progress) -- if the store genuinely
+                # isn't reachable, that's the whole answer, not a cue to try
+                # a ~1.7GB live fetch. Deliberately doesn't touch
+                # last_pct_raw_result, so a previously-loaded result (from
+                # earlier in the session) stays on screen instead of being
+                # wiped by a transient read failure.
+                st.error(
+                    "Percentile data isn't available from the latest ingestion right now "
+                    "(store unreachable or not yet published). This view only ever reads "
+                    "pre-computed data -- please try again shortly."
+                )
+            else:
+                st.session_state["last_pct_raw_result"] = pct_raw_result
+                st.session_state["last_pct_location_name"] = pct_location_name
+                st.session_state["last_pct_true"] = (true_lat, true_lon)
+                st.session_state["last_pct_was_cached"] = pct_was_cached
+                st.session_state["last_pct_elapsed"] = pct_elapsed
+
+        if "last_pct_raw_result" in st.session_state:
+            pct_raw_result = st.session_state["last_pct_raw_result"]
+            pct_location_name = st.session_state["last_pct_location_name"]
+            pct_was_cached = st.session_state["last_pct_was_cached"]
+            pct_elapsed = st.session_state["last_pct_elapsed"]
+
+            pct_elapsed_placeholder.caption(
+                f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
+            )
+
+            # --- Time-step control: purely a local recompute, never refetches.
+            # aggregate_percentile_bins() sums the already-downloaded 3-hourly
+            # per-member bins into whichever period the person picks here, so
+            # moving this control is instant even though the underlying fetch
+            # above can take a while.
+            period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
+            if "pct_period_hours" not in st.session_state:
+                st.session_state["pct_period_hours"] = 3
+            selected_period_label = st.segmented_control(
+                "Time step",
+                list(period_labels.values()),
+                default=period_labels[st.session_state["pct_period_hours"]],
+                key="pct_period_control",
+            )
+            if selected_period_label is not None:
+                st.session_state["pct_period_hours"] = next(
+                    h for h, label in period_labels.items() if label == selected_period_label
+                )
+            pct_period_hours = st.session_state["pct_period_hours"]
+
+            pct_result = aggregate_percentile_bins(pct_raw_result, period_hours=pct_period_hours)
+            pct_days = pct_result["days"]
+
+            if not pct_days:
+                st.warning(
+                    f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
+                    f"range -- try a longer range or a shorter time step."
+                )
+                st.stop()
+
+            pct_percentiles = pct_result["percentiles"]
+            pct_run_time = pct_result["run_time"]
+
+            st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(pct_result)}")
+            st.caption(
+                f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
+                f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
+                f"for this first version. Limited to 120 hours ahead for now."
+            )
+
+            st.subheader(f"Percentile rainfall for {pct_location_name}")
+            show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
+            if show_graph:
+                components.html(render_percentile_chart_html(pct_result), height=380)
+            else:
+                stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+                stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+                day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
+
+                table_data = {
+                    day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+                    for i, d in enumerate(pct_days)
+                }
+                pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+                st.dataframe(pct_df, use_container_width=True)
+
+            st.caption(_coords_caption(pct_location_name, *st.session_state.get("last_pct_true", (true_lat, true_lon)), pct_result))
+
+            downloaded = pct_result.get("downloaded_bytes")
+            if downloaded:
+                size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
+                st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation, 3-hourly).")
+        else:
+            st.info(
+                "Choose a location and click **Get percentile forecast** to see mm-based "
+                "rainfall percentiles."
+            )
+
+
+    elif view_mode == "Temperature Forecast":
+        st.caption(
+            "Temperature and heat index (\"feels like\") percentiles across all 50 ECMWF ensemble "
+            "members, at native 3-hourly resolution. Always reads pre-computed data from the "
+            "scheduled ingestion job, same as the views above -- no live fetch."
+        )
+
+        temp_location_name, temp_lat, temp_lon = location_name, lat, lon  # shared picker, see above
+        temp_lead_hours = st.slider(
+            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
+        )
+
+        temp_clicked = st.button("Get temperature forecast", key="temp_button")
+        temp_elapsed_placeholder = st.empty()
+
+        if temp_clicked:
+            temp_request_started_at = time.time()
+            try:
+                temp_result, temp_was_cached = get_temperature_percentiles_with_progress(
+                    temp_lat, temp_lon, temp_lead_hours
+                )
+            except Exception as e:
+                st.error(f"Failed to read temperature forecast: {type(e).__name__}: {e}")
+                with st.expander("Full error details"):
+                    st.exception(e)
+                st.stop()
+            temp_elapsed = time.time() - temp_request_started_at
+
+            st.session_state["last_temp_result"] = temp_result
+            st.session_state["last_temp_location_name"] = temp_location_name
+            st.session_state["last_temp_true"] = (true_lat, true_lon)
+            st.session_state["last_temp_was_cached"] = temp_was_cached
+            st.session_state["last_temp_elapsed"] = temp_elapsed
+
+        if "last_temp_result" in st.session_state:
+            temp_result = st.session_state["last_temp_result"]
+            temp_location_name = st.session_state["last_temp_location_name"]
+            temp_was_cached = st.session_state["last_temp_was_cached"]
+            temp_elapsed = st.session_state["last_temp_elapsed"]
+
+            temp_elapsed_placeholder.caption(
+                f"⏱️ Loaded in {temp_elapsed:.1f}s" + (" (from cache)" if temp_was_cached else "")
+            )
+
+            temp_steps = temp_result["steps"]
+            if not temp_steps:
+                st.warning("No data available for this forecast range.")
+                st.stop()
+
+            temp_percentiles = temp_result["percentiles"]
+            temp_run_time = temp_result["run_time"]
+
+            st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(temp_result)}")
+
+            st.subheader(f"Temperature & heat index for {temp_location_name}")
+            temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
+            if temp_show_graph:
+                cb1, cb2, cb3 = st.columns(3)
+                with cb1:
+                    show_temp_series = st.checkbox("Temperature", value=False, key="temp_show_temp_series")
+                with cb2:
+                    show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
+                with cb3:
+                    show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
+
+                show_all_categories = st.checkbox(
+                    "Show Heat Index reference lines", value=True, key="temp_show_categories"
+                )
+                show_categories = {
+                    key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
+                }
+
+                if not show_temp_series and not show_hi_series:
+                    st.info("Select at least one of Temperature or Heat Index to show the graph.")
+                else:
+                    components.html(
+                        render_temperature_chart_html(
+                            temp_result,
+                            show_temp=show_temp_series,
+                            show_heat_index=show_hi_series,
+                            show_ranges=show_ranges,
+                            show_categories=show_categories,
+                        ),
+                        height=380,
+                    )
+            else:
+                temp_stat_rows = ["mean", "median"] + [f"p{p}" for p in temp_percentiles]
+                temp_stat_display_labels = {
+                    "mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in temp_percentiles}
+                }
+                temp_col_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for s in temp_steps]
+
+                temp_table_data = {
+                    temp_col_labels[i]: [round(s["temperature_stats"][row], 1) for row in temp_stat_rows]
+                    for i, s in enumerate(temp_steps)
+                }
+                hi_table_data = {
+                    temp_col_labels[i]: [round(s["heat_index_stats"][row], 1) for row in temp_stat_rows]
+                    for i, s in enumerate(temp_steps)
+                }
+                st.caption("Temperature (°C)")
+                st.dataframe(
+                    pd.DataFrame(temp_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
+                    use_container_width=True,
+                )
+                st.caption("Heat Index / \"feels like\" (°C)")
+                st.dataframe(
+                    pd.DataFrame(hi_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
+                    use_container_width=True,
+                )
+
+            st.caption(_coords_caption(temp_location_name, *st.session_state.get("last_temp_true", (true_lat, true_lon)), temp_result))
+        else:
+            st.info(
+                "Choose a location and click **Get temperature forecast** to see temperature "
+                "and heat index percentiles."
+            )
