@@ -258,60 +258,55 @@ def _aligned_end_steps(run_hour: int, end_steps: list[int], target_hour: int = 0
     return aligned
 
 
-def _dissemination_available_time(run_time):
-    """Approximate when this run's threshold-exceedance product becomes
-    available, per ECMWF's published dissemination schedule.
+PRODUCTS = ("threshold", "percentile", "temperature")
 
-    NOTE on accuracy: these times are estimates, refined from
-    user-sourced research against ECMWF's Confluence documentation, but
-    NOT independently confirmed against an authoritative source for this
-    specific product (ep/tpg). ECMWF distinguishes "forecast" dissemination
-    times from "derived products" times (~20min later) for the day-15
-    product; which bucket ep/tpg falls into wasn't confirmed, so the
-    earlier ("forecast") time is used here as the working estimate. This
-    only affects the "Last updated" / "Next update" display text -- actual
-    ingestion timing doesn't depend on this being exactly right, since the
-    scheduled checks (see ingest.yml) run every 15 minutes across windows
-    generous enough to cover either possibility.
-    """
-    run_hour = run_time.hour
-    if run_hour == 0:
-        return run_time.replace(hour=7, minute=40, second=0, microsecond=0)
-    elif run_hour == 12:
-        return run_time.replace(hour=19, minute=40, second=0, microsecond=0)
-    elif run_hour == 6:
-        # 06Z is capped at day 6 -- no separate day-15 product applies.
-        return run_time.replace(hour=13, minute=20, second=0, microsecond=0)
-    elif run_hour == 18:
-        # 18Z's day-6 product disseminates after midnight, the following day.
-        next_day = run_time + timedelta(days=1)
-        return next_day.replace(hour=1, minute=20, second=0, microsecond=0)
-    else:
-        return run_time + timedelta(hours=8, minutes=1)
+# When the LAST file this app needs for each product is published at 0.25 deg,
+# as (hours, minutes) after the run's base time, keyed by run hour (UTC).
+#
+# Source: ECMWF "Dissemination schedule" (confluence.ecmwf.int, Data and
+# Charts, page 272310483), IFS Medium-range Ensemble Forecast, stream enfo.
+#   percentile / temperature -- raw members (type pf), steps 0-120 by 3:
+#       00Z/12Z: the pf ladders end at 07:40 (150-360 by 6), 07:04 for the
+#                93-144 ladder our steps fall in. 07:40 is used: the whole
+#                run, the later and therefore safer ("available by") time.
+#       06Z/18Z: capped at day 6; the 93-144 ladder ends 13:04 / 00:55->01:04,
+#                i.e. 07:04 after base.
+#   threshold -- probabilities (type ep), published as the 240h/360h files:
+#       00Z/12Z: 07:41 -> 08:01, so complete at 08:01 (NOT 07:40 as an
+#                earlier version of this module assumed).
+#       06Z/18Z: the schedule lists NO ep row for these runs, so this is an
+#                ESTIMATE by analogy: ~16 min after the pf ladder ends, in
+#                line with the tf (13:16) and pfc (13:18) products.
+_RELEASE_OFFSET_025 = {
+    "threshold": {0: (8, 1), 12: (8, 1), 6: (7, 20), 18: (7, 20)},
+    "percentile": {0: (7, 40), 12: (7, 40), 6: (7, 4), 18: (7, 4)},
+}
+_RELEASE_OFFSET_025["temperature"] = _RELEASE_OFFSET_025["percentile"]  # same pf files
 
-
-# The 0.1 deg threshold (ep) product lands a measured ~2h21 after the 0.25 deg
-# estimate above (portal listing, 00Z run: ep-sfc at 10:01 UTC vs. 07:40).
-# Only a fallback -- ingestion records the real publish time (the file's
-# Last-Modified header) whenever it can, and that is shown in preference.
-RELEASE_LAG_0P1 = timedelta(hours=2, minutes=21)
+# The 0.1 deg product appears exactly 2h after its 0.25 deg counterpart.
+# Measured on the open-data portal for the 00Z run: ef (pf) files 09:40 =
+# 07:40 + 2:00, ep files 10:01 = 08:01 + 2:00. (Both match to the minute.)
+RELEASE_LAG_0P1 = timedelta(hours=2)
 
 
-def _estimated_release_time(run_time, resolution: str):
-    base = _dissemination_available_time(run_time)
-    return base + RELEASE_LAG_0P1 if resolution == "0p1" else base
+def estimated_release_time(product: str, run_time, resolution: str):
+    """Schedule-based estimate of when `product` for this run is published
+    at `resolution`. A fallback: ingestion records the real publish time
+    (the files' Last-Modified) when it can, and callers prefer that."""
+    hours, minutes = _RELEASE_OFFSET_025[product].get(run_time.hour, (8, 1))
+    release = run_time + timedelta(hours=hours, minutes=minutes)
+    return release + RELEASE_LAG_0P1 if resolution == "0p1" else release
 
 
-def _next_update(run_time, resolution: str):
-    """(when, description) of the next change to expect in the threshold
-    data. Showing 0.25 deg: the 0.1 deg grid of the SAME run is next.
-    Showing 0.1 deg: the next run's 0.25 deg release (6h later -- every
-    run, 00/06/12/18Z, is chased) is next, with its 0.1 deg upgrade
-    following ~2h21 after that."""
+def estimated_next_update(product: str, run_time, resolution: str):
+    """(when, description) of the next change to expect for `product`.
+    Holding 0.25 deg: the 0.1 deg grid of the SAME cycle is next. Holding
+    0.1 deg: the next cycle's 0.25 deg release (6h later -- every cycle,
+    00/06/12/18Z, is chased)."""
     if resolution != "0p1":
-        return _estimated_release_time(run_time, "0p1"), f"0.1\u00b0 grid of the {run_time:%H}Z run"
+        return estimated_release_time(product, run_time, "0p1"), f"0.1\u00b0 of the {run_time:%H}Z cycle"
     next_run = run_time + timedelta(hours=6)
-    return _dissemination_available_time(next_run), f"{next_run:%H}Z run (0.25\u00b0 first)"
+    return estimated_release_time(product, next_run, "0p25"), f"{next_run:%H}Z cycle, 0.25\u00b0"
 
 
 def _cap_for_run_hour(run_hour, requested_max_lead_days: int) -> tuple[int, bool]:
@@ -457,8 +452,8 @@ def _build_threshold_result(
 
     # Prefer the measured publish time (file Last-Modified, recorded at
     # ingestion); fall back to the schedule-based estimate for this resolution.
-    available_since = published_at or _estimated_release_time(run_time, resolution)
-    next_expected, next_description = _next_update(run_time, resolution)
+    available_since = published_at or estimated_release_time("threshold", run_time, resolution)
+    next_expected, next_description = estimated_next_update("threshold", run_time, resolution)
 
     return {
         "run_time": run_time,
@@ -807,28 +802,50 @@ def _download_batch(resol: str, request: dict, extras: dict, chunk: list, target
     return (getattr(result, "size", 0) or 0), [str(u) for u in (getattr(result, "urls", None) or [])]
 
 
+def _last_modified(url: str, notes: list):
+    """Last-Modified of one URL. Tries HEAD, then a 1-byte ranged GET (CDNs
+    sometimes treat the two differently). `notes` collects what each attempt
+    returned, for the diagnostic line."""
+    for method in ("HEAD", "GET"):
+        try:
+            if method == "HEAD":
+                resp = requests.head(url, timeout=10, allow_redirects=True)
+            else:
+                resp = requests.get(url, headers={"Range": "bytes=0-0"}, timeout=10, stream=True)
+                resp.close()
+            header = resp.headers.get("Last-Modified")
+            notes.append(f"{method} {resp.status_code} last-modified={header!r} headers={sorted(resp.headers)}")
+            if header:
+                return parsedate_to_datetime(header)
+        except Exception as e:
+            notes.append(f"{method} {type(e).__name__}: {e}")
+    return None
+
+
 def _published_at(urls) -> str | None:
     """When ECMWF actually published these files: the latest Last-Modified
-    header among them (a plain HEAD request each). The GRIB messages only
-    carry the forecast BASE time, not a release time, so the portal's HTTP
-    metadata is the only place the real publish time exists. Best effort --
-    returns None if the client exposed no URLs or the server sent no
-    Last-Modified, and the app then falls back to schedule estimates."""
+    among them. The GRIB messages only carry the forecast BASE time, so the
+    portal's HTTP metadata is the only place a release time exists. Best
+    effort: returns None (the app then falls back to schedule estimates) if
+    there are no URLs or the server sends no Last-Modified -- and prints
+    exactly what it saw for the first URL, so a miss can be diagnosed from
+    the log instead of guessed at."""
+    unique = sorted(set(urls))
+    if not unique:
+        print("[diag] published_at: the client returned no URLs", flush=True)
+        return None
+    if len(unique) > 12:  # files are published in step order, so the last is the latest
+        stride = len(unique) // 11
+        unique = unique[::stride][:11] + [unique[-1]]
+
     latest = None
-    failures = 0
-    for url in sorted(set(urls)):
-        try:
-            resp = requests.head(url, timeout=10, allow_redirects=True)
-            header = resp.headers.get("Last-Modified")
-            if not header:
-                continue
-            modified = parsedate_to_datetime(header)
-            if latest is None or modified > latest:
-                latest = modified
-        except Exception:
-            failures += 1
-            if failures >= 3:
-                break
+    for n, url in enumerate(unique):
+        notes: list = []
+        modified = _last_modified(url, notes)
+        if n == 0:
+            print(f"[diag] published_at: first URL {url}\n[diag]   " + "\n[diag]   ".join(notes), flush=True)
+        if modified and (latest is None or modified > latest):
+            latest = modified
     return latest.astimezone(UTC).isoformat() if latest else None
 
 
