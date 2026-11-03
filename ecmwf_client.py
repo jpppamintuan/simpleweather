@@ -274,11 +274,11 @@ PRODUCTS = ("threshold", "percentile", "temperature")
 #   threshold -- probabilities (type ep), published as the 240h/360h files:
 #       00Z/12Z: 07:41 -> 08:01, so complete at 08:01 (NOT 07:40 as an
 #                earlier version of this module assumed).
-#       06Z/18Z: the schedule lists NO ep row for these runs, so this is an
-#                ESTIMATE by analogy: ~16 min after the pf ladder ends, in
-#                line with the tf (13:16) and pfc (13:18) products.
+#       06Z/18Z: NO ep product exists for these runs (the schedule has no
+#                such row) -- so a threshold dataset only ever holds a 00Z or
+#                12Z run, and 06Z/18Z are deliberately absent below.
 _RELEASE_OFFSET_025 = {
-    "threshold": {0: (8, 1), 12: (8, 1), 6: (7, 20), 18: (7, 20)},
+    "threshold": {0: (8, 1), 12: (8, 1)},
     "percentile": {0: (7, 40), 12: (7, 40), 6: (7, 4), 18: (7, 4)},
 }
 _RELEASE_OFFSET_025["temperature"] = _RELEASE_OFFSET_025["percentile"]  # same pf files
@@ -298,22 +298,28 @@ def estimated_release_time(product: str, run_time, resolution: str):
     return release + RELEASE_LAG_0P1 if resolution == "0p1" else release
 
 
+# Hours between consecutive cycles of each product: the member (pf) data
+# exist for all four daily runs; the probabilities (ep) for 00Z and 12Z only.
+_CYCLE_HOURS = {"threshold": 12, "percentile": 6, "temperature": 6}
+
+
 def estimated_next_update(product: str, run_time, resolution: str):
     """(when, description) of the next change to expect for `product`.
     Holding 0.25 deg: the 0.1 deg grid of the SAME cycle is next. Holding
-    0.1 deg: the next cycle's 0.25 deg release (6h later -- every cycle,
-    00/06/12/18Z, is chased)."""
+    0.1 deg: the next cycle's 0.25 deg release -- 12h later for threshold
+    (00Z/12Z only), 6h later for the member-based products."""
     if resolution != "0p1":
         return estimated_release_time(product, run_time, "0p1"), f"0.1\u00b0 of the {run_time:%H}Z cycle"
-    next_run = run_time + timedelta(hours=6)
+    next_run = run_time + timedelta(hours=_CYCLE_HOURS[product])
     return estimated_release_time(product, next_run, "0p25"), f"{next_run:%H}Z cycle, 0.25\u00b0"
 
 
 def _cap_for_run_hour(run_hour, requested_max_lead_days: int) -> tuple[int, bool]:
-    """00Z/12Z runs carry the full 15-day threshold product; 06Z/18Z runs
-    are capped at day 6 (step 144). Returns (lead days actually safe to
-    request, whether a cap was applied). An unknown run hour gets the
-    conservative 6-day cap."""
+    """00Z/12Z runs carry the full 15-day threshold product. (06Z/18Z have
+    no threshold product at all, so the day-6 cap below should never apply;
+    it is kept only as a defensive default -- notably for an unknown run
+    hour -- and has no effect on a 00Z/12Z run.) Returns (lead days actually
+    safe to request, whether a cap was applied)."""
     if run_hour is None or run_hour in (6, 18):
         return min(requested_max_lead_days, 6), requested_max_lead_days > 6
     return requested_max_lead_days, False
