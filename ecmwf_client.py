@@ -736,6 +736,77 @@ def aggregate_percentile_bins(
     }
 
 
+# 02:00 UTC+8 (= 18:00 UTC). Every cycle's 3-hourly bins start on this grid
+# (8 is not a multiple of 3, so the grid is 02, 05, ..., 23 local), and 02:00
+# is the one anchor from which 3/6/12/24h slices all nest inside the same
+# 24h day window.
+ROW_ANCHOR_UTC_HOUR = 18
+
+
+def aggregate_percentile_bins_anchored(
+    raw_result: dict,
+    period_hours: int = 3,
+    percentiles: list[int] = None,
+) -> dict:
+    """
+    Like aggregate_percentile_bins(), but slices sit on a FIXED grid anchored
+    at 02:00 UTC+8 instead of starting wherever the model run happens to
+    start. That is what makes day totals consistent across time steps: the
+    day window 02:00 -> 02:00 is exactly 8 three-hour, 4 six-hour, 2
+    twelve-hour or 1 twenty-four-hour slice, so a day's total (summed
+    member-by-member, then percentiled) is the same number whichever step is
+    selected -- it could not be if each step started at the cycle's own hour.
+
+    Only COMPLETE slices are returned; a slice that the forecast only partly
+    covers (the start of the first day, the end of the last) is dropped
+    rather than shown as a misleadingly small amount. Same output shape as
+    aggregate_percentile_bins(), so callers can swap one for the other.
+    """
+    if percentiles is None:
+        percentiles = DEFAULT_PERCENTILES
+
+    bin_hours = raw_result["bin_hours"]
+    if period_hours % bin_hours != 0:
+        raise ValueError(f"period_hours ({period_hours}) must be a multiple of {bin_hours}")
+    bins_per_period = period_hours // bin_hours
+
+    origin = datetime(2000, 1, 1, ROW_ANCHOR_UTC_HOUR, tzinfo=UTC)
+    groups: dict[int, list] = {}
+    for b in raw_result["bins"]:
+        groups.setdefault((b["start_utc"] - origin) // timedelta(hours=period_hours), []).append(b)
+
+    periods = []
+    for key in sorted(groups):
+        group = groups[key]
+        if len(group) != bins_per_period:
+            continue  # partial slice at either end of the forecast
+        summed_mm = np.sum([b["member_values_mm"] for b in group], axis=0)
+        stats = {"mean": float(np.mean(summed_mm)), "median": float(np.median(summed_mm))}
+        for pct in percentiles:
+            stats[f"p{pct}"] = float(np.percentile(summed_mm, pct))
+        periods.append({
+            "start_utc": group[0]["start_utc"],
+            "end_utc": group[-1]["end_utc"],
+            "stats": stats,
+            "member_values_mm": summed_mm.tolist(),
+        })
+
+    return {
+        "run_time": raw_result["run_time"],
+        "grid_lat": raw_result["grid_lat"],
+        "grid_lon": raw_result["grid_lon"],
+        "days": periods,
+        "period_hours": period_hours,
+        "percentiles": percentiles,
+        "downloaded_bytes": raw_result.get("downloaded_bytes"),
+        "resolution": raw_result.get("resolution"),
+        # The underlying 3-hourly bins, so a caller can total a day from ALL of
+        # its data regardless of which slices were complete enough to return.
+        "raw_bins": raw_result["bins"],
+        "bin_hours": bin_hours,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Grid-fetch functions -- used by the scheduled ingestion job (ingest.py),
 # NOT by the live Streamlit app.
