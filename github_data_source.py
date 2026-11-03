@@ -134,6 +134,13 @@ def _fetch_manifest(timeout_seconds: float = 8.0) -> dict | None:
             return None
 
 
+def get_manifest() -> dict | None:
+    """The ingestion manifest (run times, resolutions, publish times,
+    failures) -- one small, briefly cached fetch, for the status footer.
+    None if the store can't be reached."""
+    return _fetch_manifest()
+
+
 def check_dataset_freshness(dataset_name: str) -> tuple[bool, dict | None]:
     """Returns (is_fresh, manifest). dataset_name is 'threshold',
     'percentile' or 'temperature', matching the keys ingest.py writes
