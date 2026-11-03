@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -19,7 +20,7 @@ from ecmwf_client import (
     DEFAULT_PERCENTILES,
     AVAILABLE_PERIOD_HOURS,
     fetch_forecast_table,
-    aggregate_percentile_bins,
+    aggregate_percentile_bins_anchored,
     read_threshold_result_from_store,
     read_percentile_raw_from_store,
     read_temperature_percentiles_from_store,
@@ -947,206 +948,166 @@ def render_ribbon_chart_html(result: dict) -> str:
     """
 
 
-def _fmt_period_range(d: dict) -> str:
-    """'Wed 21, 08AM - 11AM' (same-day period) or 'Wed 21, 10PM - Thu 22, 01AM'
-    (a period that crosses midnight) -- the full, unambiguous start-end
-    range for one period, for the percentile bar chart's tooltip title."""
-    start = d["start_utc"].astimezone(PH_TZ)
-    end = d["end_utc"].astimezone(PH_TZ)
-    start_str = start.strftime("%a %d, %I%p")
-    end_str = end.strftime("%I%p") if start.date() == end.date() else end.strftime("%a %d, %I%p")
-    return f"{start_str} \u2013 {end_str}"
+# ---------------------------------------------------------------------------
+# Percentile rainfall, laid out like a weather-app "rain bars" card: one row
+# per day, one thin vertical bar per time slice, the forecast filling the
+# bar from the bottom like a container.
+#
+#   * Rows are calendar days, 02:00 -> 02:00 UTC+8. The slice grid is the
+#     same at every time step (see aggregate_percentile_bins_anchored()), so
+#     the day total at the right is the same number whether you view 3h, 6h,
+#     12h or 24h slices.
+#   * Fill height is strictly linear against RAIN_BAR_CAP_MM for the chosen
+#     step: solid blue = median, lighter = P75, palest = P90. A dark cap on
+#     top marks a bar whose P90 is beyond the scale.
+#   * Light card, like the app's other tables and charts.
+# ---------------------------------------------------------------------------
+
+RAIN_BAR_CAP_MM = {3: 10, 6: 20, 12: 40, 24: 80}  # rainfall that fills a bar, per time step (hours)
+ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
+_RAIN_BAR_WIDTH_PX = {8: 22, 4: 34, 2: 52, 1: 72}  # max bar width by slices per row
+_RAIN_TRACK, _RAIN_P90, _RAIN_P75, _RAIN_MED = "#E6E9EE", "#B9D4FF", "#7FB0FF", "#2F7BFF"
 
 
-def _rain_bar_color(mm: float) -> str:
-    """Maps a period's representative rainfall amount to a single
-    lighter-to-darker blue gradient. Uses a FIXED absolute 0-100mm scale
-    (the same span as the app's existing threshold buckets), not a scale
-    relative to whatever's currently on screen -- so a given color always
-    means the same rainfall amount across every chart load, rather than
-    an ordinary day looking artificially severe just because it happens
-    to be the wettest day in THIS particular forecast window. Values
-    above 100mm clamp to the deepest color rather than continuing to
-    scale indefinitely."""
-    t = max(0.0, min(mm / 100.0, 1.0))
-    light = (227, 242, 253)  # soft near-white blue
-    dark = (10, 61, 145)  # deep, saturated blue
-    r = round(light[0] + (dark[0] - light[0]) * t)
-    g = round(light[1] + (dark[1] - light[1]) * t)
-    b = round(light[2] + (dark[2] - light[2]) * t)
-    return f"rgb({r},{g},{b})"
+def _fmt_mm(v: float) -> str:
+    return "0" if v < 0.05 else (f"{v:.1f}" if v < 10 else f"{v:.0f}")
 
 
-def render_percentile_chart_html(pct_result: dict) -> str:
-    """Floating range bars (P10-P90 per period) -- replaces an earlier
-    nested-line-band design. Rainfall is a discrete per-period
-    accumulated amount, not a continuous quantity the way temperature
-    is, so a bar per period is a more natural fit than a continuous
-    line/band. The outer bar (P10-P90) is colored on a single blue
-    gradient (see _rain_bar_color()) driven by that period's MEDIAN, not
-    its P90 -- the bar's SPAN already shows the worst-case spread, so
-    coloring by median keeps the two visual channels complementary
-    (height = uncertainty, color = typical severity) instead of
-    redundant.
+def _hour_label(hour: int, compact: bool = False) -> str:
+    h12 = hour % 12 or 12
+    if compact:
+        return f"{h12}{'a' if hour % 24 < 12 else 'p'}"
+    return f"{h12} {'AM' if hour % 24 < 12 else 'PM'}"
 
-    The P25-P75 interquartile range is drawn as a narrower, darker bar
-    nested inside the outer one, and the median as a small dot --
-    BOTH via a custom canvas-drawing plugin (afterDatasetsDraw, reading
-    each bar's actual rendered pixel geometry from
-    chart.getDatasetMeta(0).data[i]), not as separate Chart.js datasets.
-    An earlier version used a second "line" dataset (showLine:false) for
-    the median, which didn't reliably render when mixed with a floating
-    bar dataset -- drawing everything directly on the canvas, using the
-    exact same technique already proven for the Heat Index category
-    labels elsewhere in this file, sidesteps that uncertainty entirely
-    rather than guessing at another dataset-mixing fix.
 
-    No persistent detail panel (unlike the old version, or the
-    threshold ribbon chart) -- the tooltip already shows the full
-    P10/P25/median/P75/P90 breakdown for whichever bar is hovered, which
-    is enough context for a deliberately minimal chart.
-    """
-    days = pct_result["days"]
-    if not days:
+def render_rain_rows_html(pct_result: dict) -> str:
+    """The card described above, as a single block of HTML for st.markdown.
+    Bar details come from a pure-CSS popover (hover, or tap on a phone) plus
+    a plain `title` as a fallback -- no JavaScript, so nothing here can react
+    to a tap beyond that.
+
+    NOTE: no blank lines or indentation inside the HTML -- Markdown would
+    end the HTML block at a blank line and treat indented lines as code."""
+    periods = pct_result["days"]
+    step = pct_result["period_hours"]
+    cap = RAIN_BAR_CAP_MM[step]
+    n_slots = 24 // step
+    if not periods:
         return ""
 
-    day_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for d in days]
-    # Full start-end range, used for the tooltip TITLE specifically --
-    # the x-axis label alone (e.g. "Wed 21, 08AM") only shows each
-    # period's START, which was genuinely ambiguous about whether the
-    # bar covers the hours before or after that time. Spelling out the
-    # full range on hover removes that ambiguity without cluttering the
-    # x-axis itself with longer text.
-    period_range_labels = [_fmt_period_range(d) for d in days]
-    p10 = [d["stats"].get("p10", d["stats"]["median"]) for d in days]
-    p25 = [d["stats"].get("p25", d["stats"]["median"]) for d in days]
-    p75 = [d["stats"].get("p75", d["stats"]["median"]) for d in days]
-    p90 = [d["stats"].get("p90", d["stats"]["median"]) for d in days]
-    median = [d["stats"]["median"] for d in days]
+    rows: dict = {}
+    for p in periods:
+        start = p["start_utc"].astimezone(PH_TZ)
+        rows.setdefault(start.date(), {})[(start.hour - ROW_ANCHOR_PH_HOUR) // step] = p
 
-    range_data = [[lo, hi] for lo, hi in zip(p10, p90)]
-    bar_colors = [_rain_bar_color(m) for m in median]
+    # Day totals come from ALL the underlying 3-hourly bins of that day (summed
+    # member by member, THEN percentiled), not from the slices drawn. That keeps
+    # a day's total identical at every time step -- including the first and last
+    # (partial) days, where a 12h or 24h slice is incomplete and so isn't drawn.
+    bins_per_day = 24 // pct_result.get("bin_hours", 3)
+    day_members: dict = {}
+    for b in pct_result.get("raw_bins") or []:
+        day_members.setdefault(b["start_utc"].astimezone(PH_TZ).date(), []).append(b["member_values_mm"])
+    for day, row in rows.items():  # results without raw bins: fall back to the slices shown
+        day_members.setdefault(day, [p["member_values_mm"] for p in row.values()])
+    days = sorted(set(rows) | set(day_members))
 
-    labels_json = json.dumps(day_labels)
-    period_range_labels_json = json.dumps(period_range_labels)
-    range_data_json = json.dumps(range_data)
-    bar_colors_json = json.dumps(bar_colors)
-    median_json = json.dumps(median)
-    p10_json = json.dumps(p10)
-    p25_json = json.dumps(p25)
-    p75_json = json.dumps(p75)
-    p90_json = json.dumps(p90)
+    compact = n_slots >= 8
+    slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
+    grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));"
 
-    return f"""
-    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
-    <div style="background-color:#ffffff;padding:8px;">
-      <div style="position:relative;width:100%;height:320px;">
-        <canvas id="pctBarChart"></canvas>
-      </div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-    <script>
-    (function() {{
-      const labels = {labels_json};
-      const periodRangeLabels = {period_range_labels_json};
-      const rangeData = {range_data_json};
-      const barColors = {bar_colors_json};
-      const medianData = {median_json};
-      const p10Data = {p10_json};
-      const p25Data = {p25_json};
-      const p75Data = {p75_json};
-      const p90Data = {p90_json};
+    def tip_side(slot: int) -> str:
+        if n_slots == 1:
+            return ""
+        pos = slot / (n_slots - 1)
+        return " rr-tip-l" if pos < 0.25 else (" rr-tip-r" if pos > 0.75 else "")
 
-      // Draws the P25-P75 inner bar and the median dot directly on the
-      // canvas, using each outer bar's ACTUAL rendered pixel position
-      // and width (not a guessed/computed layout) -- robust regardless
-      // of chart size, bar spacing settings, or responsive resizing.
-      const innerRangeAndMedianPlugin = {{
-        id: "innerRangeAndMedianPlugin",
-        afterDatasetsDraw(chart) {{
-          const {{ ctx, scales }} = chart;
-          const yScale = scales.y;
-          const meta = chart.getDatasetMeta(0);  // the P10-P90 outer bar dataset
-          ctx.save();
-          for (let i = 0; i < meta.data.length; i++) {{
-            const bar = meta.data[i];
-            if (!bar) continue;
-            const centerX = bar.x;
-            const innerWidth = bar.width;  // same width as the outer P10-P90 bar
+    def bar(p: dict, slot: int, below: bool) -> str:
+        st_ = p["stats"]
+        med, p75, p90, p25, p10 = st_["median"], st_["p75"], st_["p90"], st_["p25"], st_["p10"]
+        pct_of_cap = lambda v: min(max(v / cap, 0.0), 1.0) * 100
+        start, end = p["start_utc"].astimezone(PH_TZ), p["end_utc"].astimezone(PH_TZ)
+        when = f"{start:%a %d %b} \u00b7 {_hour_label(start.hour)}\u2013{_hour_label(end.hour)}"
+        over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
+        lines = [f"P90 {_fmt_mm(p90)} mm", f"P75 {_fmt_mm(p75)} mm", f"Median {_fmt_mm(med)} mm",
+                 f"P25 {_fmt_mm(p25)} mm", f"P10 {_fmt_mm(p10)} mm"]
+        plain = f"{when}&#10;" + "&#10;".join(lines) + over_note
+        cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
+        return (
+            f"<div class='rr-slot'><div class='rr-bar' tabindex='0' title='{plain}'>"
+            f"<div class='rr-fill'>"
+            f"<span style='height:{pct_of_cap(p90):.1f}%;background:{_RAIN_P90}'></span>"
+            f"<span style='height:{pct_of_cap(p75):.1f}%;background:{_RAIN_P75}'></span>"
+            f"<span style='height:{pct_of_cap(med):.1f}%;background:{_RAIN_MED}'></span>{cap_mark}</div>"
+            f"<div class='rr-tip{tip_side(slot)}{" rr-tip-b" if below else ""}'><b>{when}</b><br>" + "<br>".join(lines) + f"{over_note}</div>"
+            f"</div></div>"
+        )
 
-            const yTop = yScale.getPixelForValue(p75Data[i]);
-            const yBottom = yScale.getPixelForValue(p25Data[i]);
-            ctx.fillStyle = "rgba(10,61,145,0.6)";
-            ctx.fillRect(centerX - innerWidth / 2, yTop, innerWidth, Math.max(yBottom - yTop, 1));
+    empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
 
-            const medianY = yScale.getPixelForValue(medianData[i]);
-            ctx.beginPath();
-            ctx.arc(centerX, medianY, 4, 0, Math.PI * 2);
-            ctx.fillStyle = "#0a1f44";
-            ctx.fill();
-            ctx.lineWidth = 1.5;
-            ctx.strokeStyle = "#ffffff";
-            ctx.stroke();
-          }}
-          ctx.restore();
-        }},
-      }};
+    head = (
+        "<div class='rr-row rr-head'><div></div>"
+        f"<div class='rr-slots' style='{grid}'>"
+        + "".join(f"<div class='rr-slot'><span>{_hour_label(h, compact)}</span></div>" for h in slot_hours)
+        + "</div><div></div></div>"
+    )
 
-      new Chart(document.getElementById("pctBarChart"), {{
-        type: "bar",
-        data: {{
-          labels: labels,
-          datasets: [
-            {{
-              label: "Range (P10-P90)",
-              data: rangeData,
-              backgroundColor: barColors,
-              borderWidth: 0,
-              borderRadius: 3,
-              barPercentage: 0.7,
-              categoryPercentage: 0.8,
-              // Caps how wide a bar can get in pixels, regardless of how
-              // much category space is available -- without this, bars
-              // get visually oversized with a short forecast range or a
-              // long time step, where few categories means each one gets
-              // a lot of horizontal room by default.
-              maxBarThickness: 48,
-            }},
-          ],
-        }},
-        plugins: [innerRangeAndMedianPlugin],
-        options: {{
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {{
-            colors: {{ enabled: false, forceOverride: false }},
-            legend: {{ display: false }},  // color/shape already carry the meaning; kept minimal
-            tooltip: {{
-              callbacks: {{
-                title: (items) => periodRangeLabels[items[0].dataIndex],
-                label: (ctx) => {{
-                  const i = ctx.dataIndex;
-                  return [
-                    "P90: " + p90Data[i].toFixed(1) + " mm",
-                    "P75: " + p75Data[i].toFixed(1) + " mm",
-                    "Median: " + medianData[i].toFixed(1) + " mm",
-                    "P25: " + p25Data[i].toFixed(1) + " mm",
-                    "P10: " + p10Data[i].toFixed(1) + " mm",
-                  ];
-                }},
-              }},
-            }},
-          }},
-          scales: {{
-            y: {{ min: 0, ticks: {{ callback: (v) => v + " mm", color: "#666666" }}, grid: {{ color: "#e5e5e5" }} }},
-            x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }} }}, grid: {{ display: false }} }},
-          }},
-        }},
-      }});
-    }})();
-    </script>
-    """
+    body = ""
+    for row_index, day in enumerate(days):
+        row = rows.get(day, {})
+        members = np.sum(day_members[day], axis=0)  # per member, THEN percentile
+        total_med, total_p90 = float(np.median(members)), float(np.percentile(members, 90))
+        partial = "<span class='rr-part'>partial</span>" if len(day_members[day]) < bins_per_day else ""
+        # the first rows open their popover downward, so it can't run off the top of the card
+        slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
+        body += (
+            f"<div class='rr-row rr-data'><div class='rr-day'><b>{day:%a}</b><span>{day.day} {day:%b}</span></div>"
+            f"<div class='rr-slots' style='{grid}'>{slots}</div>"
+            f"<div class='rr-tot'><b>{_fmt_mm(total_med)}<small> mm</small></b>"
+            f"<span>P90 {_fmt_mm(total_p90)}</span>{partial}</div></div>"
+        )
+
+    legend = (
+        "<div class='rr-legend'>"
+        f"<span><i style='background:{_RAIN_MED}'></i>Median</span>"
+        f"<span><i style='background:{_RAIN_P75}'></i>P75</span>"
+        f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
+        "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
+        f"<span>Full bar = {cap} mm per {step}h</span>"
+        "<span>Right: day total (median, P90) of the 50 members</span></div>"
+    )
+
+    bar_w = _RAIN_BAR_WIDTH_PX[n_slots]
+    css = (
+        "<style>"
+        f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        ".rr-row{display:grid;grid-template-columns:2.7rem minmax(0,1fr) 3.6rem;column-gap:8px;align-items:center;}"
+        ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
+        ".rr-head{padding-bottom:2px;}"
+        ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
+        ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
+        ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
+        ".rr-slots{display:grid;}"
+        ".rr-slot{display:flex;justify-content:center;}"
+        f".rr-bar{{position:relative;width:min(70%,{bar_w}px);height:40px;outline:none;cursor:pointer;}}"
+        f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
+        ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
+        ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
+        ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.45;}"
+        ".rr-tot{text-align:right;line-height:1.15;}.rr-tot b{font-size:.82rem;}"
+        ".rr-tot small{font-size:.6rem;font-weight:400;color:#6b7280;}"
+        ".rr-tot span{display:block;font-size:.6rem;color:#6b7280;}.rr-tot .rr-part{font-style:italic;}"
+        ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
+        "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
+        "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
+        ".rr-tip-l{left:0;transform:none;}.rr-tip-r{left:auto;right:0;transform:none;}"
+        ".rr-tip-b{bottom:auto;top:calc(100% + 6px);}"
+        ".rr-bar:hover .rr-tip,.rr-bar:focus .rr-tip{display:block;}"
+        ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
+        ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
+        "</style>"
+    )
+    return f"{css}<div class='rr-card'>{head}{body}{legend}</div>"
 
 
 # PAGASA's official Heat Index Advisory categories (verified against
@@ -1896,7 +1857,7 @@ with main:
                 )
             pct_period_hours = st.session_state["pct_period_hours"]
 
-            pct_result = aggregate_percentile_bins(pct_raw_result, period_hours=pct_period_hours)
+            pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
             pct_days = pct_result["days"]
 
             if not pct_days:
@@ -1911,15 +1872,15 @@ with main:
 
             st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(pct_result)}")
             st.caption(
-                f"Each column is a {pct_period_hours}-hour accumulation period starting from the model "
-                f"run's own time, not forced to 00 UTC the way the tables above are -- a simplification "
-                f"for this first version. Limited to 120 hours ahead for now."
+                f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2 AM-based grid "
+                f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
+                f"partly covers is left empty. Limited to 120 hours ahead for now."
             )
 
             st.subheader(f"Percentile rainfall for {pct_location_name}")
             show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
             if show_graph:
-                components.html(render_percentile_chart_html(pct_result), height=380)
+                st.markdown(render_rain_rows_html(pct_result), unsafe_allow_html=True)
             else:
                 stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
                 stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
