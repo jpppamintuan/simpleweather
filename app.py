@@ -1661,6 +1661,20 @@ with main:
             "probabilities fall back to a live 0.25\u00b0 fetch if the store isn't fresh."
         )
 
+        # Side by side in landscape, stacked in portrait. st.columns stacks only on narrow widths,
+        # so portrait tablets would stay side by side; this forces the stack by orientation.
+        st.markdown(
+            "<style>"
+            "@media (orientation: portrait){"
+            ".st-key-rain_split [data-testid='stHorizontalBlock']{flex-direction:column !important;}"
+            ".st-key-rain_split [data-testid='stColumn'],.st-key-rain_split [data-testid='column']"
+            "{width:100% !important;flex:1 1 auto !important;min-width:0 !important;}"
+            "}"
+            "@media (orientation: landscape){.st-key-thr_divider{display:none;}}"
+            "</style>",
+            unsafe_allow_html=True,
+        )
+
         lead_days = THRESHOLD_LEAD_DAYS  # fixed range -- no slider
         pct_lead_hours = PERCENTILE_MAX_LEAD_HOURS  # fixed range -- no slider
 
@@ -1713,88 +1727,96 @@ with main:
 
             card_thr = thr_result if (thr_result is not None and thr_result["windows"]) else None
 
-            # --- 6-day card: bars + day totals + chance columns -------------------------
-            st.subheader(f"6-day rainfall forecast for {rain_name}")
-            pct_result = None
-            if pct_raw_result is None:
-                st.warning(
-                    "Rainfall amounts (percentile data) aren't available from the latest ingestion "
-                    "right now (store unreachable or not yet published) -- please try again shortly."
-                )
-            else:
-                # Time-step control: purely a local recompute, never refetches.
-                period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
-                if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
-                    st.session_state["pct_period_hours"] = 3
-                selected_period_label = st.segmented_control(
-                    "Time step",
-                    list(period_labels.values()),
-                    default=period_labels[st.session_state["pct_period_hours"]],
-                    key="pct_period_control",
-                )
-                if selected_period_label is not None:
-                    st.session_state["pct_period_hours"] = next(
-                        h for h, label in period_labels.items() if label == selected_period_label
-                    )
-                pct_period_hours = st.session_state["pct_period_hours"]
+            # Landscape / wide screens: card and threshold section side by side.
+            # Portrait: they stack (see the orientation CSS above).
+            with st.container(key="rain_split"):
+                left_col, right_col = st.columns([5, 6], gap="large")
 
-                pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
-                pct_days = pct_result["days"]
-
-                if not pct_days:
+            with left_col:
+                # --- 6-day card: bars + day totals + chance columns -------------------------
+                st.subheader(f"6-day rainfall forecast for {rain_name}")
+                pct_result = None
+                if pct_raw_result is None:
                     st.warning(
-                        f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
-                        f"range -- try a shorter time step."
+                        "Rainfall amounts (percentile data) aren't available from the latest ingestion "
+                        "right now (store unreachable or not yet published) -- please try again shortly."
                     )
                 else:
-                    pct_percentiles = pct_result["percentiles"]
-                    st.caption(
-                        f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2a-based grid "
-                        f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
-                        f"partly covers is left empty."
-                        + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8a\u20138a, "
-                           "so each is matched to the day it starts on." if card_thr else "")
+                    # Time-step control: purely a local recompute, never refetches.
+                    period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
+                    if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
+                        st.session_state["pct_period_hours"] = 3
+                    selected_period_label = st.segmented_control(
+                        "Time step",
+                        list(period_labels.values()),
+                        default=period_labels[st.session_state["pct_period_hours"]],
+                        key="pct_period_control",
                     )
-                    show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
-                    if show_pct_graph:
-                        st.markdown(render_rain_rows_html(pct_result, card_thr, max_days=6), unsafe_allow_html=True)
+                    if selected_period_label is not None:
+                        st.session_state["pct_period_hours"] = next(
+                            h for h, label in period_labels.items() if label == selected_period_label
+                        )
+                    pct_period_hours = st.session_state["pct_period_hours"]
+
+                    pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
+                    pct_days = pct_result["days"]
+
+                    if not pct_days:
+                        st.warning(
+                            f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
+                            f"range -- try a shorter time step."
+                        )
                     else:
-                        stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-                        stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-                        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
-                        table_data = {
-                            day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-                            for i, d in enumerate(pct_days)
-                        }
-                        pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-                        st.dataframe(pct_df, use_container_width=True)
+                        pct_percentiles = pct_result["percentiles"]
+                        st.caption(
+                            f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2a-based grid "
+                            f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
+                            f"partly covers is left empty."
+                            + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8a\u20138a, "
+                               "so each is matched to the day it starts on." if card_thr else "")
+                        )
+                        show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
+                        if show_pct_graph:
+                            st.markdown(render_rain_rows_html(pct_result, card_thr, max_days=6), unsafe_allow_html=True)
+                        else:
+                            stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+                            stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+                            day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
+                            table_data = {
+                                day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+                                for i, d in enumerate(pct_days)
+                            }
+                            pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+                            st.dataframe(pct_df, use_container_width=True)
 
-            # --- Full threshold forecast (table, or graph) ------------------------------
-            if thr_result is not None:
-                resolution = thr_result.get("resolution") or "0p25"
-                model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
-                st.divider()
+            with right_col:
+                # --- Full threshold forecast (table, or graph) ------------------------------
+                if thr_result is not None:
+                    resolution = thr_result.get("resolution") or "0p25"
+                    model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
+                    with st.container(key="thr_divider"):
+                        st.divider()
 
-                if not thr_result["windows"]:
-                    st.warning("No aligned 00 UTC windows available for this range.")
-                else:
-                    if thr_result.get("fetch_mode") == "separate" and not rain["thr_cached"]:
-                        st.caption(f"\u26a0\ufe0f Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
-
-                    st.caption(
-                        "\u2139\ufe0f ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
-                        "(there is no 06Z or 18Z probability product), so they update twice a day -- first at 0.25\u00b0, "
-                        "then at 0.1\u00b0 about two hours later. The rainfall amounts use all four daily runs."
-                    )
-
-                    num_days_shown = len(thr_result["windows"])
-                    st.subheader(f"Full {num_days_shown}-day threshold forecast for {rain_name}")
-                    show_graph = st.toggle("Show as graph", key="thr_show_graph")
-                    if show_graph:
-                        components.html(render_ribbon_chart_html(thr_result), height=650)
+                    if not thr_result["windows"]:
+                        st.warning("No aligned 00 UTC windows available for this range.")
                     else:
-                        st.markdown(render_table_html(thr_result), unsafe_allow_html=True)
-                    st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
+                        if thr_result.get("fetch_mode") == "separate" and not rain["thr_cached"]:
+                            st.caption(f"\u26a0\ufe0f Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
+
+                        st.caption(
+                            "\u2139\ufe0f ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
+                            "(there is no 06Z or 18Z probability product), so they update twice a day -- first at 0.25\u00b0, "
+                            "then at 0.1\u00b0 about two hours later. The rainfall amounts use all four daily runs."
+                        )
+
+                        num_days_shown = len(thr_result["windows"])
+                        st.subheader(f"Full {num_days_shown}-day threshold forecast for {rain_name}")
+                        show_graph = st.toggle("Show as graph", key="thr_show_graph")
+                        if show_graph:
+                            components.html(render_ribbon_chart_html(thr_result), height=650)
+                        else:
+                            st.markdown(render_table_html(thr_result), unsafe_allow_html=True)
+                        st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
 
             if pct_result is not None:
                 st.caption(_coords_caption(rain_name, *rain_true, pct_result))
