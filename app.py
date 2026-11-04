@@ -965,13 +965,14 @@ def render_ribbon_chart_html(result: dict) -> str:
 RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
 _RAIN_BAR_GAP_PX = 6  # minimum space between neighbouring bars, identical for 3h and 6h
-_RAIN_BAR_MAX_PX = {8: 18, 4: 30}  # bars grow with the column but never get thicker than this (by slices per row)
+_RAIN_BAR_MAX_PX = {8: 16, 4: 30}  # bars never get thicker than this (by slices per row)
+_RAIN_SLOTS_MAX_PX = 170  # the bar area never gets wider than this, same for 3h and 6h; extra width goes BETWEEN columns
 # Bars use the 1 mm threshold blue (median = the pure color, P90 = a very light tint of it).
 # The track is a mid-light gray, darker than the P90 tint and lighter than the median, so both
 # fills stand out from it.
 _RAIN_MED = THRESHOLD_COLORS[1]
-_RAIN_P90 = "rgba(%d,%d,%d,0.3)" % _hex_to_rgb(THRESHOLD_COLORS[1])  # translucent so it does not outshine the median
-_RAIN_TRACK = "#B4BBC6"
+_RAIN_P90 = "#C6E2F2"  # very subtle cool tint, only slightly bluer/darker than the track
+_RAIN_TRACK = "#EDF0F4"  # light gray: the solid median is the only strong element in the bar
 
 
 def _fmt_mm(v: float) -> str:
@@ -1125,8 +1126,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     css = (
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
-        ".rr-row{display:grid;grid-template-columns:2.7rem minmax(0,1fr) 3.6rem;column-gap:10px;align-items:center;}"
-        ".rr-row.rr-c{grid-template-columns:2.3rem minmax(0,1fr) 3rem 2.7rem 2.7rem;column-gap:10px;}"
+        f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-between;align-items:center;}}"
+        f".rr-row.rr-c{{grid-template-columns:2.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3rem 2.7rem 2.7rem;column-gap:10px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}.rr-ap{font-size:.46rem;}"
