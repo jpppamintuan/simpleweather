@@ -964,8 +964,7 @@ def render_ribbon_chart_html(result: dict) -> str:
 
 RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
-_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17}  # bar width by slices per row
-_RAIN_BAR_GAP_PX = {8: 8, 4: 10}  # space between neighbouring bars (the slot pitch is width + gap)
+_RAIN_BAR_GAP_PX = 4  # space between neighbouring bars, identical for 3h and 6h
 # Bars use the 1 mm threshold blue (median = the pure color, P90 = a very light tint of it).
 # The track is a mid-light gray, darker than the P90 tint and lighter than the median, so both
 # fills stand out from it.
@@ -1042,12 +1041,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     row_cls = "rr-row rr-c" if has_chance else "rr-row"
 
     slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
-    bar_w = _RAIN_BAR_WIDTH_PX[n_slots]
-    pitch = bar_w + _RAIN_BAR_GAP_PX[n_slots]
-    # Fixed-pitch columns, centred in the row: bars sit a set distance apart instead
-    # of spreading to fill whatever width there is. minmax(0, pitch) lets the columns
-    # shrink on a very narrow screen; the bar is a percentage of its slot so it shrinks too.
-    grid = f"grid-template-columns:repeat({n_slots},minmax(0,{pitch}px));justify-content:center;"
+    # Bars share the slot area evenly, so there is no dead space around them and the 3h and 6h
+    # cards use the same gap between bars and the same column layout around them.
+    grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:{_RAIN_BAR_GAP_PX}px;"
 
     def tip_side(slot: int) -> str:
         if n_slots == 1:
@@ -1125,33 +1121,32 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f"{legend_chance}</div>"
     )
 
-    bar_pct = round(100 * bar_w / pitch)
     css = (
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
-        ".rr-row{display:grid;grid-template-columns:2.7rem minmax(0,1fr) 3.6rem;column-gap:8px;align-items:center;}"
-        ".rr-row.rr-c{grid-template-columns:2.4rem minmax(0,1fr) 3.3rem 2.3rem 2.9rem;column-gap:6px;}"
+        ".rr-row{display:grid;grid-template-columns:2.7rem minmax(0,1fr) 3.6rem;column-gap:10px;align-items:center;}"
+        ".rr-row.rr-c{grid-template-columns:2.3rem minmax(0,1fr) 3rem 2.7rem 2.7rem;column-gap:10px;}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
         ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
-        ".rr-h-r{text-align:right;}.rr-h-span{grid-column:span 2;}"
+        ".rr-h-r{text-align:center;}.rr-h-span{grid-column:span 2;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        f".rr-bar{{position:relative;width:min({bar_pct}%,{bar_w}px);height:60px;outline:none;cursor:pointer;}}"
+        ".rr-bar{position:relative;width:100%;height:60px;outline:none;cursor:pointer;}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
         ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.25;}"
-        ".rr-tot{text-align:right;line-height:1.15;white-space:nowrap;}.rr-tot b{font-size:.82rem;}"
+        ".rr-tot{text-align:center;line-height:1.15;white-space:nowrap;}.rr-tot b{font-size:.82rem;}"
         ".rr-tot small{font-size:.6rem;font-weight:400;color:#6b7280;}"
         ".rr-tot span{display:block;font-size:.6rem;color:#6b7280;}.rr-tot .rr-part{font-style:italic;}"
-        ".rr-chip{border-radius:6px;padding:4px 0;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
+        ".rr-chip{box-sizing:border-box;width:100%;height:2.5rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
         ".rr-chip b{display:block;font-size:.8rem;font-weight:700;}"
         ".rr-chip small{display:block;font-size:.56rem;margin-top:1px;white-space:nowrap;}"
-        ".rr-chip-na{color:#9ca3af;font-size:.75rem;box-shadow:none;}"
+        ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
         "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
