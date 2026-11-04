@@ -66,7 +66,9 @@ import diag
 from ecmwf_client import (
     DEBUG_MAX_BATCHES,
     DEFAULT_RESOLUTION,
+    PERCENTILE_MAX_LEAD_HOURS,
     PH_BBOX,
+    THRESHOLD_LEAD_DAYS,
     RESOLUTION_RANK,
     check_latest_pf_run,
     check_latest_threshold_run,
@@ -105,7 +107,7 @@ DATASETS = {
         "try_0p1": True,
         "check": check_latest_threshold_run,
         "fetch": lambda run_dt, resol: fetch_threshold_grid(
-            PH_BBOX, run_dt, resol, max_lead_days=15, progress_callback=_progress("threshold")),
+            PH_BBOX, run_dt, resol, max_lead_days=THRESHOLD_LEAD_DAYS, progress_callback=_progress("threshold")),
         "packing": {},
     },
     "percentile": {
@@ -113,7 +115,7 @@ DATASETS = {
         "try_0p1": True,
         "check": check_latest_pf_run,
         "fetch": lambda run_dt, resol: fetch_precip_grid(
-            PH_BBOX, run_dt, resol, max_lead_hours=120, progress_callback=_progress("percentile")),
+            PH_BBOX, run_dt, resol, max_lead_hours=PERCENTILE_MAX_LEAD_HOURS, progress_callback=_progress("percentile")),
         # 0.02 mm steps, range +/-655 mm per 3h bin (values are clipped to it)
         "packing": {"precip_3h_mm": 0.02},
     },
@@ -122,7 +124,7 @@ DATASETS = {
         "try_0p1": True,
         "check": check_latest_pf_run,
         "fetch": lambda run_dt, resol: fetch_temperature_grid(
-            PH_BBOX, run_dt, resol, max_lead_hours=120, progress_callback=_progress("temperature")),
+            PH_BBOX, run_dt, resol, max_lead_hours=PERCENTILE_MAX_LEAD_HOURS, progress_callback=_progress("temperature")),
         "packing": {"temperature_c": 0.1, "heat_index_c": 0.1},
     },
 }
