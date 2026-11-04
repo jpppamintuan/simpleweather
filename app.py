@@ -966,9 +966,12 @@ RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (ho
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
 _RAIN_BAR_WIDTH_PX = {8: 11, 4: 17}  # bar width by slices per row
 _RAIN_BAR_GAP_PX = {8: 8, 4: 10}  # space between neighbouring bars (the slot pitch is width + gap)
-# Light neutral track + a clearly bluer P90 tint. The old pair (#E6E9EE track, #D2E3FF P90)
-# had almost the same lightness, so the pale blue blurred into the gray.
-_RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#EEF1F5", "#9DBFFF", "#2F7BFF"
+# Bars use the 1 mm threshold blue (median = the pure color, P90 = a very light tint of it).
+# The track is a mid-light gray, darker than the P90 tint and lighter than the median, so both
+# fills stand out from it.
+_RAIN_MED = THRESHOLD_COLORS[1]
+_RAIN_P90 = "rgb(%d,%d,%d)" % _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[1]), 0.2)
+_RAIN_TRACK = "#B4BBC6"
 
 
 def _fmt_mm(v: float) -> str:
@@ -981,6 +984,11 @@ def _hour_label(hour: int, compact: bool = True) -> str:
     if compact:
         return f"{h12}{'a' if hour % 24 < 12 else 'p'}"
     return f"{h12} {'AM' if hour % 24 < 12 else 'PM'}"
+
+
+def _tip_hour_label(hour: int) -> str:
+    # Tooltip-only format: 8am / 11am (the grid header keeps the compact 8a / 2p).
+    return f"{hour % 12 or 12}{'am' if hour % 24 < 12 else 'pm'}"
 
 
 def _chance_chip(threshold_mm: int, val, show_label: bool) -> str:
@@ -1052,7 +1060,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         med, p75, p90, p25, p10 = st_["median"], st_["p75"], st_["p90"], st_["p25"], st_["p10"]
         pct_of_cap = lambda v: min(max(v / cap, 0.0), 1.0) * 100
         start, end = p["start_utc"].astimezone(PH_TZ), p["end_utc"].astimezone(PH_TZ)
-        when = f"{start:%a %d %b} \u00b7 {_hour_label(start.hour)}\u2013{_hour_label(end.hour)}"
+        when = f"{start:%a %d %b} \u00b7 {_tip_hour_label(start.hour)}\u2013{_tip_hour_label(end.hour)}"
         over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
         lines = [f"P90 {_fmt_mm(p90)} mm", f"P75 {_fmt_mm(p75)} mm", f"Median {_fmt_mm(med)} mm",
                  f"P25 {_fmt_mm(p25)} mm", f"P10 {_fmt_mm(p10)} mm"]
@@ -1069,7 +1077,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
     empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
 
-    chance_head = "<div class='rr-h'>&ge;1 mm</div><div class='rr-h'>&ge;x mm</div>" if has_chance else ""
+    chance_head = "<div class='rr-h rr-h-span'>Chance of rain</div>" if has_chance else ""
     head = (
         f"<div class='{row_cls} rr-head'><div></div>"
         f"<div class='rr-slots' style='{grid}'>"
@@ -1083,7 +1091,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         members = np.sum(day_members[day], axis=0)  # per member, THEN percentile
         total_med = float(np.median(members))
         total_p10, total_p90 = float(np.percentile(members, 10)), float(np.percentile(members, 90))
-        range_txt = f"{_fmt_mm(total_p10)}\u2013{_fmt_mm(total_p90)} mm"
+        range_txt = f"{_fmt_mm(total_p10)}\u2013{_fmt_mm(total_p90)}"
         partial = "<span class='rr-part'>partial</span>" if len(day_members[day]) < bins_per_day else ""
         # the first rows open their popover downward, so it can't run off the top of the card
         slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
@@ -1093,7 +1101,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             label = chance_label.get(day)
             v1 = chance_data[1].get(label) if label else None
             dyn = _pick_dynamic_threshold(chance_data, label) if label else None
-            chips = _chance_chip(1, v1, False) + (
+            chips = _chance_chip(1, v1, True) + (
                 _chance_chip(dyn[0], dyn[1], True) if dyn else _chance_chip(5, None, True))
 
         body += (
@@ -1127,7 +1135,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
         ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
-        ".rr-h-r{text-align:right;}"
+        ".rr-h-r{text-align:right;}.rr-h-span{grid-column:span 2;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
