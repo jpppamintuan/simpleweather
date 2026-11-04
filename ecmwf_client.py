@@ -265,7 +265,7 @@ PRODUCTS = ("threshold", "percentile", "temperature")
 #
 # Source: ECMWF "Dissemination schedule" (confluence.ecmwf.int, Data and
 # Charts, page 272310483), IFS Medium-range Ensemble Forecast, stream enfo.
-#   percentile / temperature -- raw members (type pf), steps 0-120 by 3:
+#   percentile / temperature -- raw members (type pf), steps 0-144 by 3:
 #       00Z/12Z: the pf ladders end at 07:40 (150-360 by 6), 07:04 for the
 #                93-144 ladder our steps fall in. 07:40 is used: the whole
 #                run, the later and therefore safer ("available by") time.
@@ -481,7 +481,14 @@ def _build_threshold_result(
 
 DEFAULT_PERCENTILES = [10, 25, 50, 75, 90]
 PERCENTILE_BIN_HOURS = 3  # ECMWF's native accumulation granularity for this product, through step 144
-AVAILABLE_PERIOD_HOURS = [3, 6, 12, 24]
+AVAILABLE_PERIOD_HOURS = [3, 6]
+
+# Fixed forecast ranges (the app no longer has range sliders):
+#   threshold:             15 days (00Z/12Z runs; the full ep product)
+#   percentile/temperature: 144 hours -- the end of ECMWF's 3-hourly member
+#                           ladder (steps 93-144 by 3; beyond that it is 6-hourly).
+THRESHOLD_LEAD_DAYS = 15
+PERCENTILE_MAX_LEAD_HOURS = 144
 
 
 def check_latest_threshold_run(resol: str = DEFAULT_RESOLUTION):
@@ -1165,7 +1172,7 @@ def fetch_precip_grid(
     bbox: dict,
     run_dt,
     resol: str = DEFAULT_RESOLUTION,
-    max_lead_hours: int = 120,
+    max_lead_hours: int = PERCENTILE_MAX_LEAD_HOURS,
     progress_callback: ProgressFn = None,
 ) -> xr.Dataset:
     """
@@ -1180,7 +1187,7 @@ def fetch_precip_grid(
     percentiles for an arbitrary point, and sums into 6/12/24h periods,
     are computed on demand by whatever reads this.
     """
-    max_lead_hours = min(max_lead_hours, 120)
+    max_lead_hours = min(max_lead_hours, PERCENTILE_MAX_LEAD_HOURS)
     steps = list(range(0, max_lead_hours + 1, PERCENTILE_BIN_HOURS))
     numbers = list(range(1, 51))
 
@@ -1213,7 +1220,7 @@ def fetch_temperature_grid(
     bbox: dict,
     run_dt,
     resol: str = DEFAULT_RESOLUTION,
-    max_lead_hours: int = 120,
+    max_lead_hours: int = PERCENTILE_MAX_LEAD_HOURS,
     progress_callback: ProgressFn = None,
 ) -> xr.Dataset:
     """
@@ -1230,7 +1237,7 @@ def fetch_temperature_grid(
     small enough to publish and to read, and there's no longer a
     dimension-size conflict to work around.
     """
-    max_lead_hours = min(max_lead_hours, 120)
+    max_lead_hours = min(max_lead_hours, PERCENTILE_MAX_LEAD_HOURS)
     steps = list(range(0, max_lead_hours + 1, PERCENTILE_BIN_HOURS))
     numbers = list(range(1, 51))
 
