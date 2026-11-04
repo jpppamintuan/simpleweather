@@ -966,13 +966,14 @@ RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (ho
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
 _RAIN_BAR_GAP_PX = 6  # minimum space between neighbouring bars, identical for 3h and 6h
 _RAIN_BAR_MAX_PX = {8: 16, 4: 30}  # bars never get thicker than this (by slices per row)
-_RAIN_SLOTS_MAX_PX = 170  # the bar area never gets wider than this, same for 3h and 6h; extra width goes BETWEEN columns
-# Bars use the 1 mm threshold blue (median = the pure color, P90 = a very light tint of it).
-# The track is a mid-light gray, darker than the P90 tint and lighter than the median, so both
-# fills stand out from it.
-_RAIN_MED = THRESHOLD_COLORS[1]
-_RAIN_P90 = "#C6E2F2"  # very subtle cool tint, only slightly bluer/darker than the track
-_RAIN_TRACK = "#EDF0F4"  # light gray: the solid median is the only strong element in the bar
+_RAIN_SLOTS_MAX_PX = 170  # the bar area never gets wider than this, same for 3h and 6h; extra width is spread evenly around and between the columns
+# Bar colors are two of the threshold table's own 1 mm tier shades, computed with the same
+# function and alphas the table cells use: the strongest tint (tone1, 65-95% cells) for the
+# median and the lightest tint (tone3, 5-35% cells) for P90. The track is a light gray that sits
+# between them in lightness, so the median stands out from both the track and the P90.
+_RAIN_MED = "rgb(%d,%d,%d)" % _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[1]), _TIER_FILL_ALPHA["tone1"])
+_RAIN_P90 = "rgb(%d,%d,%d)" % _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[1]), _TIER_FILL_ALPHA["tone3"])
+_RAIN_TRACK = "#DFE3E9"
 
 
 def _fmt_mm(v: float) -> str:
@@ -1126,7 +1127,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     css = (
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
-        f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-between;align-items:center;}}"
+        f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
         f".rr-row.rr-c{{grid-template-columns:2.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3rem 2.7rem 2.7rem;column-gap:10px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
