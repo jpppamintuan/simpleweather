@@ -43,7 +43,7 @@ st.markdown(
 )
 
 st.title("🌧️ Probabilistic Rainfall Forecast")
-st.caption("ECMWF ENS open data — probability of 24h rainfall exceeding each threshold")
+st.caption("ECMWF ENS open data — rainfall amounts and chances of exceeding each threshold")
 
 LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
@@ -726,7 +726,8 @@ def _cell_rgb_for_value(threshold_mm: int, val: float) -> tuple[int, int, int]:
 
 
 def _fmt_ph(dt: datetime) -> str:
-    return dt.astimezone(PH_TZ).strftime("%a, %d %b %I%p")
+    local = dt.astimezone(PH_TZ)
+    return f"{local:%a, %d %b} {_hour_label(local.hour)}"
 
 
 def _fmt_window(w: dict) -> str:
@@ -965,25 +966,38 @@ RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (ho
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
 _RAIN_BAR_WIDTH_PX = {8: 11, 4: 17}  # bar width by slices per row
 _RAIN_BAR_GAP_PX = {8: 8, 4: 10}  # space between neighbouring bars (the slot pitch is width + gap)
-_RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#E6E9EE", "#D2E3FF", "#2F7BFF"
+# Light neutral track + a clearly bluer P90 tint. The old pair (#E6E9EE track, #D2E3FF P90)
+# had almost the same lightness, so the pale blue blurred into the gray.
+_RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#EEF1F5", "#9DBFFF", "#2F7BFF"
 
 
 def _fmt_mm(v: float) -> str:
     return "0" if v < 0.05 else (f"{v:.1f}" if v < 10 else f"{v:.0f}")
 
 
-def _hour_label(hour: int, compact: bool = False) -> str:
+def _hour_label(hour: int, compact: bool = True) -> str:
+    # Compact (2a / 2p) is the one time format used everywhere in the rainfall view.
     h12 = hour % 12 or 12
     if compact:
         return f"{h12}{'a' if hour % 24 < 12 else 'p'}"
     return f"{h12} {'AM' if hour % 24 < 12 else 'PM'}"
 
 
-def render_rain_rows_html(pct_result: dict) -> str:
-    """The card described above, as a single block of HTML for st.markdown.
-    Bar details come from a pure-CSS popover (hover, or tap on a phone) -- no
-    JavaScript, so nothing here can react to a tap beyond that. Deliberately
-    NO `title` attribute: browsers would show their own native tooltip on top.
+def _chance_chip(threshold_mm: int, val, show_label: bool) -> str:
+    # One colored "chance of rain" cell, same tier colors as the full threshold table.
+    if val is None:
+        return "<div class='rr-chip rr-chip-na'>\u2014</div>"
+    bg, text_color = _cell_style(threshold_mm, val)
+    label = f"<small>&ge;{threshold_mm} mm</small>" if show_label else ""
+    return f"<div class='rr-chip' style='{bg}color:{text_color};'><b>{val:.0f}%</b>{label}</div>"
+
+
+def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6) -> str:
+    """The rain-bars card as a single block of HTML for st.markdown. Per day:
+    date | rain bars | day total (median, P10-P90) | chance of >= 1 mm | chance of >= x mm.
+    The two chance columns come from the threshold product (omitted if threshold_result
+    is None). Bar details come from a pure-CSS popover (hover, or tap on a phone) -- no
+    JavaScript. Deliberately NO `title` attribute: browsers would show their own tooltip.
 
     NOTE: no blank lines or indentation inside the HTML -- Markdown would
     end the HTML block at a blank line and treat indented lines as code."""
@@ -1001,17 +1015,24 @@ def render_rain_rows_html(pct_result: dict) -> str:
 
     # Day totals come from ALL the underlying 3-hourly bins of that day (summed
     # member by member, THEN percentiled), not from the slices drawn. That keeps
-    # a day's total identical at every time step -- including the first and last
-    # (partial) days, where a 6h slice can be incomplete and so isn't drawn.
+    # a day's total identical at every time step, including partial first/last days.
     bins_per_day = 24 // pct_result.get("bin_hours", 3)
     day_members: dict = {}
     for b in pct_result.get("raw_bins") or []:
         day_members.setdefault(b["start_utc"].astimezone(PH_TZ).date(), []).append(b["member_values_mm"])
     for day, row in rows.items():  # results without raw bins: fall back to the slices shown
         day_members.setdefault(day, [p["member_values_mm"] for p in row.values()])
-    days = sorted(set(rows) | set(day_members))
+    days = sorted(set(rows) | set(day_members))[:max_days]
 
-    compact = n_slots >= 8
+    # Threshold windows are 24h windows starting 00 UTC (= 8a UTC+8), so each is matched to
+    # the calendar day (UTC+8) it STARTS on. They are not the same 2a-2a window as the rows.
+    chance_data, chance_label = None, {}
+    if threshold_result and threshold_result.get("windows"):
+        chance_data = threshold_result["data"]
+        chance_label = {w["start_utc"].astimezone(PH_TZ).date(): w["label"] for w in threshold_result["windows"]}
+    has_chance = chance_data is not None
+    row_cls = "rr-row rr-c" if has_chance else "rr-row"
+
     slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
     bar_w = _RAIN_BAR_WIDTH_PX[n_slots]
     pitch = bar_w + _RAIN_BAR_GAP_PX[n_slots]
@@ -1036,46 +1057,64 @@ def render_rain_rows_html(pct_result: dict) -> str:
         lines = [f"P90 {_fmt_mm(p90)} mm", f"P75 {_fmt_mm(p75)} mm", f"Median {_fmt_mm(med)} mm",
                  f"P25 {_fmt_mm(p25)} mm", f"P10 {_fmt_mm(p10)} mm"]
         cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
+        tip_cls = "rr-tip" + tip_side(slot) + (" rr-tip-b" if below else "")
         return (
             f"<div class='rr-slot'><div class='rr-bar' tabindex='0'>"
             f"<div class='rr-fill'>"
             f"<span style='height:{pct_of_cap(p90):.1f}%;background:{_RAIN_P90}'></span>"
             f"<span style='height:{pct_of_cap(med):.1f}%;background:{_RAIN_MED}'></span>{cap_mark}</div>"
-            f"<div class='rr-tip{tip_side(slot)}{" rr-tip-b" if below else ""}'><b>{when}</b><br>" + "<br>".join(lines) + f"{over_note}</div>"
+            f"<div class='{tip_cls}'><b>{when}</b><br>" + "<br>".join(lines) + f"{over_note}</div>"
             f"</div></div>"
         )
 
     empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
 
+    chance_head = "<div class='rr-h'>&ge;1 mm</div><div class='rr-h'>&ge;x mm</div>" if has_chance else ""
     head = (
-        "<div class='rr-row rr-head'><div></div>"
+        f"<div class='{row_cls} rr-head'><div></div>"
         f"<div class='rr-slots' style='{grid}'>"
-        + "".join(f"<div class='rr-slot'><span>{_hour_label(h, compact)}</span></div>" for h in slot_hours)
-        + "</div><div></div></div>"
+        + "".join(f"<div class='rr-slot'><span>{_hour_label(h)}</span></div>" for h in slot_hours)
+        + f"</div><div class='rr-h rr-h-r'>Day total</div>{chance_head}</div>"
     )
 
     body = ""
     for row_index, day in enumerate(days):
         row = rows.get(day, {})
         members = np.sum(day_members[day], axis=0)  # per member, THEN percentile
-        total_med, total_p90 = float(np.median(members)), float(np.percentile(members, 90))
+        total_med = float(np.median(members))
+        total_p10, total_p90 = float(np.percentile(members, 10)), float(np.percentile(members, 90))
+        range_txt = f"{_fmt_mm(total_p10)}\u2013{_fmt_mm(total_p90)} mm"
         partial = "<span class='rr-part'>partial</span>" if len(day_members[day]) < bins_per_day else ""
         # the first rows open their popover downward, so it can't run off the top of the card
         slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
+
+        chips = ""
+        if has_chance:
+            label = chance_label.get(day)
+            v1 = chance_data[1].get(label) if label else None
+            dyn = _pick_dynamic_threshold(chance_data, label) if label else None
+            chips = _chance_chip(1, v1, False) + (
+                _chance_chip(dyn[0], dyn[1], True) if dyn else _chance_chip(5, None, True))
+
         body += (
-            f"<div class='rr-row rr-data'><div class='rr-day'><b>{day:%a}</b><span>{day.day} {day:%b}</span></div>"
+            f"<div class='{row_cls} rr-data'><div class='rr-day'><b>{day:%a}</b><span>{day.day} {day:%b}</span></div>"
             f"<div class='rr-slots' style='{grid}'>{slots}</div>"
             f"<div class='rr-tot'><b>{_fmt_mm(total_med)}<small> mm</small></b>"
-            f"<span>P90 {_fmt_mm(total_p90)}</span>{partial}</div></div>"
+            f"<span>{range_txt}</span>{partial}</div>{chips}</div>"
         )
 
+    legend_chance = (
+        "<span>Chance columns: 24h, 8a\u20138a; \u2265x mm = highest threshold at 65%+ (else 5 mm)</span>"
+        if has_chance else ""
+    )
     legend = (
         "<div class='rr-legend'>"
         f"<span><i style='background:{_RAIN_MED}'></i>Median</span>"
         f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
         "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
         f"<span>Full bar = {cap} mm per {step}h</span>"
-        "<span>Right: day total (median, P90) of the 50 members</span></div>"
+        "<span>Day total: median and P10\u2013P90 of the 50 members</span>"
+        f"{legend_chance}</div>"
     )
 
     bar_pct = round(100 * bar_w / pitch)
@@ -1083,9 +1122,12 @@ def render_rain_rows_html(pct_result: dict) -> str:
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         ".rr-row{display:grid;grid-template-columns:2.7rem minmax(0,1fr) 3.6rem;column-gap:8px;align-items:center;}"
+        ".rr-row.rr-c{grid-template-columns:2.4rem minmax(0,1fr) 3.3rem 2.3rem 2.9rem;column-gap:6px;}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
+        ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
+        ".rr-h-r{text-align:right;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
@@ -1095,9 +1137,13 @@ def render_rain_rows_html(pct_result: dict) -> str:
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
         ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.25;}"
-        ".rr-tot{text-align:right;line-height:1.15;}.rr-tot b{font-size:.82rem;}"
+        ".rr-tot{text-align:right;line-height:1.15;white-space:nowrap;}.rr-tot b{font-size:.82rem;}"
         ".rr-tot small{font-size:.6rem;font-weight:400;color:#6b7280;}"
         ".rr-tot span{display:block;font-size:.6rem;color:#6b7280;}.rr-tot .rr-part{font-style:italic;}"
+        ".rr-chip{border-radius:6px;padding:4px 0;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
+        ".rr-chip b{display:block;font-size:.8rem;font-weight:700;}"
+        ".rr-chip small{display:block;font-size:.56rem;margin-top:1px;white-space:nowrap;}"
+        ".rr-chip-na{color:#9ca3af;font-size:.75rem;box-shadow:none;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
         "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
@@ -1446,117 +1492,28 @@ def render_table_html(result: dict) -> str:
     )
 
 
-def _pick_headline_threshold(data: dict, window_label: str):
-    """Normally the headline figure is 1mm ('any rain'). Exception: if a
-    higher threshold has reached >=95% (i.e. it's about as certain as the
-    1mm figure would be), show that more severe threshold instead -- it's
-    more informative than a near-guaranteed 'any rain' number. Among
-    thresholds that qualify, the most severe (largest mm) one is used.
-
-    Comparisons use the *rounded* (displayed) value, not the raw one --
-    otherwise a probability that displays as "50%" but is actually 49.9
-    under the hood would silently fail a ">=50" check, which looks like a
-    bug to anyone just looking at the screen."""
+def _pick_dynamic_threshold(data: dict, window_label: str):
+    # The "chance of >= x mm" column: the most severe threshold above 1 mm that reaches 65%
+    # (the tone1 color-tier boundary, i.e. visually in the "strong" tier). If none does, fall
+    # back to 5 mm so the column always shows the next step up from "any rain".
+    # Uses the rounded (displayed) value so tier and label never disagree.
     for threshold in (100, 50, 20, 5):
-        val = data.get(threshold, {}).get(window_label)
-        if val is not None and round(val) >= 95:
-            return threshold, val
-    val_1mm = data.get(1, {}).get(window_label)
-    if val_1mm is None:
-        return None
-    return 1, val_1mm
-
-
-def _pick_secondary_threshold(data: dict, window_label: str, headline_threshold: int):
-    """The next more severe threshold above the headline that still clears
-    65% -- e.g. if 5mm became the headline (>=95%), show the next threshold
-    above 5mm (checked 100 -> 50 -> 20, most severe first) that's >=65%.
-    65% matches the tone1 color-tier boundary (the same breakpoints used
-    for the full table's cell coloring), so a threshold only shows up here
-    once it's visually in the "strong" tier, not just "medium"."""
-    for threshold in (100, 50, 20, 5, 1):
-        if threshold <= headline_threshold:
-            continue
         val = data.get(threshold, {}).get(window_label)
         if val is not None and round(val) >= 65:
             return threshold, val
-    return None
+    val_5mm = data.get(5, {}).get(window_label)
+    return (5, val_5mm) if val_5mm is not None else None
 
 
 def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
-    """Shared with the full table: same discrete-tier color by value,
-    text color chosen for contrast against the actual rendered color."""
+    """Same discrete-tier color as the full table, text color chosen for
+    contrast against the actual rendered color."""
     if val is None:
         return "background-color:transparent;", BASE_TEXT
     br, bg_g, bb = _cell_rgb_for_value(threshold_mm, val)
     bg = f"background-color:rgb({br},{bg_g},{bb});"
     text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
     return bg, text_color
-
-
-def render_three_day_table_html(result: dict, num_days: int = 3) -> str:
-    windows = result["windows"][:num_days]
-    data = result["data"]
-    if not windows:
-        return ""
-
-    header_cells = "".join(
-        f"<th style='padding:10px 16px;font-size:10pt;font-weight:600;text-align:center;"
-        f"color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>"
-        f"{w['start_utc'].astimezone(PH_TZ).strftime('%a, %d %b')}</th>"
-        for w in windows
-    )
-
-    headline_cells = ""
-    secondary_cells = ""
-    for w in windows:
-        label = w["label"]
-        headline = _pick_headline_threshold(data, label)
-
-        if headline is None:
-            headline_cells += (
-                f"<td style='padding:14px 16px;text-align:center;color:{BASE_TEXT};"
-                f"border-bottom:1px solid {BORDER};'>—</td>"
-            )
-            secondary_cells += (
-                f"<td style='padding:10px 16px;text-align:center;color:{BASE_TEXT};"
-                f"font-size:10pt;border-bottom:1px solid {BORDER};'>—</td>"
-            )
-            continue
-
-        t_mm, t_val = headline
-        bg, text_color = _cell_style(t_mm, t_val)
-        headline_cells += (
-            f"<td style='padding:14px 16px;text-align:center;{bg}"
-            f"border-bottom:1px solid {BORDER};'>"
-            f"<div style=\"font-size:20pt;font-weight:800;color:{text_color};line-height:1.15;\">{t_val:.0f}%</div>"
-            f"<div style=\"font-size:10pt;font-weight:400;color:{text_color};margin-top:2px;\">chance of rain (&ge; {t_mm} mm)</div>"
-            f"</td>"
-        )
-
-        secondary = _pick_secondary_threshold(data, label, t_mm)
-        if secondary:
-            s_mm, s_val = secondary
-            s_bg, s_text_color = _cell_style(s_mm, s_val)
-            secondary_cells += (
-                f"<td style='padding:10px 16px;text-align:center;{s_bg}color:{s_text_color};"
-                f"font-size:10pt;border-bottom:1px solid {BORDER};'>"
-                f"{s_val:.0f}% chance of rain (&ge; {s_mm} mm)</td>"
-            )
-        else:
-            secondary_cells += (
-                f"<td style='padding:10px 16px;text-align:center;color:{BASE_TEXT};"
-                f"font-size:10pt;border-bottom:1px solid {BORDER};'>—</td>"
-            )
-
-    return (
-        f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
-        f"<table style=\"border-collapse:collapse;width:100%;table-layout:fixed;font-family:{FONT_STACK};\">"
-        f"<thead><tr>{header_cells}</tr></thead>"
-        f"<tbody><tr>{headline_cells}</tr><tr>{secondary_cells}</tr></tbody>"
-        f"</table>"
-        f"</div>"
-    )
 
 
 
@@ -1673,11 +1630,11 @@ location_name, lat, lon, true_lat, true_lon = location_picker("shared")
 st.divider()
 
 if "view_mode" not in st.session_state:
-    st.session_state["view_mode"] = "Threshold Forecast"
+    st.session_state["view_mode"] = "Rainfall Forecast"
 
 _selected_mode = st.segmented_control(
     "View",
-    ["Threshold Forecast", "Percentile Rainfall Forecast", "Temperature Forecast"],
+    ["Rainfall Forecast", "Temperature Forecast"],
     default=st.session_state["view_mode"],
 )
 if _selected_mode is not None:
@@ -1693,206 +1650,155 @@ with footer_slot:
     render_status_footer()
 
 with main:
-    if view_mode == "Threshold Forecast":
-        lead_days = THRESHOLD_LEAD_DAYS  # fixed range -- no slider
-
-        get_forecast_clicked = st.button("Get forecast", type="primary")
-
-        elapsed_placeholder = st.empty()
-
-        if get_forecast_clicked:
-            request_started_at = time.time()
-            try:
-                fetch_out = get_forecast_with_progress(lat, lon, lead_days)
-            except Exception as e:
-                st.error(f"Failed to fetch forecast: {type(e).__name__}: {e}")
-                with st.expander("Full error details"):
-                    st.exception(e)
-                st.stop()
-            elapsed = time.time() - request_started_at
-
-            st.session_state["last_fetch_out"] = fetch_out
-            st.session_state["last_location_name"] = location_name
-            st.session_state["last_lat"] = lat
-            st.session_state["last_lon"] = lon
-            st.session_state["last_true_lat"] = true_lat
-            st.session_state["last_true_lon"] = true_lon
-            st.session_state["last_elapsed"] = elapsed
-
-        if "last_fetch_out" in st.session_state:
-            fetch_out = st.session_state["last_fetch_out"]
-            location_name = st.session_state["last_location_name"]
-            lat = st.session_state["last_lat"]
-            lon = st.session_state["last_lon"]
-            true_lat = st.session_state["last_true_lat"]
-            true_lon = st.session_state["last_true_lon"]
-            elapsed = st.session_state["last_elapsed"]
-
-            result, was_cached = fetch_out
-            elapsed_placeholder.caption(
-                f"\u23f1\ufe0f Loaded in {elapsed:.1f}s" + (" (from cache)" if was_cached else "")
-            )
-
-            resolution = result.get("resolution") or "0p25"
-            model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
-
-            if not result["windows"]:
-                st.warning("No aligned 00 UTC windows available for this range.")
-                st.stop()
-
-            if result.get("fetch_mode") == "separate" and not was_cached:
-                st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
-
-            st.caption(
-                "\u2139\ufe0f ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
-                "(there is no 06Z or 18Z probability product), so this view updates twice a day -- first at 0.25\u00b0, "
-                "then at 0.1\u00b0 about two hours later. The percentile and temperature views use all four daily runs."
-            )
-
-            # --- 3-day summary (essential info only) ---
-            st.subheader(f"3-day summary for {location_name}")
-            st.markdown(render_three_day_table_html(result, num_days=3), unsafe_allow_html=True)
-            st.caption("All dates shown in UTC+8 (Philippine Time).")
-
-            st.divider()
-
-            # --- Full detailed table ---
-            num_days_shown = len(result["windows"])
-            st.subheader(f"Full {num_days_shown}-day forecast for {location_name}")
-            show_graph = st.toggle("Show as graph")
-            if show_graph:
-                components.html(render_ribbon_chart_html(result), height=650)
-            else:
-                st.markdown(render_table_html(result), unsafe_allow_html=True)
-            st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
-
-            st.caption(_coords_caption(location_name, true_lat, true_lon, result))
-        else:
-            st.info("Choose a location and click **Get forecast**.")
-
-
-    elif view_mode == "Percentile Rainfall Forecast":
+    if view_mode == "Rainfall Forecast":
         st.caption(
-            "Pulls raw data from all 50 ECMWF ensemble members and computes rainfall "
-            "percentiles, instead of using ECMWF's precomputed threshold probabilities "
-            "like the tables above -- this gives actual mm amounts (not just chance of "
-            "exceeding a fixed threshold). Always reads pre-computed data from the "
-            "scheduled ingestion job, same as the main forecast above -- no live fetch, "
-            "since the raw member data involved is far too heavy to fetch on demand."
+            "Rainfall amounts from all 50 ECMWF ensemble members (median and P10\u2013P90 range), "
+            "alongside ECMWF's precomputed chances of exceeding fixed rainfall thresholds. "
+            "Reads pre-computed data from the scheduled ingestion job; only the threshold "
+            "probabilities fall back to a live 0.25\u00b0 fetch if the store isn't fresh."
         )
 
-        pct_location_name, pct_lat, pct_lon = location_name, lat, lon  # shared picker, see above
+        lead_days = THRESHOLD_LEAD_DAYS  # fixed range -- no slider
         pct_lead_hours = PERCENTILE_MAX_LEAD_HOURS  # fixed range -- no slider
 
-        pct_clicked = st.button("Get percentile forecast", key="pct_button")
-        pct_elapsed_placeholder = st.empty()
+        rain_clicked = st.button("Get rainfall forecast", type="primary", key="rain_button")
+        rain_elapsed_placeholder = st.empty()
 
-        if pct_clicked:
-            pct_request_started_at = time.time()
+        if rain_clicked:
+            rain_started_at = time.time()
+            thr_out = None
+            pct_out = None
             try:
-                pct_raw_result, pct_was_cached = get_percentile_raw_with_progress(pct_lat, pct_lon, pct_lead_hours)
+                thr_out = get_forecast_with_progress(lat, lon, lead_days)
             except Exception as e:
-                st.error(f"Failed to read percentile forecast: {type(e).__name__}: {e}")
-                with st.expander("Full error details"):
+                st.error(f"Failed to fetch threshold probabilities: {type(e).__name__}: {e}")
+                with st.expander("Full error details (threshold)"):
                     st.exception(e)
-                st.stop()
-            pct_elapsed = time.time() - pct_request_started_at
+            try:
+                pct_out = get_percentile_raw_with_progress(lat, lon, pct_lead_hours)
+            except Exception as e:
+                st.error(f"Failed to read rainfall percentiles: {type(e).__name__}: {e}")
+                with st.expander("Full error details (percentile)"):
+                    st.exception(e)
 
+            pct_raw_new, pct_cached_new = pct_out if pct_out else (None, False)
+            if thr_out is None and pct_raw_new is None:
+                st.error("Rainfall data isn't available right now -- please try again shortly.")
+                st.stop()
+
+            st.session_state["last_rain"] = {
+                "location_name": location_name,
+                "true": (true_lat, true_lon),
+                "thr": thr_out[0] if thr_out else None,
+                "thr_cached": thr_out[1] if thr_out else True,
+                "pct_raw": pct_raw_new,
+                "pct_cached": pct_cached_new,
+                "elapsed": time.time() - rain_started_at,
+            }
+
+        if "last_rain" in st.session_state:
+            rain = st.session_state["last_rain"]
+            rain_name = rain["location_name"]
+            rain_true = rain["true"]
+            thr_result = rain["thr"]
+            pct_raw_result = rain["pct_raw"]
+            all_cached = (thr_result is None or rain["thr_cached"]) and (pct_raw_result is None or rain["pct_cached"])
+
+            rain_elapsed_placeholder.caption(
+                f"\u23f1\ufe0f Loaded in {rain['elapsed']:.1f}s" + (" (from cache)" if all_cached else "")
+            )
+
+            card_thr = thr_result if (thr_result is not None and thr_result["windows"]) else None
+
+            # --- 6-day card: bars + day totals + chance columns -------------------------
+            st.subheader(f"6-day rainfall forecast for {rain_name}")
+            pct_result = None
             if pct_raw_result is None:
-                # No live-fetch fallback for percentile (see
-                # get_percentile_raw_with_progress) -- if the store genuinely
-                # isn't reachable, that's the whole answer, not a cue to try
-                # a ~1.7GB live fetch. Deliberately doesn't touch
-                # last_pct_raw_result, so a previously-loaded result (from
-                # earlier in the session) stays on screen instead of being
-                # wiped by a transient read failure.
-                st.error(
-                    "Percentile data isn't available from the latest ingestion right now "
-                    "(store unreachable or not yet published). This view only ever reads "
-                    "pre-computed data -- please try again shortly."
-                )
-            else:
-                st.session_state["last_pct_raw_result"] = pct_raw_result
-                st.session_state["last_pct_location_name"] = pct_location_name
-                st.session_state["last_pct_true"] = (true_lat, true_lon)
-                st.session_state["last_pct_was_cached"] = pct_was_cached
-                st.session_state["last_pct_elapsed"] = pct_elapsed
-
-        if "last_pct_raw_result" in st.session_state:
-            pct_raw_result = st.session_state["last_pct_raw_result"]
-            pct_location_name = st.session_state["last_pct_location_name"]
-            pct_was_cached = st.session_state["last_pct_was_cached"]
-            pct_elapsed = st.session_state["last_pct_elapsed"]
-
-            pct_elapsed_placeholder.caption(
-                f"⏱️ Loaded in {pct_elapsed:.1f}s" + (" (from cache)" if pct_was_cached else "")
-            )
-
-            # --- Time-step control: purely a local recompute, never refetches.
-            # aggregate_percentile_bins() sums the already-downloaded 3-hourly
-            # per-member bins into whichever period the person picks here, so
-            # moving this control is instant even though the underlying fetch
-            # above can take a while.
-            period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
-            if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
-                st.session_state["pct_period_hours"] = 3  # first visit, or a step that no longer exists
-            selected_period_label = st.segmented_control(
-                "Time step",
-                list(period_labels.values()),
-                default=period_labels[st.session_state["pct_period_hours"]],
-                key="pct_period_control",
-            )
-            if selected_period_label is not None:
-                st.session_state["pct_period_hours"] = next(
-                    h for h, label in period_labels.items() if label == selected_period_label
-                )
-            pct_period_hours = st.session_state["pct_period_hours"]
-
-            pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
-            pct_days = pct_result["days"]
-
-            if not pct_days:
                 st.warning(
-                    f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
-                    f"range -- try a longer range or a shorter time step."
+                    "Rainfall amounts (percentile data) aren't available from the latest ingestion "
+                    "right now (store unreachable or not yet published) -- please try again shortly."
                 )
-                st.stop()
-
-            pct_percentiles = pct_result["percentiles"]
-
-            st.caption(
-                f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2 AM-based grid "
-                f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
-                f"partly covers is left empty. Covers the next {PERCENTILE_MAX_LEAD_HOURS} hours."
-            )
-
-            st.subheader(f"Percentile rainfall for {pct_location_name}")
-            show_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
-            if show_graph:
-                st.markdown(render_rain_rows_html(pct_result), unsafe_allow_html=True)
             else:
-                stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-                stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-                day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
+                # Time-step control: purely a local recompute, never refetches.
+                period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
+                if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
+                    st.session_state["pct_period_hours"] = 3
+                selected_period_label = st.segmented_control(
+                    "Time step",
+                    list(period_labels.values()),
+                    default=period_labels[st.session_state["pct_period_hours"]],
+                    key="pct_period_control",
+                )
+                if selected_period_label is not None:
+                    st.session_state["pct_period_hours"] = next(
+                        h for h, label in period_labels.items() if label == selected_period_label
+                    )
+                pct_period_hours = st.session_state["pct_period_hours"]
 
-                table_data = {
-                    day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-                    for i, d in enumerate(pct_days)
-                }
-                pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-                st.dataframe(pct_df, use_container_width=True)
+                pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
+                pct_days = pct_result["days"]
 
-            st.caption(_coords_caption(pct_location_name, *st.session_state.get("last_pct_true", (true_lat, true_lon)), pct_result))
+                if not pct_days:
+                    st.warning(
+                        f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
+                        f"range -- try a shorter time step."
+                    )
+                else:
+                    pct_percentiles = pct_result["percentiles"]
+                    st.caption(
+                        f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2a-based grid "
+                        f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
+                        f"partly covers is left empty."
+                        + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8a\u20138a, "
+                           "so each is matched to the day it starts on." if card_thr else "")
+                    )
+                    show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
+                    if show_pct_graph:
+                        st.markdown(render_rain_rows_html(pct_result, card_thr, max_days=6), unsafe_allow_html=True)
+                    else:
+                        stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
+                        stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
+                        day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
+                        table_data = {
+                            day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
+                            for i, d in enumerate(pct_days)
+                        }
+                        pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
+                        st.dataframe(pct_df, use_container_width=True)
 
-            downloaded = pct_result.get("downloaded_bytes")
-            if downloaded:
-                size_str = f"{downloaded/1024/1024:.1f} MB" if downloaded > 1024*1024 else f"{downloaded/1024:.0f} KB"
-                st.caption(f"Data downloaded: {size_str} (50 ensemble members, raw total precipitation, 3-hourly).")
+            # --- Full threshold forecast (table, or graph) ------------------------------
+            if thr_result is not None:
+                resolution = thr_result.get("resolution") or "0p25"
+                model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
+                st.divider()
+
+                if not thr_result["windows"]:
+                    st.warning("No aligned 00 UTC windows available for this range.")
+                else:
+                    if thr_result.get("fetch_mode") == "separate" and not rain["thr_cached"]:
+                        st.caption(f"\u26a0\ufe0f Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
+
+                    st.caption(
+                        "\u2139\ufe0f ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
+                        "(there is no 06Z or 18Z probability product), so they update twice a day -- first at 0.25\u00b0, "
+                        "then at 0.1\u00b0 about two hours later. The rainfall amounts use all four daily runs."
+                    )
+
+                    num_days_shown = len(thr_result["windows"])
+                    st.subheader(f"Full {num_days_shown}-day threshold forecast for {rain_name}")
+                    show_graph = st.toggle("Show as graph", key="thr_show_graph")
+                    if show_graph:
+                        components.html(render_ribbon_chart_html(thr_result), height=650)
+                    else:
+                        st.markdown(render_table_html(thr_result), unsafe_allow_html=True)
+                    st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
+
+            if pct_result is not None:
+                st.caption(_coords_caption(rain_name, *rain_true, pct_result))
+            if thr_result is not None:
+                st.caption(_coords_caption(rain_name, *rain_true, thr_result))
         else:
-            st.info(
-                "Choose a location and click **Get percentile forecast** to see mm-based "
-                "rainfall percentiles."
-            )
+            st.info("Choose a location and click **Get rainfall forecast**.")
 
 
     elif view_mode == "Temperature Forecast":
