@@ -971,8 +971,8 @@ _RAIN_SLOTS_MAX_PX = 170  # the bar area never gets wider than this, same for 3h
 # function and alphas the table cells use: the strongest tint (tone1, 65-95% cells) for the
 # median and the lightest tint (tone3, 5-35% cells) for P90. The track is a light gray that sits
 # between them in lightness, so the median stands out from both the track and the P90.
-_RAIN_MED = "rgb(%d,%d,%d)" % _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[1]), _TIER_FILL_ALPHA["tone1"])
-_RAIN_P90 = "#C1D0DC"
+_RAIN_MED = "#00BFFF"
+_RAIN_P90 = "#CAD7E1"
 _RAIN_TRACK = "#DFE3E9"
 
 
