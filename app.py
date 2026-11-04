@@ -964,12 +964,13 @@ def render_ribbon_chart_html(result: dict) -> str:
 
 RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
-_RAIN_BAR_GAP_PX = 4  # space between neighbouring bars, identical for 3h and 6h
+_RAIN_BAR_GAP_PX = 6  # minimum space between neighbouring bars, identical for 3h and 6h
+_RAIN_BAR_MAX_PX = {8: 18, 4: 30}  # bars grow with the column but never get thicker than this (by slices per row)
 # Bars use the 1 mm threshold blue (median = the pure color, P90 = a very light tint of it).
 # The track is a mid-light gray, darker than the P90 tint and lighter than the median, so both
 # fills stand out from it.
 _RAIN_MED = THRESHOLD_COLORS[1]
-_RAIN_P90 = "rgb(%d,%d,%d)" % _tint_toward_white_rgb(*_hex_to_rgb(THRESHOLD_COLORS[1]), 0.2)
+_RAIN_P90 = "rgba(%d,%d,%d,0.3)" % _hex_to_rgb(THRESHOLD_COLORS[1])  # translucent so it does not outshine the median
 _RAIN_TRACK = "#B4BBC6"
 
 
@@ -977,17 +978,17 @@ def _fmt_mm(v: float) -> str:
     return "0" if v < 0.05 else (f"{v:.1f}" if v < 10 else f"{v:.0f}")
 
 
-def _hour_label(hour: int, compact: bool = True) -> str:
-    # Compact (2a / 2p) is the one time format used everywhere in the rainfall view.
-    h12 = hour % 12 or 12
-    if compact:
-        return f"{h12}{'a' if hour % 24 < 12 else 'p'}"
-    return f"{h12} {'AM' if hour % 24 < 12 else 'PM'}"
-
-
-def _tip_hour_label(hour: int) -> str:
-    # Tooltip-only format: 8am / 11am (the grid header keeps the compact 8a / 2p).
+def _hour_label(hour: int) -> str:
+    # The one time format used across the rainfall tab: 8am, 2pm, 11pm.
     return f"{hour % 12 or 12}{'am' if hour % 24 < 12 else 'pm'}"
+
+
+_tip_hour_label = _hour_label  # kept as an alias; tooltips use the same format
+
+
+def _hour_label_html(hour: int) -> str:
+    # Grid-header version: same 8am / 2pm text, with a smaller am/pm so 8 labels fit on a phone.
+    return f"{hour % 12 or 12}<small class='rr-ap'>{'am' if hour % 24 < 12 else 'pm'}</small>"
 
 
 def _chance_chip(threshold_mm: int, val, show_label: bool) -> str:
@@ -1032,7 +1033,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     days = sorted(set(rows) | set(day_members))[:max_days]
 
     # Threshold windows are 24h windows starting 00 UTC (= 8a UTC+8), so each is matched to
-    # the calendar day (UTC+8) it STARTS on. They are not the same 2a-2a window as the rows.
+    # the calendar day (UTC+8) it STARTS on. They are not the same 2am-2am window as the rows.
     chance_data, chance_label = None, {}
     if threshold_result and threshold_result.get("windows"):
         chance_data = threshold_result["data"]
@@ -1077,7 +1078,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     head = (
         f"<div class='{row_cls} rr-head'><div></div>"
         f"<div class='rr-slots' style='{grid}'>"
-        + "".join(f"<div class='rr-slot'><span>{_hour_label(h)}</span></div>" for h in slot_hours)
+        + "".join(f"<div class='rr-slot'><span>{_hour_label_html(h)}</span></div>" for h in slot_hours)
         + f"</div><div class='rr-h rr-h-r'>Day total</div>{chance_head}</div>"
     )
 
@@ -1108,7 +1109,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         )
 
     legend_chance = (
-        "<span>Chance columns: 24h, 8a\u20138a; \u2265x mm = highest threshold at 65%+ (else 5 mm)</span>"
+        "<span>Chance columns: 24h, 8am\u20138am; \u2265x mm = highest threshold at 65%+ (else 5 mm)</span>"
         if has_chance else ""
     )
     legend = (
@@ -1128,14 +1129,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-row.rr-c{grid-template-columns:2.3rem minmax(0,1fr) 3rem 2.7rem 2.7rem;column-gap:10px;}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
-        ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
+        ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}.rr-ap{font-size:.46rem;}"
         ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
         ".rr-h-r{text-align:center;}.rr-h-span{grid-column:span 2;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        ".rr-bar{position:relative;width:100%;height:60px;outline:none;cursor:pointer;}"
+        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;cursor:pointer;}}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
@@ -1769,10 +1770,10 @@ with main:
                     else:
                         pct_percentiles = pct_result["percentiles"]
                         st.caption(
-                            f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2a-based grid "
+                            f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2am-based grid "
                             f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
                             f"partly covers is left empty."
-                            + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8a\u20138a, "
+                            + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8am\u20138am, "
                                "so each is matched to the day it starts on." if card_thr else "")
                         )
                         show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
@@ -1781,7 +1782,7 @@ with main:
                         else:
                             stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
                             stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-                            day_col_labels = [d["start_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for d in pct_days]
+                            day_col_labels = [f"{d['start_utc'].astimezone(PH_TZ):%a %d %b}, {_hour_label(d['start_utc'].astimezone(PH_TZ).hour)}" for d in pct_days]
                             table_data = {
                                 day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
                                 for i, d in enumerate(pct_days)
