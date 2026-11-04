@@ -446,11 +446,6 @@ def _load_store_cached(kind: str):
     return entry["ds"]
 
 
-def _resolution_suffix(result: dict) -> str:
-    label = RESOLUTION_LABELS.get(result.get("resolution"))
-    return f" \u00b7 {label} grid" if label else ""
-
-
 def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
     """Two-tier lookup (session -> cross-session/superset-trim -> GitHub-
     hosted store), mirroring get_forecast_with_progress() for the main
@@ -966,7 +961,8 @@ def render_ribbon_chart_html(result: dict) -> str:
 
 RAIN_BAR_CAP_MM = {3: 10, 6: 20, 12: 40, 24: 80}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
-_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17, 2: 26, 1: 36}  # max bar width by slices per row
+_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17, 2: 26, 1: 36}  # bar width by slices per row
+_RAIN_BAR_GAP_PX = {8: 8, 4: 10, 2: 14, 1: 0}  # space between neighbouring bars (the slot pitch is width + gap)
 _RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#E6E9EE", "#D2E3FF", "#2F7BFF"
 
 
@@ -1015,7 +1011,12 @@ def render_rain_rows_html(pct_result: dict) -> str:
 
     compact = n_slots >= 8
     slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
-    grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));"
+    bar_w = _RAIN_BAR_WIDTH_PX[n_slots]
+    pitch = bar_w + _RAIN_BAR_GAP_PX[n_slots]
+    # Fixed-pitch columns, centred in the row: bars sit a set distance apart instead
+    # of spreading to fill whatever width there is. minmax(0, pitch) lets the columns
+    # shrink on a very narrow screen; the bar is a percentage of its slot so it shrinks too.
+    grid = f"grid-template-columns:repeat({n_slots},minmax(0,{pitch}px));justify-content:center;"
 
     def tip_side(slot: int) -> str:
         if n_slots == 1:
@@ -1075,7 +1076,7 @@ def render_rain_rows_html(pct_result: dict) -> str:
         "<span>Right: day total (median, P90) of the 50 members</span></div>"
     )
 
-    bar_w = _RAIN_BAR_WIDTH_PX[n_slots]
+    bar_pct = round(100 * bar_w / pitch)
     css = (
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
@@ -1087,7 +1088,7 @@ def render_rain_rows_html(pct_result: dict) -> str:
         ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        f".rr-bar{{position:relative;width:min(70%,{bar_w}px);height:60px;outline:none;cursor:pointer;}}"
+        f".rr-bar{{position:relative;width:min({bar_pct}%,{bar_w}px);height:60px;outline:none;cursor:pointer;}}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
@@ -1858,9 +1859,7 @@ with main:
                 st.stop()
 
             pct_percentiles = pct_result["percentiles"]
-            pct_run_time = pct_result["run_time"]
 
-            st.markdown(f"**Model forecast run:** `{pct_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(pct_result)}")
             st.caption(
                 f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2 AM-based grid "
                 f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
@@ -1946,9 +1945,7 @@ with main:
                 st.stop()
 
             temp_percentiles = temp_result["percentiles"]
-            temp_run_time = temp_result["run_time"]
 
-            st.markdown(f"**Model forecast run:** `{temp_run_time.strftime('%Y-%m-%d %H UTC')}`{_resolution_suffix(temp_result)}")
 
             st.subheader(f"Temperature & heat index for {temp_location_name}")
             temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
