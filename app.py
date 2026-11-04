@@ -19,6 +19,8 @@ from ecmwf_client import (
     PH_TZ,
     DEFAULT_PERCENTILES,
     AVAILABLE_PERIOD_HOURS,
+    PERCENTILE_MAX_LEAD_HOURS,
+    THRESHOLD_LEAD_DAYS,
     fetch_forecast_table,
     aggregate_percentile_bins_anchored,
     read_threshold_result_from_store,
@@ -296,7 +298,7 @@ _load_disk_cache()  # populate the in-memory cache from disk once, at startup
 #
 # What's cached here is the RAW 3-hourly per-member bins, not any
 # particular aggregation of them -- the time-step slider in the UI
-# (3h/6h/12h/24h) re-aggregates this same cached data on every rerun via
+# (3h/6h) re-aggregates this same cached data on every rerun via
 # aggregate_percentile_bins(), so changing it never touches this cache or
 # the network.
 _PCT_GLOBAL_CACHE: dict = {}
@@ -950,8 +952,8 @@ def render_ribbon_chart_html(result: dict) -> str:
 #
 #   * Rows are calendar days, 02:00 -> 02:00 UTC+8. The slice grid is the
 #     same at every time step (see aggregate_percentile_bins_anchored()), so
-#     the day total at the right is the same number whether you view 3h, 6h,
-#     12h or 24h slices.
+#     the day total at the right is the same number whether you view 3h or
+#     6h slices.
 #   * Fill height is strictly linear against RAIN_BAR_CAP_MM for the chosen
 #     step: solid blue = median, pale blue = P90 (P75 and the rest are in the
 #     bar's popover). A dark cap on top marks a bar whose P90 is beyond the
@@ -959,10 +961,10 @@ def render_ribbon_chart_html(result: dict) -> str:
 #   * Light card, like the app's other tables and charts.
 # ---------------------------------------------------------------------------
 
-RAIN_BAR_CAP_MM = {3: 10, 6: 20, 12: 40, 24: 80}  # rainfall that fills a bar, per time step (hours)
+RAIN_BAR_CAP_MM = {3: 10, 6: 20}  # rainfall that fills a bar, per time step (hours)
 ROW_ANCHOR_PH_HOUR = 2  # first slice of every day row starts at 02:00 UTC+8
-_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17, 2: 26, 1: 36}  # bar width by slices per row
-_RAIN_BAR_GAP_PX = {8: 8, 4: 10, 2: 14, 1: 0}  # space between neighbouring bars (the slot pitch is width + gap)
+_RAIN_BAR_WIDTH_PX = {8: 11, 4: 17}  # bar width by slices per row
+_RAIN_BAR_GAP_PX = {8: 8, 4: 10}  # space between neighbouring bars (the slot pitch is width + gap)
 _RAIN_TRACK, _RAIN_P90, _RAIN_MED = "#E6E9EE", "#D2E3FF", "#2F7BFF"
 
 
@@ -1000,7 +1002,7 @@ def render_rain_rows_html(pct_result: dict) -> str:
     # Day totals come from ALL the underlying 3-hourly bins of that day (summed
     # member by member, THEN percentiled), not from the slices drawn. That keeps
     # a day's total identical at every time step -- including the first and last
-    # (partial) days, where a 12h or 24h slice is incomplete and so isn't drawn.
+    # (partial) days, where a 6h slice can be incomplete and so isn't drawn.
     bins_per_day = 24 // pct_result.get("bin_hours", 3)
     day_members: dict = {}
     for b in pct_result.get("raw_bins") or []:
@@ -1692,7 +1694,7 @@ with footer_slot:
 
 with main:
     if view_mode == "Threshold Forecast":
-        lead_days = st.slider("Forecast range (days)", min_value=1, max_value=15, value=15)
+        lead_days = THRESHOLD_LEAD_DAYS  # fixed range -- no slider
 
         get_forecast_clicked = st.button("Get forecast", type="primary")
 
@@ -1780,9 +1782,7 @@ with main:
         )
 
         pct_location_name, pct_lat, pct_lon = location_name, lat, lon  # shared picker, see above
-        pct_lead_hours = st.slider(
-            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="pct_lead_hours"
-        )
+        pct_lead_hours = PERCENTILE_MAX_LEAD_HOURS  # fixed range -- no slider
 
         pct_clicked = st.button("Get percentile forecast", key="pct_button")
         pct_elapsed_placeholder = st.empty()
@@ -1834,8 +1834,8 @@ with main:
             # moving this control is instant even though the underlying fetch
             # above can take a while.
             period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
-            if "pct_period_hours" not in st.session_state:
-                st.session_state["pct_period_hours"] = 3
+            if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
+                st.session_state["pct_period_hours"] = 3  # first visit, or a step that no longer exists
             selected_period_label = st.segmented_control(
                 "Time step",
                 list(period_labels.values()),
@@ -1863,7 +1863,7 @@ with main:
             st.caption(
                 f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2 AM-based grid "
                 f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
-                f"partly covers is left empty. Limited to 120 hours ahead for now."
+                f"partly covers is left empty. Covers the next {PERCENTILE_MAX_LEAD_HOURS} hours."
             )
 
             st.subheader(f"Percentile rainfall for {pct_location_name}")
@@ -1903,9 +1903,7 @@ with main:
         )
 
         temp_location_name, temp_lat, temp_lon = location_name, lat, lon  # shared picker, see above
-        temp_lead_hours = st.slider(
-            "Forecast range (hours)", min_value=6, max_value=120, value=120, step=6, key="temp_lead_hours"
-        )
+        temp_lead_hours = PERCENTILE_MAX_LEAD_HOURS  # fixed range -- no slider
 
         temp_clicked = st.button("Get temperature forecast", key="temp_button")
         temp_elapsed_placeholder = st.empty()
