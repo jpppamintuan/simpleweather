@@ -696,8 +696,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     """Selectable six-day rainfall outlook with an accessible, detailed day panel.
 
     The overview bars retain the existing median/P90 colors and absolute scale.
-    Only the detailed bars expose percentile tooltips. Selection uses native
-    radio inputs inside their labels, without JavaScript or a Streamlit rerun.
+    Only the detailed bars expose percentile tooltips. The day selectors use
+    separate native radio controls and labels, without JavaScript or a rerun.
     """
     periods = pct_result["days"]
     step = pct_result["period_hours"]
@@ -732,6 +732,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     row_cls = "rr-row rr-c" if has_chance else "rr-row"
     slot_hours = [ROW_ANCHOR_PH_HOUR + i * step for i in range(n_slots)]
     grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:{_RAIN_BAR_GAP_PX}px;"
+    # Widen only the detailed bars. The overview bars and their spacing stay intact.
+    detail_grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:2px;"
+    detail_bar_max_px = 2 * _RAIN_BAR_MAX_PX[n_slots]
 
     def tip_side(slot: int) -> str:
         if n_slots == 1:
@@ -768,14 +771,21 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
         tip_cls = "rr-tip" + tip_side(slot) + (" rr-tip-b" if below else "")
         return (
-            "<div class='rr-slot'><div class='rr-bar' tabindex='0'>"
-            f"{bars}<div class='{tip_cls}'><b>{when}</b><br>"
-            + "<br>".join(values) + f"{over_note}</div></div></div>"
+            f"<div class='rr-slot'><button type='button' class='rr-bar' aria-label='Rainfall {when}; tap for percentiles'>"
+            f"{bars}<span class='{tip_cls}'><b>{when}</b><br>"
+            + "<br>".join(values) + f"{over_note}</span></button></div>"
         )
 
     empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
     slot_headers = "".join(
         f"<div class='rr-slot'><span>{_hour_label_html(h)}</span></div>"
+        for h in slot_hours
+    )
+    # Full ranges above the expanded bars, with a line break on narrow screens.
+    detail_slot_headers = "".join(
+        "<div class='rr-slot'><span class='rr-time-range'>"
+        f"<span>{_tip_hour_label(h)}–</span><span>{_tip_hour_label(h + step)}</span>"
+        "</span></div>"
         for h in slot_hours
     )
     chance_head = "<div class='rr-h rr-h-chance'>Chance of rain</div>" if has_chance else ""
@@ -787,6 +797,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
     body = ""
     details = ""
+    radio_controls = ""
     for index, day in enumerate(days):
         row = rows.get(day, {})
         if not day_members.get(day):
@@ -823,21 +834,28 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
                 cards.append(
                     f"<div class='rr-detail-chance' style='{bg}color:{text_color};' "
                     f"aria-label='Chance of at least {threshold} mm: {probability}, {descriptor}'>"
-                    f"<small>&ge;{threshold} mm</small><b>{probability}</b>"
-                    f"<small class='rr-detail-chance-desc'>{descriptor}</small></div>"
+                    f"<small class='rr-detail-chance-threshold'>&ge;{threshold} mm</small>"
+                    "<div class='rr-detail-chance-reading'>"
+                    f"<b>{probability}</b><small class='rr-detail-chance-desc'>{descriptor}</small>"
+                    "</div></div>"
                 )
             chance_detail = (
+                "<div class='rr-section-heading'>Chances of rain"
+                "<small>24-hour threshold probabilities</small></div>"
                 "<div class='rr-detail-chances'>" + "".join(cards) + "</div>"
             )
 
-        # Keep the radio *inside* the label: one click, even on a bar, selects
-        # the intended day. No JavaScript or Streamlit interaction is needed.
+        # Crucial: radio and label are siblings, not nested. The old nested
+        # control with a redundant `for` association could require two taps.
+        # A single native label activation now selects one and only one input.
         radio_id = f"rr-pick-{index}"
         checked = " checked" if index == 0 else ""
-        body += (
-            f"<label class='{row_cls} rr-data rr-selectable' for='{radio_id}'>"
+        radio_controls += (
             f"<input class='rr-radio' type='radio' name='rr-selected-day' id='{radio_id}'"
             f" aria-label='Show details for {day:%A %d %B}'{checked}>"
+        )
+        body += (
+            f"<label class='{row_cls} rr-data rr-selectable' for='{radio_id}'>"
             f"<div class='rr-day'><b>{day:%a}</b>"
             f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
@@ -871,11 +889,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<strong>{day:%A, %d %B}</strong>"
             f"<div class='rr-detail-main'><small>Day total:</small>"
             f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
+            "<div class='rr-section-heading'>Daily rainfall range"
+            "<small>ensemble percentiles</small></div>"
             f"<div class='rr-quantiles'>{quantiles}</div>"
             f"{chance_detail}"
             "<div class='rr-detail-bars'>"
-            f"<div class='rr-detail-bar-hours rr-slots' style='{grid}'>{slot_headers}</div>"
-            f"<div class='rr-detail-bar-values rr-slots' style='{grid}'>{detailed_bars}</div>"
+            f"<div class='rr-section-heading'>{step}-hourly forecast"
+            "<small>Tap a bar to see the percentile details</small></div>"
+            f"<div class='rr-detail-bar-hours rr-slots' style='{detail_grid}'>{detail_slot_headers}</div>"
+            f"<div class='rr-detail-bar-values rr-slots' style='{detail_grid}'>{detailed_bars}</div>"
             "</div>"
             f"<div class='rr-detail-note'>{period_note}</div></section>"
         )
@@ -937,37 +959,41 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
         ".rr-tip-l{left:0;transform:none;}.rr-tip-r{left:auto;right:0;transform:none;}"
         ".rr-tip-b{bottom:auto;top:calc(100% + 6px);}"
-        ".rr-detail .rr-bar{cursor:help;}"
-        ".rr-detail .rr-bar:hover .rr-tip,.rr-detail .rr-bar:focus-visible .rr-tip{display:block;}"
+        ".rr-detail .rr-bar{cursor:pointer;appearance:none;-webkit-appearance:none;border:0;padding:0;background:transparent;font:inherit;touch-action:manipulation;}"
+        ".rr-detail .rr-bar:focus-visible{outline:2px solid #159BD6;outline-offset:2px;border-radius:7px;}"
+        ".rr-detail .rr-bar:hover .rr-tip,.rr-detail .rr-bar:focus .rr-tip{display:block;}"
         ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
         ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
         ".rr-radio{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;}"
         ".rr-selectable{position:relative;cursor:pointer;border-radius:6px;transition:background-color .12s ease;}"
         ".rr-selectable:hover{background-color:#F8FAFC;}"
-        ".rr-selectable:has(.rr-radio:checked){background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
-        ".rr-selectable:has(.rr-radio:focus-visible){outline:2px solid #159BD6;outline-offset:1px;}"
+        ".rr-selectable:focus-within{outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
         ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
         ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
         ".rr-detail-main small{font-size:.62rem;color:#7D8995;letter-spacing:0;}"
-        ".rr-quantiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:12px;}"
+        ".rr-section-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:15px;margin-bottom:7px;font-size:.77rem;font-weight:700;color:#263746;}"
+        ".rr-section-heading small{font-size:.58rem;font-weight:400;color:#74828F;text-align:right;}"
+        ".rr-quantiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:0;}"
         ".rr-quantile{min-width:0;text-align:center;padding:7px 1px;border-radius:6px;background:#EFF3F6;}"
         ".rr-quantile small{display:block;font-size:.59rem;color:#788491;}"
         ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:#3F4C58;white-space:nowrap;}"
         ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:#81909A;}"
         ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
-        ".rr-detail-chances{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:12px;}"
-        ".rr-detail-chance{min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:center;border-radius:6px;"
-        "padding:8px 1px;text-align:center;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
-        ".rr-detail-chance small{font-size:.59rem;white-space:nowrap;opacity:.82;}"
-        ".rr-detail-chance b{font-size:.85rem;font-weight:750;font-variant-numeric:tabular-nums;margin:3px 0;}"
-        ".rr-detail-chance .rr-detail-chance-desc{font-size:.56rem;}"
-        ".rr-detail-bars{margin-top:13px;padding-top:10px;border-top:1px solid #E0E8EE;}"
-        ".rr-detail-bar-hours{margin-bottom:4px;}"
-        f".rr-detail-bar-values .rr-bar{{height:70px;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;}}"
+        ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
+        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:minmax(56px,1fr) minmax(0,2fr);align-items:center;border-radius:6px;"
+        "padding:7px 12px;text-align:left;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
+        ".rr-detail-chance small{font-size:.63rem;white-space:nowrap;opacity:.86;}"
+        ".rr-detail-chance-reading{display:flex;justify-content:flex-end;align-items:baseline;gap:12px;}"
+        ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;}"
+        ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;min-width:55px;text-align:right;}"
+        ".rr-detail-bars{margin-top:14px;padding-top:0;border-top:1px solid #E0E8EE;}"
+        ".rr-detail-bar-hours{margin-bottom:7px;}"
+        ".rr-time-range{display:flex;justify-content:center;white-space:nowrap;font-size:.55rem;letter-spacing:-.035em;color:#6b7280;}"
+        f".rr-detail-bar-values .rr-bar{{height:70px;max-width:{detail_bar_max_px}px;}}"
         ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:9px;line-height:1.35;}"
         "@container (min-width:430px){"
         ".rr-row.rr-c{grid-template-columns:2.8rem 5.25rem minmax(0,170px) 5.35rem;column-gap:8px;}"
@@ -982,27 +1008,42 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-legend,.rr-detail-note{font-size:.71rem;}"
         ".rr-detail-top strong{font-size:1rem;}.rr-detail-main b{font-size:1.4rem;}"
         ".rr-detail-main small{font-size:.75rem;}"
-        ".rr-quantile small,.rr-detail-chance small{font-size:.69rem;}"
+        ".rr-quantile small,.rr-detail-chance small{font-size:.73rem;}"
+        ".rr-section-heading{font-size:.94rem;}.rr-section-heading small{font-size:.73rem;}"
+        ".rr-time-range{font-size:.69rem;}"
         ".rr-quantile b{font-size:.95rem;}.rr-qmedian b{font-size:1.05rem;}"
         ".rr-quantile em{font-size:.7rem;}"
-        ".rr-quantile .rr-quantile-desc,.rr-detail-chance .rr-detail-chance-desc{font-size:.67rem;}"
+        ".rr-quantile .rr-quantile-desc,.rr-detail-chance .rr-detail-chance-desc{font-size:.71rem;}"
         ".rr-detail-chance b{font-size:1rem;}"
         "}"
         "@media(max-width:460px){"
         ".rr-h-chance{white-space:normal;}"
         ".rr-detail{padding:10px 7px;}"
-        ".rr-quantiles,.rr-detail-chances{gap:2px;}"
+        ".rr-quantiles{gap:2px;}"
+        ".rr-detail-chances{gap:4px;}"
+        ".rr-detail-chance{padding:7px 9px;}"
+        ".rr-time-range{display:flex;flex-direction:column;align-items:center;font-size:.57rem;line-height:1.05;}"
+        ".rr-section-heading{font-size:.78rem;}.rr-section-heading small{font-size:.59rem;}"
         ".rr-quantile b{font-size:.68rem;}.rr-qmedian b{font-size:.75rem;}"
-        ".rr-detail-chance{padding:7px 1px;}"
-        ".rr-detail-chance b{font-size:.75rem;}"
+        ".rr-detail-chance b{font-size:.86rem;}"
         "}"
         + "".join(
-            f".rr-card:has(#rr-pick-{i}:checked) .rr-detail-{i}{{display:block;}}"
+            (
+                f"#rr-pick-{i}:checked ~ .rr-overview label[for='rr-pick-{i}']"
+                "{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
+                f"#rr-pick-{i}:focus-visible ~ .rr-overview label[for='rr-pick-{i}']"
+                "{outline:2px solid #159BD6;outline-offset:1px;}"
+                f"#rr-pick-{i}:checked ~ .rr-details .rr-detail-{i}{{display:block;}}"
+            )
             for i in range(len(days))
         )
         + "</style>"
     )
-    return f"{css}<div class='rr-card'>{head}{body}{legend}{details}</div>"
+    # All controls are direct siblings of overview and detail panes, allowing
+    # ordinary CSS sibling selectors to update on the *first* native radio click.
+    return (f"{css}<div class='rr-card'>{radio_controls}"
+            f"<div class='rr-overview'>{head}{body}{legend}</div>"
+            f"<div class='rr-details'>{details}</div></div>")
 
 
 HEAT_INDEX_CATEGORIES = [
