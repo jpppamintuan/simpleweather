@@ -28,15 +28,15 @@ from ecmwf_client import (
     PH_BBOX,
 )
 import github_data_source
-st.set_page_config(page_title="Probabilistic Rainfall Forecast", page_icon="🌧️", layout="wide")
+st.set_page_config(page_title="Simpleweather", page_icon="🌧️", layout="wide")
 st.markdown(
     '<link href="https://fonts.googleapis.com/css2?'
     "family=Source+Sans+3:wght@400;600;700;800&display=swap\" "
     'rel="stylesheet">',
     unsafe_allow_html=True,
 )
-st.title("🌧️ Probabilistic Rainfall Forecast")
-st.caption("ECMWF ENS open data — rainfall amounts and chances of exceeding each threshold")
+st.title("Simpleweather")
+st.caption("Check upcoming rainfall and explore the chance of heavier rain.")
 LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
@@ -850,7 +850,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
                 )
             chance_detail = (
                 "<div class='rr-section-heading'>Chances of rain"
-                "<small>24-hour threshold probabilities</small></div>"
+                "<small>Chance of reaching each rainfall amount</small></div>"
                 "<div class='rr-detail-chances'>" + "".join(cards) + "</div>"
             )
 
@@ -883,13 +883,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<small class='rr-quantile-desc'>{_rain_amount_descriptor(amount)}</small></div>"
             for name, amount in quantile_values
         )
-        period_note = "Daily totals: 2am–2am (PHT)."
-        if has_chance:
-            period_note += " Threshold probabilities: 8am–8am (PHT), aligned by starting date."
-        period_note += " ‘High’ on the daily row is P90 (90th percentile), not a maximum."
-        if is_partial:
-            period_note += " Partial day: not all time bins are available."
-
         details += (
             f"<section id='rr-detail-{index}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
             f"aria-label='Details for {day:%A %d %B}'>"
@@ -898,29 +891,23 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<div class='rr-detail-main'><small>Day total:</small>"
             f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
-            "<small>ensemble percentiles</small></div>"
+            "<small>From lower to higher estimates</small></div>"
             f"<div class='rr-quantiles'>{quantiles}</div>"
             f"{chance_detail}"
             "<div class='rr-detail-bars'>"
             f"<div class='rr-section-heading'>{step}-hourly forecast"
-            "<small>Tap a bar to see the percentile details</small></div>"
+            "<small>Tap a bar to see more details</small></div>"
             f"<div class='rr-detail-bar-hours rr-slots' style='{detail_grid}'>{detail_slot_headers}</div>"
             f"<div class='rr-detail-bar-values rr-slots' style='{detail_grid}'>{detailed_bars}</div>"
-            "</div>"
-            f"<div class='rr-detail-note'>{period_note}</div></section>"
+            "</div></section>"
         )
 
-    legend_chance = (
-        "<span>Chance of rain: ≥1 mm; higher thresholds shown when probability is ≥65%. "
-        "Thresholds cover 8am–8am.</span>" if has_chance else ""
-    )
     legend = (
         "<div class='rr-legend'>"
-        f"<span><i style='background:{_RAIN_MED}'></i>Median</span>"
-        f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
-        "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
-        f"<span>Full bar = {cap} mm per {step}h</span>"
-        f"{legend_chance}</div>"
+        f"<span><i style='background:{_RAIN_MED}'></i>Typical amount</span>"
+        f"<span><i style='background:{_RAIN_P90}'></i>Higher estimate</span>"
+        "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>Above chart scale</span>"
+        "</div>"
     )
 
     # Compact baseline sizes match the previous phone view. Enlarged desktop
@@ -928,7 +915,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     # the desktop browser window is wide).
     css = (
         "<style>"
+        f"html,body{{font-family:{FONT_STACK};font-size:16px;}}"
         f".rr-card{{container-type:inline-size;background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        f".rr-card button,.rr-card .rr-tip{{font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
         f".rr-row.rr-c{{grid-template-columns:2.3rem 4.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.6rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
@@ -1057,11 +1046,10 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
       function updateFrameHeight() {
         window.requestAnimationFrame(() => {
-          const height = Math.ceil(Math.max(
-            document.documentElement.scrollHeight,
-            document.body.scrollHeight,
-            card.getBoundingClientRect().bottom + 2
-          ));
+          // scrollHeight can be at least the OLD iframe viewport height.
+          // Measure visible card content directly, so collapsing details shrinks the frame.
+          const bounds = card.getBoundingClientRect();
+          const height = Math.max(1, Math.ceil(bounds.top + bounds.height + 2));
           window.parent.postMessage({
             isStreamlitMessage: true,
             type: 'streamlit:setFrameHeight',
@@ -1091,13 +1079,18 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(updateFrameHeight).observe(card);
       }
+      // Fonts can change text wrapping and the card's natural height.
+      if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(updateFrameHeight);
+      }
       window.addEventListener('load', updateFrameHeight);
       updateFrameHeight();
     })();
     </script>"""
     viewport = (
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<style>html,body{margin:0;padding:0;overflow-x:hidden;}"
+        "<link href='https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap' rel='stylesheet'>"
+        "<style>html,body{margin:0;padding:0;min-height:0;height:auto;overflow-x:hidden;}"
         "body{min-width:0;}*{box-sizing:border-box;}</style>"
     )
     return (viewport + css + f"<div class='rr-card'>"
@@ -1324,7 +1317,7 @@ def render_table_html(result: dict) -> str:
         f"<table style=\"border-collapse:collapse;width:100%;min-width:{min_width_px}px;"
         f"table-layout:fixed;font-family:{FONT_STACK};font-size:13px;\">"
         f"<thead><tr>"
-        f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Threshold</th>"
+        f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Rainfall amount</th>"
         f"{header_cells}"
         f"</tr></thead>"
         f"<tbody>{rows_html}</tbody>"
@@ -1447,17 +1440,9 @@ if _selected_mode is not None:
     st.session_state["view_mode"] = _selected_mode
 view_mode = st.session_state["view_mode"]
 main = st.container()
-footer_slot = st.container()
-with footer_slot:
-    render_status_footer()
 with main:
     if view_mode == "Rainfall Forecast":
-        st.caption(
-            "Rainfall amounts from all 50 ECMWF ensemble members (median and P10–P90 range), "
-            "alongside ECMWF's precomputed chances of exceeding fixed rainfall thresholds. "
-            "Reads pre-computed data from the scheduled ingestion job; only the threshold "
-            "probabilities fall back to a live 0.25° fetch if the store isn't fresh."
-        )
+        st.caption("See how much rain to expect over the next six days, and your chances of rain over the next two weeks.")
         st.markdown(
             "<style>"
             "@media (orientation: portrait){"
@@ -1524,11 +1509,11 @@ with main:
                         "right now (store unreachable or not yet published) -- please try again shortly."
                     )
                 else:
-                    period_labels = {h: f"{h}h" for h in AVAILABLE_PERIOD_HOURS}
+                    period_labels = {h: f"{h}-hourly" for h in AVAILABLE_PERIOD_HOURS}
                     if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
                         st.session_state["pct_period_hours"] = 3
                     selected_period_label = st.segmented_control(
-                        "Time step",
+                        "Rainfall timing",
                         list(period_labels.values()),
                         default=period_labels[st.session_state["pct_period_hours"]],
                         key="pct_period_control",
@@ -1542,18 +1527,12 @@ with main:
                     pct_days = pct_result["days"]
                     if not pct_days:
                         st.warning(
-                            f"Not enough data for a complete {pct_period_hours}-hour period at this forecast "
-                            f"range -- try a shorter time step."
+                            f"Not enough rainfall data for the {pct_period_hours}-hourly view. "
+                            "Try the shorter interval."
                         )
                     else:
                         pct_percentiles = pct_result["percentiles"]
-                        st.caption(
-                            f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2am-based grid "
-                            f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
-                            f"partly covers is left empty."
-                            + (" The chance of rain column uses ECMWF's 24h threshold probabilities, which run 8am–8am, "
-                               "so each is matched to the day it starts on." if card_thr else "")
-                        )
+                        st.caption("Tap a day to explore the forecast. Tap it again to close the details.")
                         show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
                         if show_pct_graph:
                             rain_card_html = render_rain_rows_html(pct_result, card_thr, max_days=6)
@@ -1580,27 +1559,16 @@ with main:
                     with st.container(key="thr_divider"):
                         st.divider()
                     if not thr_result["windows"]:
-                        st.warning("No aligned 00 UTC windows available for this range.")
+                        st.warning("The extended rain chances are temporarily unavailable.")
                     else:
-                        if thr_result.get("fetch_mode") == "separate" and not rain["thr_cached"]:
-                            st.caption(f"⚠️ Combined request wasn't available for {model_label}; fetched thresholds individually (slower).")
-                        st.caption(
-                            "ℹ️ ECMWF publishes these threshold probabilities for the 00Z and 12Z ensemble runs only "
-                            "(there is no 06Z or 18Z probability product), so they update twice a day -- first at 0.25°, "
-                            "then at 0.1° about two hours later. The rainfall amounts use all four daily runs."
-                        )
                         num_days_shown = len(thr_result["windows"])
-                        st.subheader(f"Full {num_days_shown}-day threshold forecast for {rain_name}")
+                        st.subheader(f"{num_days_shown}-day rain chances for {rain_name}")
+                        st.caption("Chance of getting at least each rainfall amount during a day.")
                         show_graph = st.toggle("Show as graph", key="thr_show_graph")
                         if show_graph:
                             components.html(render_ribbon_chart_html(thr_result), height=650)
                         else:
                             st.markdown(render_table_html(thr_result), unsafe_allow_html=True)
-                        st.caption(f"All forecast windows shown in UTC+8 (Philippine Time). Source: ECMWF {model_label} Open Data (CC BY 4.0).")
-            if pct_result is not None:
-                st.caption(_coords_caption(rain_name, *rain_true, pct_result))
-            if thr_result is not None:
-                st.caption(_coords_caption(rain_name, *rain_true, thr_result))
         else:
             st.info("Choose a location and click **Get rainfall forecast**.")
 
@@ -1703,3 +1671,51 @@ with main:
                 "Choose a location and click **Get temperature forecast** to see temperature "
                 "and heat index percentiles."
             )
+
+# Keep technical methodology and exact locations in the rainfall page footnote.
+if view_mode == "Rainfall Forecast":
+    with st.expander("Forecast details & sources", expanded=False):
+        st.markdown(
+            "**Rainfall amounts.** The six-day card uses ECMWF Ensemble Prediction System "
+            "(ENS) forecasts from 50 members. The bold daily amount is the ensemble median "
+            "(50th percentile). The pale part of each bar extends to P90 (90th percentile). "
+            "‘High’ means P90, an upper-end estimate—not a true maximum. "
+            "The expanded panel also shows P10, P25 and P75."
+        )
+        st.markdown(
+            "**Timing.** The daily rainfall totals run from 2:00 AM to 2:00 AM "
+            "Philippine Time (UTC+8). The 3-hourly and 6-hourly views group the same "
+            "underlying forecast bins; totals don't change when switching views. "
+            "Incomplete time periods are left blank. The 24-hour threshold chances "
+            "run from 8:00 AM to 8:00 AM and are aligned to the date they begin."
+        )
+        st.markdown(
+            "**Reading the chart.** Bright blue shows the median rainfall, pale blue-gray "
+            "shows the range up to P90, and a dark cap means the higher estimate "
+            "exceeds the chart's vertical scale (10 mm per 3-hour period or 20 mm "
+            "per 6-hour period). Each threshold chance is the probability that "
+            "rainfall reaches or exceeds that amount during its 24-hour period. "
+            "The main six-day card always shows the chance of at least 1 mm, "
+            "plus the highest additional threshold with at least a 65% chance."
+        )
+        st.markdown(
+            "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
+            "cycles; threshold probability products are issued for 00Z and 12Z only. "
+            "Published products are first available at 0.25° and typically update "
+            "to 0.1° later. Data is normally read from scheduled ingestion; "
+            "if stored threshold data is stale, the app may retrieve 0.25° chances live. "
+            "Source: ECMWF Open Data (CC BY 4.0)."
+        )
+        if "last_rain" in st.session_state:
+            _forecast = st.session_state["last_rain"]
+            _site = _forecast["location_name"]
+            _lat, _lon = _forecast["true"]
+            if _forecast.get("pct_raw") is not None:
+                st.caption("Rainfall amounts: " + _coords_caption(_site, _lat, _lon, _forecast["pct_raw"]))
+            if _forecast.get("thr") is not None:
+                st.caption("Rainfall chances: " + _coords_caption(_site, _lat, _lon, _forecast["thr"]))
+                if _forecast["thr"].get("fetch_mode") == "separate" and not _forecast["thr_cached"]:
+                    st.caption("The threshold products were retrieved individually because the combined request wasn't available.")
+        render_status_footer()
+else:
+    render_status_footer()
