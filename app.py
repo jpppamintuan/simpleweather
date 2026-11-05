@@ -630,36 +630,39 @@ def _hour_label_html(hour: int) -> str:
     return f"{hour % 12 or 12}<small class='rr-ap'>{'am' if hour % 24 < 12 else 'pm'}</small>"
 
 def _chance_descriptor(probability: float) -> str:
-    """Human-readable chance bands for the >=1 mm forecast probability."""
+    """Simple lowercase categories for the chance of exceeding a threshold."""
     if probability < 5:
-        return "Very low"
+        return "very low"
     if probability < 35:
-        return "Low"
+        return "low"
     if probability < 65:
-        return "Medium"
+        return "medium"
     if probability < 95:
-        return "High"
-    return "Very high"
+        return "high"
+    return "very high"
 
 
 def _rain_amount_descriptor(rain_mm: float) -> str:
-    """Daily rainfall descriptors using the requested total-amount cutoffs."""
+    """Unabbreviated description for one total rainfall amount."""
     if rain_mm < 5:
-        return "v. light"
+        return "very light"
     if rain_mm < 20:
         return "light"
     if rain_mm < 50:
-        return "mod."
+        return "moderate"
     if rain_mm < 100:
         return "heavy"
     return "intense"
 
 
 def _rain_range_descriptor(median_mm: float, p90_mm: float) -> str:
-    """Describe the median and P90 rainfall bands without calling P90 a maximum."""
-    median_label = _rain_amount_descriptor(median_mm)
-    p90_label = _rain_amount_descriptor(p90_mm)
-    return median_label if median_label == p90_label else f"{median_label} to {p90_label}"
+    """Use full words for single categories, short words only in a range."""
+    low = _rain_amount_descriptor(median_mm)
+    high = _rain_amount_descriptor(p90_mm)
+    if low == high:
+        return low
+    abbreviations = {"very light": "v. light", "moderate": "mod."}
+    return f"{abbreviations.get(low, low)} to {abbreviations.get(high, high)}"
 
 
 def _chance_chip(val_1mm, secondary: tuple[int, float] | None = None) -> str:
@@ -690,14 +693,12 @@ def _chance_chip(val_1mm, secondary: tuple[int, float] | None = None) -> str:
 
 
 def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6) -> str:
-    """A compact selectable six-day rain forecast card.
+    """Selectable six-day rainfall outlook with an accessible, detailed day panel.
 
-    The intraday bar heights, scale, median/P90 colors, and individual bar
-    tooltips are unchanged. Native CSS radio controls select one daily row
-    and reveal its detail panel without a Streamlit rerun or a JS iframe.
+    The overview bars retain the existing median/P90 colors and absolute scale.
+    Only the detailed bars expose percentile tooltips. Selection uses native
+    radio inputs inside their labels, without JavaScript or a Streamlit rerun.
     """
-    from html import escape
-
     periods = pct_result["days"]
     step = pct_result["period_hours"]
     cap = RAIN_BAR_CAP_MM[step]
@@ -706,20 +707,20 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         return ""
 
     rows: dict = {}
-    for p in periods:
-        start = p["start_utc"].astimezone(PH_TZ)
-        rows.setdefault(start.date(), {})[(start.hour - ROW_ANCHOR_PH_HOUR) // step] = p
+    for period in periods:
+        start = period["start_utc"].astimezone(PH_TZ)
+        rows.setdefault(start.date(), {})[(start.hour - ROW_ANCHOR_PH_HOUR) // step] = period
 
     bins_per_day = 24 // pct_result.get("bin_hours", 3)
     day_members: dict = {}
-    for b in pct_result.get("raw_bins") or []:
-        day_members.setdefault(b["start_utc"].astimezone(PH_TZ).date(), []).append(b["member_values_mm"])
+    for raw_bin in pct_result.get("raw_bins") or []:
+        key = raw_bin["start_utc"].astimezone(PH_TZ).date()
+        day_members.setdefault(key, []).append(raw_bin["member_values_mm"])
     for day, row in rows.items():
         day_members.setdefault(day, [p["member_values_mm"] for p in row.values()])
     days = sorted(set(rows) | set(day_members))[:max_days]
 
-    # 8am-8am threshold probabilities are intentionally distinct from the
-    # 2am-2am day totals; preserve both labels in the expanded details.
+    # Threshold forecasts cover 8am–8am; rainfall totals cover 2am–2am.
     chance_data, chance_label = None, {}
     if threshold_result and threshold_result.get("windows"):
         chance_data = threshold_result["data"]
@@ -729,7 +730,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         }
     has_chance = chance_data is not None
     row_cls = "rr-row rr-c" if has_chance else "rr-row"
-    slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
+    slot_hours = [ROW_ANCHOR_PH_HOUR + i * step for i in range(n_slots)]
     grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:{_RAIN_BAR_GAP_PX}px;"
 
     def tip_side(slot: int) -> str:
@@ -738,120 +739,150 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         pos = slot / (n_slots - 1)
         return " rr-tip-l" if pos < 0.25 else (" rr-tip-r" if pos > 0.75 else "")
 
-    def bar(p: dict, slot: int, below: bool) -> str:
-        st_ = p["stats"]
+    def bar(period: dict, slot: int, *, tooltip: bool = False, below: bool = False) -> str:
+        stats = period["stats"]
         med, p75, p90, p25, p10 = (
-            st_["median"], st_["p75"], st_["p90"], st_["p25"], st_["p10"]
+            stats["median"], stats["p75"], stats["p90"], stats["p25"], stats["p10"]
         )
         pct_of_cap = lambda v: min(max(v / cap, 0.0), 1.0) * 100
-        start, end = p["start_utc"].astimezone(PH_TZ), p["end_utc"].astimezone(PH_TZ)
+        cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
+        # Intentionally identical bar colors, heights, and scale to the previous card.
+        bars = (
+            "<div class='rr-fill'>"
+            f"<span style='height:{pct_of_cap(p90):.1f}%;background:{_RAIN_P90}'></span>"
+            f"<span style='height:{pct_of_cap(med):.1f}%;background:{_RAIN_MED}'></span>"
+            f"{cap_mark}</div>"
+        )
+        if not tooltip:
+            # No tooltip markup and no tabindex: the entire overview row receives
+            # the click instead of a nested focusable bar intercepting it.
+            return f"<div class='rr-slot'><div class='rr-bar'>{bars}</div></div>"
+        start = period["start_utc"].astimezone(PH_TZ)
+        end = period["end_utc"].astimezone(PH_TZ)
         when = f"{start:%a %d %b} · {_tip_hour_label(start.hour)}–{_tip_hour_label(end.hour)}"
-        over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
-        lines = [
+        values = [
             f"P90 {_fmt_mm(p90)} mm", f"P75 {_fmt_mm(p75)} mm",
             f"Median {_fmt_mm(med)} mm", f"P25 {_fmt_mm(p25)} mm",
             f"P10 {_fmt_mm(p10)} mm",
         ]
-        cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
+        over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
         tip_cls = "rr-tip" + tip_side(slot) + (" rr-tip-b" if below else "")
         return (
-            f"<div class='rr-slot'><div class='rr-bar' tabindex='0'>"
-            f"<div class='rr-fill'>"
-            f"<span style='height:{pct_of_cap(p90):.1f}%;background:{_RAIN_P90}'></span>"
-            f"<span style='height:{pct_of_cap(med):.1f}%;background:{_RAIN_MED}'></span>{cap_mark}</div>"
-            f"<div class='{tip_cls}'><b>{when}</b><br>" + "<br>".join(lines) + f"{over_note}</div>"
-            f"</div></div>"
+            "<div class='rr-slot'><div class='rr-bar' tabindex='0'>"
+            f"{bars}<div class='{tip_cls}'><b>{when}</b><br>"
+            + "<br>".join(values) + f"{over_note}</div></div></div>"
         )
 
     empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
+    slot_headers = "".join(
+        f"<div class='rr-slot'><span>{_hour_label_html(h)}</span></div>"
+        for h in slot_hours
+    )
     chance_head = "<div class='rr-h rr-h-chance'>Chance of rain</div>" if has_chance else ""
     head = (
         f"<div class='{row_cls} rr-head'><div></div>{chance_head}"
-        f"<div class='rr-slots' style='{grid}'>"
-        + "".join(f"<div class='rr-slot'><span>{_hour_label_html(h)}</span></div>" for h in slot_hours)
-        + "</div><div class='rr-h rr-h-r'>Day total</div></div>"
+        f"<div class='rr-slots' style='{grid}'>{slot_headers}</div>"
+        "<div class='rr-h rr-h-r'>Day total</div></div>"
     )
 
     body = ""
     details = ""
-    for row_index, day in enumerate(days):
+    for index, day in enumerate(days):
         row = rows.get(day, {})
+        if not day_members.get(day):
+            continue
+        # Compute total percentiles after summing each member across the day.
         members = np.sum(day_members[day], axis=0)
-        # Keep the original aggregation: sum each ensemble member first,
-        # then compute percentiles across members.
         total_p10, total_p25, total_med, total_p75, total_p90 = [
             float(v) for v in np.percentile(members, [10, 25, 50, 75, 90])
         ]
-        p90_txt = _fmt_mm(total_p90)
-        intensity_label = _rain_range_descriptor(total_med, total_p90)
+        intensity = _rain_range_descriptor(total_med, total_p90)
         is_partial = len(day_members[day]) < bins_per_day
         partial = "<span class='rr-part'>partial</span>" if is_partial else ""
-        slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
+        overview_bars = "".join(
+            bar(row[i], i) if i in row else empty_bar for i in range(n_slots)
+        )
+        detailed_bars = "".join(
+            bar(row[i], i, tooltip=True, below=False) if i in row else empty_bar
+            for i in range(n_slots)
+        )
 
-        chips = ""
+        chance_chip = ""
         chance_detail = ""
         if has_chance:
             label = chance_label.get(day)
             v1 = chance_data.get(1, {}).get(label) if label else None
-            dyn = _pick_dynamic_threshold(chance_data, label) if label else None
-            chips = _chance_chip(v1, dyn)
-            fmt_prob = lambda v: '—' if v is None else f'{v:.0f}%'
-            detail_probs = (
-                "<div><small>Chance of ≥1 mm</small><b>" + fmt_prob(v1) + "</b></div>"
-            )
-            if dyn is not None:
-                detail_probs += (
-                    f"<div><small>Chance of ≥{dyn[0]} mm</small>"
-                    f"<b>{fmt_prob(dyn[1])}</b></div>"
+            secondary = _pick_dynamic_threshold(chance_data, label) if label else None
+            chance_chip = _chance_chip(v1, secondary)
+            cards = []
+            for threshold in AVAILABLE_THRESHOLDS_MM:
+                val = chance_data.get(threshold, {}).get(label) if label else None
+                bg, text_color = _cell_style(threshold, val)
+                probability = "—" if val is None else f"{val:.0f}%"
+                descriptor = "unavailable" if val is None else _chance_descriptor(float(val))
+                cards.append(
+                    f"<div class='rr-detail-chance' style='{bg}color:{text_color};' "
+                    f"aria-label='Chance of at least {threshold} mm: {probability}, {descriptor}'>"
+                    f"<small>&ge;{threshold} mm</small><b>{probability}</b>"
+                    f"<small class='rr-detail-chance-desc'>{descriptor}</small></div>"
                 )
             chance_detail = (
-                "<div class='rr-detail-prob'>" + detail_probs + "</div>"
-                "<div class='rr-detail-note'>Chance probabilities: 8am–8am (PHT), a different period from the day total.</div>"
+                "<div class='rr-detail-chances'>" + "".join(cards) + "</div>"
             )
 
-        # Hidden but keyboard-accessible native radio + whole-row label.
-        # :has() switches the detail section locally, preserving bar tooltips.
-        radio_id = f"rr-pick-{row_index}"
-        checked = " checked" if row_index == 0 else ""
+        # Keep the radio *inside* the label: one click, even on a bar, selects
+        # the intended day. No JavaScript or Streamlit interaction is needed.
+        radio_id = f"rr-pick-{index}"
+        checked = " checked" if index == 0 else ""
         body += (
-            f"<input type='radio' class='rr-radio' name='rr-selected-day' id='{radio_id}'{checked}>"
-            f"<label for='{radio_id}' class='{row_cls} rr-data rr-selectable' "
-            f"aria-label='Show details for {day:%A %d %B}'>"
-            f"<div class='rr-day'><b>{day:%a}</b><span class='rr-secondary'>{day.day} {day:%b}</span></div>"
-            f"{chips}<div class='rr-slots' style='{grid}'>{slots}</div>"
+            f"<label class='{row_cls} rr-data rr-selectable' for='{radio_id}'>"
+            f"<input class='rr-radio' type='radio' name='rr-selected-day' id='{radio_id}'"
+            f" aria-label='Show details for {day:%A %d %B}'{checked}>"
+            f"<div class='rr-day'><b>{day:%a}</b>"
+            f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
+            f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
             f"<div class='rr-tot'><div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
-            f"<small class='rr-secondary'>mm</small></div>"
-            f"<small class='rr-secondary rr-range' title='90th percentile of ensemble rainfall, not the actual maximum'>"
-            f"{p90_txt} mm max</small>"
-            f"<small class='rr-secondary rr-rain-desc' title='Rainfall amount categories for the median to the 90th percentile'>"
-            f"{intensity_label}</small>{partial}</div></label>"
+            "<small class='rr-secondary'>mm</small></div>"
+            f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
+            f"High: {_fmt_mm(total_p90)} mm</small>"
+            "<small class='rr-secondary rr-rain-desc' title='Rainfall amount categories for the median to the 90th percentile'>"
+            f"{intensity}</small>{partial}</div></label>"
         )
-        items = [
+        quantile_values = [
             ("P10", total_p10), ("P25", total_p25),
             ("Median", total_med), ("P75", total_p75), ("P90", total_p90),
         ]
-        quantiles_html = "".join(
+        quantiles = "".join(
             f"<div class='rr-quantile{' rr-qmedian' if name == 'Median' else ''}'>"
-            f"<small>{name}</small><b>{_fmt_mm(amount)} <em>mm</em></b></div>"
-            for name, amount in items
+            f"<small>{name}</small><b>{_fmt_mm(amount)} <em>mm</em></b>"
+            f"<small class='rr-quantile-desc'>{_rain_amount_descriptor(amount)}</small></div>"
+            for name, amount in quantile_values
         )
-        partial_note = " · Partial coverage" if is_partial else ""
+        period_note = "Daily totals: 2am–2am (PHT)."
+        if has_chance:
+            period_note += " Threshold probabilities: 8am–8am (PHT), aligned by starting date."
+        period_note += " ‘High’ on the daily row is P90 (90th percentile), not a maximum."
+        if is_partial:
+            period_note += " Partial day: not all time bins are available."
+
         details += (
-            f"<section class='rr-detail rr-detail-{row_index}' aria-label='Details for {day:%A %d %B}'>"
-            f"<div class='rr-detail-top'><div><small>SELECTED DAY</small>"
+            f"<section class='rr-detail rr-detail-{index}' aria-label='Details for {day:%A %d %B}'>"
+            "<div class='rr-detail-top'>"
             f"<strong>{day:%A, %d %B}</strong>"
-            f"<span>Day total: 2am–2am (PHT){partial_note}</span></div>"
-            f"<div class='rr-detail-main'><b>{_fmt_mm(total_med)}</b><small>mm median</small></div></div>"
-            f"<div class='rr-quantiles'>{quantiles_html}</div>"
+            f"<div class='rr-detail-main'><small>Day total:</small>"
+            f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
+            f"<div class='rr-quantiles'>{quantiles}</div>"
             f"{chance_detail}"
-            "<div class='rr-detail-note'>Daily-row 'max' is the 90th percentile, "
-            "not the highest possible rainfall amount.</div></section>"
+            "<div class='rr-detail-bars'>"
+            f"<div class='rr-detail-bar-hours rr-slots' style='{grid}'>{slot_headers}</div>"
+            f"<div class='rr-detail-bar-values rr-slots' style='{grid}'>{detailed_bars}</div>"
+            "</div>"
+            f"<div class='rr-detail-note'>{period_note}</div></section>"
         )
 
     legend_chance = (
-        "<span>Chance of rain: ≥1 mm; higher threshold shown only when its probability is ≥65%. "
-        "Threshold period: 8am–8am.</span>"
-        if has_chance else ""
+        "<span>Chance of rain: ≥1 mm; higher thresholds shown when probability is ≥65%. "
+        "Thresholds cover 8am–8am.</span>" if has_chance else ""
     )
     legend = (
         "<div class='rr-legend'>"
@@ -862,28 +893,30 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f"{legend_chance}</div>"
     )
 
-    # Keep the original bar-specific styling and colors intact; only the
-    # total/chance typography, row selection and detail panel are new.
+    # Compact baseline sizes match the previous phone view. Enlarged desktop
+    # sizing applies only when the card itself is wide enough (not merely when
+    # the desktop browser window is wide).
     css = (
         "<style>"
-        f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        f".rr-card{{container-type:inline-size;background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
         f".rr-row.rr-c{{grid-template-columns:2.3rem 4.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.6rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
-        ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}.rr-ap{font-size:.46rem;}"
+        ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
+        ".rr-ap{font-size:.46rem;}"
         ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
-        ".rr-h-r{text-align:center;}.rr-h-span{grid-column:span 2;}"
+        ".rr-h-r{text-align:center;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}"
         ".rr-secondary{font-size:.56rem;font-weight:400;line-height:1.2;letter-spacing:-.01em;color:#737D88;white-space:nowrap;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;cursor:pointer;}}"
+        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;}}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
-        ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.25;}"
+        ".rr-empty .rr-fill{opacity:.25;}"
         ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;}"
         ".rr-total-main{display:flex;align-items:baseline;justify-content:center;gap:2px;}"
         ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
@@ -904,20 +937,18 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
         ".rr-tip-l{left:0;transform:none;}.rr-tip-r{left:auto;right:0;transform:none;}"
         ".rr-tip-b{bottom:auto;top:calc(100% + 6px);}"
-        ".rr-bar:hover .rr-tip,.rr-bar:focus .rr-tip{display:block;}"
+        ".rr-detail .rr-bar{cursor:help;}"
+        ".rr-detail .rr-bar:hover .rr-tip,.rr-detail .rr-bar:focus-visible .rr-tip{display:block;}"
         ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
         ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
-        ".rr-radio{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;}"
-        ".rr-selectable{cursor:pointer;border-radius:6px;transition:background-color .12s ease;}"
+        ".rr-radio{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;}"
+        ".rr-selectable{position:relative;cursor:pointer;border-radius:6px;transition:background-color .12s ease;}"
         ".rr-selectable:hover{background-color:#F8FAFC;}"
-        ".rr-radio:checked+.rr-selectable{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
-        ".rr-radio:focus-visible+.rr-selectable{outline:2px solid #159BD6;outline-offset:1px;}"
+        ".rr-selectable:has(.rr-radio:checked){background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
+        ".rr-selectable:has(.rr-radio:focus-visible){outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
-        ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
-        ".rr-detail-top>div:first-child{display:flex;flex-direction:column;gap:2px;}"
-        ".rr-detail-top small{font-size:.55rem;font-weight:700;color:#82909E;letter-spacing:.08em;}"
+        ".rr-detail-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
-        ".rr-detail-top span{font-size:.62rem;color:#798694;}"
         ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
         ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
         ".rr-detail-main small{font-size:.62rem;color:#7D8995;letter-spacing:0;}"
@@ -926,16 +957,45 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile small{display:block;font-size:.59rem;color:#788491;}"
         ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:#3F4C58;white-space:nowrap;}"
         ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:#81909A;}"
-        ".rr-qmedian{background:#E2F5FD;}"
-        ".rr-qmedian b{color:#126F96;font-size:.85rem;}"
-        ".rr-detail-prob{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:11px;}"
-        ".rr-detail-prob>div{display:flex;align-items:baseline;justify-content:space-between;gap:5px;padding:6px 9px;border-radius:6px;background:#EDF3F8;}"
-        ".rr-detail-prob small{font-size:.62rem;color:#657484;}"
-        ".rr-detail-prob b{font-size:.83rem;color:#1E394D;white-space:nowrap;}"
-        ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:5px;}"
-        "@media(max-width:460px){.rr-h-chance{white-space:normal;}.rr-detail{padding:10px 7px;}.rr-quantiles{gap:2px;}"
+        ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
+        ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
+        ".rr-detail-chances{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:12px;}"
+        ".rr-detail-chance{min-width:0;display:flex;flex-direction:column;justify-content:center;align-items:center;border-radius:6px;"
+        "padding:8px 1px;text-align:center;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
+        ".rr-detail-chance small{font-size:.59rem;white-space:nowrap;opacity:.82;}"
+        ".rr-detail-chance b{font-size:.85rem;font-weight:750;font-variant-numeric:tabular-nums;margin:3px 0;}"
+        ".rr-detail-chance .rr-detail-chance-desc{font-size:.56rem;}"
+        ".rr-detail-bars{margin-top:13px;padding-top:10px;border-top:1px solid #E0E8EE;}"
+        ".rr-detail-bar-hours{margin-bottom:4px;}"
+        f".rr-detail-bar-values .rr-bar{{height:70px;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;}}"
+        ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:9px;line-height:1.35;}"
+        "@container (min-width:430px){"
+        ".rr-row.rr-c{grid-template-columns:2.8rem 5.25rem minmax(0,170px) 5.35rem;column-gap:8px;}"
+        ".rr-row:not(.rr-c){grid-template-columns:3.1rem minmax(0,170px) 4.4rem;}"
+        ".rr-day b{font-size:.98rem;}"
+        ".rr-secondary,.rr-tot .rr-total-main small,.rr-chip .rr-secondary{font-size:.68rem;}"
+        ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.69rem;}"
+        ".rr-ap{font-size:.53rem;}.rr-h{font-size:.69rem;}"
+        ".rr-tot .rr-total-main b{font-size:1.12rem;}"
+        ".rr-chip{height:3.2rem;}.rr-chip b{font-size:1.09rem;}"
+        ".rr-chip .rr-prob-head b{font-size:.85rem;}"
+        ".rr-legend,.rr-detail-note{font-size:.71rem;}"
+        ".rr-detail-top strong{font-size:1rem;}.rr-detail-main b{font-size:1.4rem;}"
+        ".rr-detail-main small{font-size:.75rem;}"
+        ".rr-quantile small,.rr-detail-chance small{font-size:.69rem;}"
+        ".rr-quantile b{font-size:.95rem;}.rr-qmedian b{font-size:1.05rem;}"
+        ".rr-quantile em{font-size:.7rem;}"
+        ".rr-quantile .rr-quantile-desc,.rr-detail-chance .rr-detail-chance-desc{font-size:.67rem;}"
+        ".rr-detail-chance b{font-size:1rem;}"
+        "}"
+        "@media(max-width:460px){"
+        ".rr-h-chance{white-space:normal;}"
+        ".rr-detail{padding:10px 7px;}"
+        ".rr-quantiles,.rr-detail-chances{gap:2px;}"
         ".rr-quantile b{font-size:.68rem;}.rr-qmedian b{font-size:.75rem;}"
-        ".rr-detail-prob{grid-template-columns:1fr;gap:4px;}}"
+        ".rr-detail-chance{padding:7px 1px;}"
+        ".rr-detail-chance b{font-size:.75rem;}"
+        "}"
         + "".join(
             f".rr-card:has(#rr-pick-{i}:checked) .rr-detail-{i}{{display:block;}}"
             for i in range(len(days))
