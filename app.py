@@ -665,30 +665,61 @@ def _rain_range_descriptor(median_mm: float, p90_mm: float) -> str:
     return f"{abbreviations.get(low, low)} to {abbreviations.get(high, high)}"
 
 
-def _chance_chip(val_1mm, secondary: tuple[int, float] | None = None) -> str:
-    """Color-coded >=1 mm chance, optional >=65% higher threshold, and chance label."""
+def _rain_total_text_color(rain_mm: float) -> str:
+    """Rainfall-intensity text tones, matched to the 100% threshold palette.
+
+    White cards need darker text than the pure threshold swatches, especially
+    for yellow (5 mm) and cyan (1 mm). The underlying chart colors are unchanged.
+    """
+    if rain_mm < 1:
+        return "#111111"  # no appreciable rainfall: neutral black
+    if rain_mm < 5:
+        return "#007FA8"  # blue, readable on white
+    if rain_mm < 20:
+        return "#947000"  # readable mustard-yellow, not pure #FFFF00
+    if rain_mm < 50:
+        return "#A65A00"  # orange
+    if rain_mm < 100:
+        return "#C21C21"  # red
+    return "#800080"  # purple
+
+
+def _chance_chip(
+    val_1mm, secondary: tuple[int, float] | None = None, *, partial: bool = False
+) -> str:
+    """One centered chance card, or two independently colored stacked cards."""
     if val_1mm is None:
         return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
-    bg, text_color = _cell_style(1, val_1mm)
-    descriptor = _chance_descriptor(float(val_1mm))
-    chance_number = f"<b>{val_1mm:.0f}<span class='rr-percent-sign'>%</span></b>"
-    small_label = f"<small class='rr-secondary'>{descriptor}</small>"
-    if secondary is not None:
-        # Keep the descriptive text beside the main value when a second
-        # probability must occupy the line below it.
-        content = (
-            f"<div class='rr-prob-head'>{chance_number}{small_label}</div>"
-            f"<small class='rr-secondary rr-prob-secondary'>{secondary[1]:.0f}% &ge;{secondary[0]} mm</small>"
+
+    def colored_card(threshold: int, probability: float) -> str:
+        bg, text_color = _cell_style(threshold, probability)
+        return (
+            f"<div class='rr-chip rr-chip-dual' style='{bg}color:{text_color};' "
+            f"aria-label='{probability:.0f}% chance of at least {threshold} mm rainfall'>"
+            "<span class='rr-chip-reading'>"
+            f"<b>{probability:.0f}%</b><small>&ge;{threshold} mm</small>"
+            "</span></div>"
         )
-    else:
-        # With no higher-threshold probability, center the two-line group.
-        content = chance_number + small_label
-    accessibility = f"{val_1mm:.0f}% chance of at least 1 mm rainfall ({descriptor.lower()})"
+
     if secondary is not None:
-        accessibility += f", {secondary[1]:.0f}% chance of at least {secondary[0]} mm rainfall"
+        # Each probability uses its OWN threshold and probability tint.
+        # No descriptors when two colored cards are present.
+        return (
+            "<div class='rr-chip-stack'>"
+            + colored_card(1, val_1mm)
+            + colored_card(secondary[0], secondary[1])
+            + "</div>"
+        )
+
+    bg, text_color = _cell_style(1, val_1mm)
+    chance_number = f"<b>{val_1mm:.0f}<span class='rr-percent-sign'>%</span></b>"
+    # On partial days, the data-quality label appears below the day total;
+    # omit the ordinary chance descriptor to keep the compact view uncluttered.
+    descriptor = "" if partial else f"<small class='rr-secondary'>{_chance_descriptor(float(val_1mm))}</small>"
     return (
-        f"<div class='rr-chip' style='{bg}color:{text_color};' aria-label='{accessibility}'>"
-        f"{content}</div>"
+        f"<div class='rr-chip' style='{bg}color:{text_color};' "
+        f"aria-label='{val_1mm:.0f}% chance of at least 1 mm rainfall'>"
+        f"{chance_number}{descriptor}</div>"
     )
 
 
@@ -813,7 +844,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ]
         intensity = _rain_range_descriptor(total_med, total_p90)
         is_partial = len(day_members[day]) < bins_per_day
-        partial = "<span class='rr-part'>partial</span>" if is_partial else ""
+        partial = "<span class='rr-part'>(partial data)</span>" if is_partial else ""
         overview_bars = "".join(
             bar(row[i], i) if i in row else empty_bar for i in range(n_slots)
         )
@@ -828,7 +859,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             label = chance_label.get(day)
             v1 = chance_data.get(1, {}).get(label) if label else None
             secondary = _pick_dynamic_threshold(chance_data, label) if label else None
-            chance_chip = _chance_chip(v1, secondary)
+            chance_chip = _chance_chip(v1, secondary, partial=is_partial)
             cards = []
             for threshold in AVAILABLE_THRESHOLDS_MM:
                 val = chance_data.get(threshold, {}).get(label) if label else None
@@ -866,7 +897,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<div class='rr-day'><b>{day:%a}</b>"
             f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
-            f"<div class='rr-tot'><div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
+            f"<div class='rr-tot'><div class='rr-total-main'><b style='color:{_rain_total_text_color(total_med)};'>{_fmt_mm(total_med)}</b>"
             "<small class='rr-secondary'>mm</small></div>"
             f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
             f"High: {_fmt_mm(total_p90)} mm</small>"
@@ -889,7 +920,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             "<div class='rr-detail-top'>"
             f"<strong>{day:%A, %d %B}</strong>"
             f"<div class='rr-detail-main'><small>Day total:</small>"
-            f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
+            f"<b style='color:{_rain_total_text_color(total_med)};'>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
             "<small>From lower to higher estimates</small></div>"
             f"<div class='rr-quantiles'>{quantiles}</div>"
@@ -950,6 +981,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-prob-head{display:flex;align-items:baseline;justify-content:center;gap:2px;max-width:100%;white-space:nowrap;}"
         ".rr-chip .rr-prob-head b{font-size:.72rem;}"
         ".rr-chip .rr-prob-head .rr-secondary{margin-top:0;}"
+        ".rr-chip-stack{display:flex;flex-direction:column;gap:3px;width:100%;min-width:0;}"
+        ".rr-chip-stack .rr-chip{height:1.68rem;min-height:0;padding:0 2px;}"
+        ".rr-chip-reading{display:flex;justify-content:center;align-items:baseline;gap:3px;white-space:nowrap;}"
+        ".rr-chip-stack .rr-chip-reading b{font-size:.69rem;font-weight:750;}"
+        ".rr-chip-stack .rr-chip-reading small{font-size:.54rem;font-weight:400;opacity:.86;}"
         ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
         "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
@@ -987,6 +1023,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:minmax(51px,auto) minmax(0,1fr) minmax(97px,auto);column-gap:8px;align-items:center;border-radius:6px;"
         "padding:7px 12px;text-align:left;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
         ".rr-detail-chance small{font-size:.63rem;white-space:nowrap;opacity:.86;}"
+        ".rr-detail-chance-threshold{font-weight:700;}"
         ".rr-detail-chance-meaning{font-weight:400;opacity:.72;}"
         ".rr-detail-chance-reading{display:flex;justify-content:flex-end;align-items:baseline;gap:8px;}"
         ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;}"
@@ -1006,6 +1043,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-tot .rr-total-main b{font-size:1.12rem;}"
         ".rr-chip{height:3.2rem;}.rr-chip b{font-size:1.09rem;}"
         ".rr-chip .rr-prob-head b{font-size:.85rem;}"
+        ".rr-chip-stack .rr-chip{height:1.84rem;}"
+        ".rr-chip-stack .rr-chip-reading b{font-size:.78rem;}"
+        ".rr-chip-stack .rr-chip-reading small{font-size:.65rem;}"
         ".rr-legend,.rr-detail-note{font-size:.71rem;}"
         ".rr-detail-top strong{font-size:1rem;}.rr-detail-main b{font-size:1.4rem;}"
         ".rr-detail-main small{font-size:.75rem;}"
@@ -1028,7 +1068,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-chance-reading{gap:5px;}"
         ".rr-time-range{display:flex;flex-direction:column;align-items:center;font-size:.57rem;line-height:1.05;}"
         ".rr-section-heading{font-size:.78rem;}.rr-section-heading small{font-size:.59rem;}"
-        ".rr-quantile b{font-size:.68rem;}.rr-qmedian b{font-size:.75rem;}"
+        ".rr-quantile b{font-size:.88rem;}.rr-qmedian b{font-size:.98rem;}"
+        ".rr-quantile em{font-size:.58rem;}"
         ".rr-detail-chance b{font-size:.86rem;}"
         "}"
         + "</style>"
