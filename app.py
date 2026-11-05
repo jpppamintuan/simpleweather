@@ -438,34 +438,6 @@ CARD_BG = "#ffffff"
 BORDER = "rgba(0,0,0,0.12)"
 FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
 
-
-def _theme_is_dark() -> bool:
-    """Follow Streamlit's viewer theme (including an in-app light/dark switch)."""
-    try:
-        return st.context.theme.type == "dark"
-    except (AttributeError, RuntimeError, ValueError):
-        # Older Streamlit versions don't expose the viewer's selected theme.
-        try:
-            return st.get_option("theme.base") == "dark"
-        except (AttributeError, RuntimeError, ValueError):
-            return False
-
-
-def _theme_colors() -> dict[str, str]:
-    if _theme_is_dark():
-        return {
-            "bg": "#0E1117", "surface": "#1A2330", "soft": "#202B3A",
-            "text": "#F1F5F9", "muted": "#A6B2BF", "muted2": "#8694A4",
-            "line": "rgba(241,245,249,.16)", "grid": "#344052",
-            "selected": "#172C3B", "hover": "#18232F", "med-bg": "#143849",
-        }
-    return {
-        "bg": "#FFFFFF", "surface": "#F7FAFC", "soft": "#EFF3F6",
-        "text": "#172532", "muted": "#667585", "muted2": "#83909B",
-        "line": "rgba(26,40,56,.10)", "grid": "#E5EAF0",
-        "selected": "#F3F8FB", "hover": "#F8FAFC", "med-bg": "#E2F5FD",
-    }
-
 def _neutral_base_rgb() -> tuple[int, int, int]:
     return (255, 255, 255)
 
@@ -490,17 +462,9 @@ def _tier_for_value(val: float) -> str:
         return "tone1"
     return "base"
 
-def _cell_rgb_for_value(threshold_mm: int, val: float, dark: bool = False) -> tuple[int, int, int]:
+def _cell_rgb_for_value(threshold_mm: int, val: float) -> tuple[int, int, int]:
     tier = _tier_for_value(val)
     r, g, b = _hex_to_rgb(THRESHOLD_COLORS[threshold_mm])
-    if dark:
-        base = (20, 28, 40)
-        if tier == "neutral":
-            return base
-        if tier == "base":
-            return r, g, b
-        strength = {"tone3": 0.14, "tone2": 0.38, "tone1": 0.68}[tier]
-        return tuple(round(c * strength + back * (1 - strength)) for c, back in zip((r, g, b), base))
     if tier == "neutral":
         return _neutral_base_rgb()
     if tier == "base":
@@ -527,12 +491,12 @@ def _estimate_col_width_px(windows: list[dict]) -> int:
     padding_px = 24
     return int(longest_line * char_width_px) + padding_px
 
-def _tooltip_row_html(threshold: int, val, dark: bool = False) -> str:
+def _tooltip_row_html(threshold: int, val) -> str:
     if val is None:
-        bg, text_color = ("#141C28", "#F1F5F9") if dark else ("#ffffff", BASE_TEXT)
+        bg, text_color = "#ffffff", BASE_TEXT
         text = "No data"
     else:
-        r, g, b = _cell_rgb_for_value(threshold, val, dark=dark)
+        r, g, b = _cell_rgb_for_value(threshold, val)
         bg = f"rgb({r},{g},{b})"
         text_color = _cell_text_color(_relative_luminance(r, g, b))
         text = f"{val:.0f}% chance of rain (&ge;{threshold} mm)"
@@ -542,14 +506,13 @@ def _tooltip_row_html(threshold: int, val, dark: bool = False) -> str:
         f"border-bottom:1px solid rgba(0,0,0,0.12);'>{text}</div>"
     )
 
-def _tooltip_html_for_window(w: dict, data: dict, dark: bool = False) -> str:
-    theme = _theme_colors()
+def _tooltip_html_for_window(w: dict, data: dict) -> str:
     header = (
         f"<div style='padding:6px 10px;text-align:center;font-weight:700;font-size:12px;"
-        f"color:{theme['text']};background-color:{theme['bg']};"
-        f"border-bottom:1px solid {theme['line']};'>{_fmt_ph(w['start_utc'])} to {_fmt_ph(w['end_utc'])}</div>"
+        f"color:{BASE_TEXT};background-color:#ffffff;"
+        f"border-bottom:1px solid rgba(0,0,0,0.12);'>{_fmt_ph(w['start_utc'])} to {_fmt_ph(w['end_utc'])}</div>"
     )
-    rows = "".join(_tooltip_row_html(t, data[t].get(w["label"]), dark=dark) for t in AVAILABLE_THRESHOLDS_MM)
+    rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
     return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
 
 def render_ribbon_chart_html(result: dict) -> str:
@@ -558,8 +521,6 @@ def render_ribbon_chart_html(result: dict) -> str:
     data = result["data"]
     if not windows:
         return ""
-    theme = _theme_colors()
-    dark = _theme_is_dark()
     day_labels = [w["start_utc"].astimezone(PH_TZ).strftime("%a %d") for w in windows]
     datasets = []
     for threshold in AVAILABLE_THRESHOLDS_MM:
@@ -569,22 +530,22 @@ def render_ribbon_chart_html(result: dict) -> str:
         datasets.append({
             "label": f"{threshold}mm",
             "values": values,
-            "fillColor": (f"rgba({','.join(str(i) for i in _hex_to_rgb(base_hex))},.26)" if dark else f"rgb({r},{g},{b})"),
+            "fillColor": f"rgb({r},{g},{b})",
             "borderColor": base_hex,
         })
-    day_detail_html_by_day = [_tooltip_html_for_window(w, data, dark=dark) for w in windows]
+    day_detail_html_by_day = [_tooltip_html_for_window(w, data) for w in windows]
     labels_json = json.dumps(day_labels)
     datasets_json = json.dumps(datasets)
     day_details_json = json.dumps(day_detail_html_by_day)
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>body {{ font-family: {FONT_STACK}; margin: 0; background-color:{theme['bg']}; color:{theme['text']}; }}</style>
-    <div style="background-color:{theme['bg']};color:{theme['text']};padding:8px;">
+    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
+    <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:300px;">
         <canvas id="ribbonChart"></canvas>
       </div>
       <div id="dayDetailPanel" style="margin-top:10px;border-radius:6px;overflow:hidden;
-        border:1px solid {theme['line']};"></div>
+        border:1px solid rgba(0,0,0,0.12);"></div>
     </div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
     <script>
@@ -593,8 +554,6 @@ def render_ribbon_chart_html(result: dict) -> str:
       const rawDatasets = {datasets_json};
       const dayDetailHtmlByDay = {day_details_json};
       const panelEl = document.getElementById("dayDetailPanel");
-      Chart.defaults.color = "{theme['text']}";
-      Chart.defaults.borderColor = "{theme['grid']}";
       const datasets = rawDatasets.map((d, i) => ({{
         label: d.label,
         data: d.values,
@@ -628,18 +587,18 @@ def render_ribbon_chart_html(result: dict) -> str:
             legend: {{
               display: true,
               position: "bottom",
-              labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "{theme['text']}" }},
+              labels: {{ boxWidth: 12, font: {{ size: 11 }}, color: "#333333" }},
             }},
             tooltip: {{ enabled: false, external: showDayDetail }},
           }},
           scales: {{
             y: {{
               min: 0, max: 100,
-              ticks: {{ callback: (v) => v + "%", color: "{theme['muted']}" }},
-              grid: {{ color: "{theme['grid']}" }},
+              ticks: {{ callback: (v) => v + "%", color: "#666666" }},
+              grid: {{ color: "#e5e5e5" }},
             }},
             x: {{
-              ticks: {{ color: "{theme['muted']}", font: {{ size: 10 }} }},
+              ticks: {{ color: "#666666", font: {{ size: 10 }} }},
               grid: {{ display: false }},
             }},
           }},
@@ -670,21 +629,22 @@ _tip_hour_label = _hour_label
 def _hour_label_html(hour: int) -> str:
     return f"{hour % 12 or 12}<small class='rr-ap'>{'am' if hour % 24 < 12 else 'pm'}</small>"
 
-def _chance_chip(val, secondary: tuple[int, float] | None, dark: bool = False) -> str:
-    """One colored chance card: >=1 mm prominently, optional >=65% higher threshold."""
-    if val is None:
-        return "<div class='rr-chip rr-chip-na' aria-label='Rain probability unavailable'>—</div>"
-    bg, text_color = _cell_style(1, val, dark=dark)
-    second_line = (
-        f"<small><strong>{secondary[1]:.0f}%</strong> &ge;{secondary[0]} mm</small>"
-        if secondary is not None else "<small class='rr-chip-spacer' aria-hidden='true'>&nbsp;</small>"
+def _chance_chip(val_1mm, secondary: tuple[int, float] | None = None) -> str:
+    """One compact chance card: P(>=1 mm), plus an optional >=65% higher threshold."""
+    if val_1mm is None:
+        return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
+    bg, text_color = _cell_style(1, val_1mm)
+    secondary_html = (
+        f"<small>{secondary[1]:.0f}% &ge;{secondary[0]} mm</small>"
+        if secondary is not None else ""
     )
-    description = f"{val:.0f}% chance of at least 1 mm"
-    if secondary is not None:
-        description += f", {secondary[1]:.0f}% chance of at least {secondary[0]} mm"
     return (
-        f"<div class='rr-chip' style='{bg}color:{text_color};' aria-label='{description}'>"
-        f"<b>{val:.0f}<span class='rr-percent-sign'>%</span></b>{second_line}</div>"
+        f"<div class='rr-chip' style='{bg}color:{text_color};' "
+        f"aria-label='{val_1mm:.0f}% chance of at least 1 mm rainfall"
+        + (f", {secondary[1]:.0f}% chance of at least {secondary[0]} mm rainfall'" if secondary else "'")
+        + ">"
+        f"<b>{val_1mm:.0f}<span class='rr-percent-sign'>%</span></b>"
+        f"{secondary_html}</div>"
     )
 
 
@@ -727,8 +687,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             for w in threshold_result["windows"]
         }
     has_chance = chance_data is not None
-    theme = _theme_colors()
-    is_dark = _theme_is_dark()
     row_cls = "rr-row rr-c" if has_chance else "rr-row"
     slot_hours = [ROW_ANCHOR_PH_HOUR + k * step for k in range(n_slots)]
     grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:{_RAIN_BAR_GAP_PX}px;"
@@ -765,7 +723,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         )
 
     empty_bar = "<div class='rr-slot'><div class='rr-bar rr-empty'><div class='rr-fill'></div></div></div>"
-    chance_head = "<div class='rr-h rr-h-chance'>Chance</div>" if has_chance else ""
+    chance_head = "<div class='rr-h rr-h-chance'>Chance of rain</div>" if has_chance else ""
     head = (
         f"<div class='{row_cls} rr-head'><div></div>{chance_head}"
         f"<div class='rr-slots' style='{grid}'>"
@@ -783,7 +741,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         total_p10, total_p25, total_med, total_p75, total_p90 = [
             float(v) for v in np.percentile(members, [10, 25, 50, 75, 90])
         ]
-        p90_only = _fmt_mm(total_p90)
+        p90_txt = _fmt_mm(total_p90)
         is_partial = len(day_members[day]) < bins_per_day
         partial = "<span class='rr-part'>partial</span>" if is_partial else ""
         slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
@@ -792,22 +750,21 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         chance_detail = ""
         if has_chance:
             label = chance_label.get(day)
-            v1 = chance_data[1].get(label) if label else None
+            v1 = chance_data.get(1, {}).get(label) if label else None
             dyn = _pick_dynamic_threshold(chance_data, label) if label else None
-            chips = _chance_chip(v1, dyn, dark=is_dark)
+            chips = _chance_chip(v1, dyn)
             fmt_prob = lambda v: '—' if v is None else f'{v:.0f}%'
-            chance_detail = (
-                "<div class='rr-detail-prob'>"
+            detail_probs = (
                 "<div><small>Chance of ≥1 mm</small><b>" + fmt_prob(v1) + "</b></div>"
             )
             if dyn is not None:
-                chance_detail += (
+                detail_probs += (
                     f"<div><small>Chance of ≥{dyn[0]} mm</small>"
                     f"<b>{fmt_prob(dyn[1])}</b></div>"
                 )
-            chance_detail += (
-                "</div><div class='rr-detail-note'>Chance probabilities: 8am–8am (PHT), "
-                "a different period from the day total.</div>"
+            chance_detail = (
+                "<div class='rr-detail-prob'>" + detail_probs + "</div>"
+                "<div class='rr-detail-note'>Chance probabilities: 8am–8am (PHT), a different period from the day total.</div>"
             )
 
         # Hidden but keyboard-accessible native radio + whole-row label.
@@ -819,13 +776,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<label for='{radio_id}' class='{row_cls} rr-data rr-selectable' "
             f"aria-label='Show details for {day:%A %d %B}'>"
             f"<div class='rr-day'><b>{day:%a}</b><span>{day.day} {day:%b}</span></div>"
-            f"{chips}"
-            f"<div class='rr-slots' style='{grid}'>{slots}</div>"
+            f"{chips}<div class='rr-slots' style='{grid}'>{slots}</div>"
             f"<div class='rr-tot'><div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
             f"<small>mm</small></div>"
-            f"<span class='rr-p90-value' title='90th-percentile daily total: {p90_only} mm' "
-            f"aria-label='P90: {p90_only} mm'><i class='rr-p90-marker'></i>{p90_only}</span>"
-            f"{partial}</div></label>"
+            f"<span class='rr-range' title='90th percentile: 90% of ensemble members forecast this amount or less'>"
+            f"<span>P90</span> {p90_txt} mm</span>{partial}</div></label>"
         )
         items = [
             ("P10", total_p10), ("P25", total_p25),
@@ -848,7 +803,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         )
 
     legend_chance = (
-        "<span>Chance: ≥1 mm; second line = highest heavier threshold with ≥65% likelihood (8am–8am)</span>"
+        "<span>Chance of rain: ≥1 mm; higher threshold shown only when its probability is ≥65%. "
+        "Threshold period: 8am–8am.</span>"
         if has_chance else ""
     )
     legend = (
@@ -857,114 +813,80 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
         "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
         f"<span>Full bar = {cap} mm per {step}h</span>"
-        "<span>Day total: median; small number with pale marker = P90</span>"
+        "<span>Day total: median; P90 = 90th percentile (not a maximum)</span>"
         f"{legend_chance}</div>"
     )
 
-    # Existing rainfall bars and tooltip colors/heights are unchanged. Theme
-    # colors apply only to the card surface, typography and selected-day panel.
+    # Keep the original bar-specific styling and colors intact; only the
+    # total/chance typography, row selection and detail panel are new.
     css = (
         "<style>"
-        f".rr-card{{--rr-bg:var(--st-background-color,var(--background-color,{theme['bg']}));"
-        f"--rr-text:var(--st-text-color,var(--text-color,{theme['text']}));"
-        f"--rr-surface:{theme['surface']};--rr-soft:{theme['soft']};"
-        f"--rr-muted:{theme['muted']};--rr-muted2:{theme['muted2']};"
-        f"--rr-line:{theme['line']};--rr-hover:{theme['hover']};"
-        f"--rr-selected:{theme['selected']};--rr-med-bg:{theme['med-bg']};"
-        f"background:var(--rr-bg);color:var(--rr-text);border-radius:10px;"
-        f"padding:10px 12px;font-family:{FONT_STACK};}}"
-        f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;"
-        "column-gap:10px;justify-content:space-evenly;align-items:center;}"
-        f".rr-row.rr-c{{grid-template-columns:2.3rem 3.8rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.15rem;"
-        "column-gap:9px;}"
-        ".rr-data{padding:5px 0;border-top:1px solid var(--rr-line);}"
+        f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
+        f".rr-row.rr-c{{grid-template-columns:2.3rem 3.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.15rem;column-gap:8px;}}"
+        ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
-        ".rr-head .rr-slot span{font-size:.58rem;color:var(--rr-muted);white-space:nowrap;}"
-        ".rr-ap{font-size:.46rem;}"
-        ".rr-h{font-size:.58rem;color:var(--rr-muted);text-align:center;line-height:1.1;white-space:nowrap;}"
-        ".rr-h-r{text-align:center;}"
+        ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}.rr-ap{font-size:.46rem;}"
+        ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
+        ".rr-h-r{text-align:center;}.rr-h-span{grid-column:span 2;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
-        ".rr-day b{font-size:.82rem;font-weight:700;}"
-        ".rr-day span{font-size:.62rem;color:var(--rr-muted);}"
-        ".rr-slots{display:grid;min-width:0;}"
-        ".rr-slot{display:flex;justify-content:center;min-width:0;}"
-        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;"
-        "height:60px;outline:none;cursor:pointer;}"
+        ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
+        ".rr-slots{display:grid;}"
+        ".rr-slot{display:flex;justify-content:center;}"
+        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;cursor:pointer;}}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
         ".rr-empty{cursor:default;}.rr-empty .rr-fill{opacity:.25;}"
-        ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;"
-        "align-items:center;justify-content:center;line-height:1.12;min-width:0;}"
+        ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;}"
         ".rr-total-main{display:flex;align-items:baseline;justify-content:center;gap:2px;}"
-        ".rr-tot .rr-total-main b{font-size:1rem;font-weight:750;letter-spacing:-.025em;"
-        "font-variant-numeric:tabular-nums;}"
-        ".rr-tot .rr-total-main small{font-size:.58rem;font-weight:400;color:var(--rr-muted);}"
-        ".rr-p90-value{display:flex;align-items:center;justify-content:center;gap:4px;margin-top:4px;"
-        "font-size:.64rem;font-weight:600;color:var(--rr-muted);font-variant-numeric:tabular-nums;}"
-        f".rr-p90-marker{{display:inline-block;width:11px;height:4px;border-radius:2px;background:{_RAIN_P90};"
-        "box-shadow:inset 0 0 0 1px rgba(83,102,122,.12);}"
-        ".rr-tot .rr-part{font-size:.55rem;font-style:italic;color:var(--rr-muted2);}"
-        ".rr-chip{box-sizing:border-box;width:100%;height:2.5rem;border-radius:6px;"
-        "display:flex;flex-direction:column;align-items:center;justify-content:center;"
-        "text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);"
-        "padding:2px 1px;}"
-        ".rr-chip b{display:block;font-size:.92rem;font-weight:750;letter-spacing:-.015em;"
-        "font-variant-numeric:tabular-nums;}"
+        ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
+        ".rr-tot .rr-total-main small{font-size:.57rem;font-weight:400;color:#737D88;}"
+        ".rr-tot .rr-range{display:block;font-size:.60rem;color:#798795;margin-top:3px;font-variant-numeric:tabular-nums;}"
+        ".rr-tot .rr-range span{color:#9AA3AE;font-size:.55rem;margin-right:2px;font-weight:600;}"
+        ".rr-tot .rr-part{font-size:.57rem;font-style:italic;color:#6b7280;}"
+        ".rr-chip{box-sizing:border-box;width:100%;height:2.5rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
+        ".rr-chip b{display:block;font-size:.92rem;font-weight:750;letter-spacing:-.015em;font-variant-numeric:tabular-nums;}"
         ".rr-chip .rr-percent-sign{font-size:.73em;font-weight:600;}"
-        ".rr-chip small{display:block;font-size:.56rem;margin-top:3px;white-space:nowrap;opacity:.85;}"
-        ".rr-chip small strong{font-weight:750;}"
-        ".rr-chip-na{color:var(--rr-muted);font-size:.75rem;}"
+        ".rr-chip small{display:block;font-size:.54rem;margin-top:2px;white-space:nowrap;opacity:.84;}"
+        ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
         "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
         ".rr-tip-l{left:0;transform:none;}.rr-tip-r{left:auto;right:0;transform:none;}"
         ".rr-tip-b{bottom:auto;top:calc(100% + 6px);}"
         ".rr-bar:hover .rr-tip,.rr-bar:focus .rr-tip{display:block;}"
-        ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;"
-        "color:var(--rr-muted);margin-top:8px;}"
-        ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;"
-        "margin-right:4px;vertical-align:-1px;}"
+        ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
+        ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
         ".rr-radio{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;}"
         ".rr-selectable{cursor:pointer;border-radius:6px;transition:background-color .12s ease;}"
-        ".rr-selectable:hover{background-color:var(--rr-hover);}"
-        ".rr-radio:checked+.rr-selectable{background-color:var(--rr-selected);"
-        "box-shadow:inset 2px 0 #00BFFF;}"
+        ".rr-selectable:hover{background-color:#F8FAFC;}"
+        ".rr-radio:checked+.rr-selectable{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
         ".rr-radio:focus-visible+.rr-selectable{outline:2px solid #159BD6;outline-offset:1px;}"
-        ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;"
-        "background:var(--rr-surface);border:1px solid var(--rr-line);}"
+        ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
         ".rr-detail-top>div:first-child{display:flex;flex-direction:column;gap:2px;}"
-        ".rr-detail-top small{font-size:.55rem;font-weight:700;color:var(--rr-muted2);letter-spacing:.08em;}"
-        ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:var(--rr-text);}"
-        ".rr-detail-top span{font-size:.62rem;color:var(--rr-muted);}"
+        ".rr-detail-top small{font-size:.55rem;font-weight:700;color:#82909E;letter-spacing:.08em;}"
+        ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
+        ".rr-detail-top span{font-size:.62rem;color:#798694;}"
         ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
-        ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:var(--rr-text);}"
-        ".rr-detail-main small{font-size:.62rem;color:var(--rr-muted);letter-spacing:0;}"
+        ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
+        ".rr-detail-main small{font-size:.62rem;color:#7D8995;letter-spacing:0;}"
         ".rr-quantiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:12px;}"
-        ".rr-quantile{min-width:0;text-align:center;padding:7px 1px;border-radius:6px;"
-        "background:var(--rr-soft);}"
-        ".rr-quantile small{display:block;font-size:.59rem;color:var(--rr-muted);}"
-        ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:var(--rr-text);white-space:nowrap;}"
-        ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:var(--rr-muted2);}"
-        ".rr-qmedian{background:var(--rr-med-bg);}"
-        ".rr-qmedian b{color:#00BFFF;font-size:.85rem;}"
-        ".rr-detail-prob{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));"
-        "gap:8px;margin-top:11px;}"
-        ".rr-detail-prob>div{display:flex;align-items:baseline;justify-content:space-between;gap:5px;"
-        "padding:6px 9px;border-radius:6px;background:var(--rr-soft);}"
-        ".rr-detail-prob small{font-size:.62rem;color:var(--rr-muted);}"
-        ".rr-detail-prob b{font-size:.83rem;color:var(--rr-text);white-space:nowrap;}"
-        ".rr-detail-note{font-size:.57rem;color:var(--rr-muted2);margin-top:5px;}"
-        "@media(max-width:490px){.rr-card{padding:9px 6px;}"
-        ".rr-row.rr-c{grid-template-columns:2.05rem 3.5rem minmax(0,1fr) 3rem;"
-        "column-gap:5px;justify-content:stretch;}"
-        ".rr-row:not(.rr-c){grid-template-columns:2.4rem minmax(0,1fr) 3.2rem;"
-        "column-gap:5px;justify-content:stretch;}"
-        ".rr-chip small{font-size:.52rem;}.rr-legend{gap:3px 8px;}"
-        ".rr-detail{padding:10px 7px;}.rr-quantiles{gap:2px;}"
+        ".rr-quantile{min-width:0;text-align:center;padding:7px 1px;border-radius:6px;background:#EFF3F6;}"
+        ".rr-quantile small{display:block;font-size:.59rem;color:#788491;}"
+        ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:#3F4C58;white-space:nowrap;}"
+        ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:#81909A;}"
+        ".rr-qmedian{background:#E2F5FD;}"
+        ".rr-qmedian b{color:#126F96;font-size:.85rem;}"
+        ".rr-detail-prob{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:11px;}"
+        ".rr-detail-prob>div{display:flex;align-items:baseline;justify-content:space-between;gap:5px;padding:6px 9px;border-radius:6px;background:#EDF3F8;}"
+        ".rr-detail-prob small{font-size:.62rem;color:#657484;}"
+        ".rr-detail-prob b{font-size:.83rem;color:#1E394D;white-space:nowrap;}"
+        ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:5px;}"
+        "@media(max-width:460px){.rr-h-chance{white-space:normal;}.rr-detail{padding:10px 7px;}.rr-quantiles{gap:2px;}"
         ".rr-quantile b{font-size:.68rem;}.rr-qmedian b{font-size:.75rem;}"
-        ".rr-detail-prob{gap:4px;}}"
+        ".rr-detail-prob{grid-template-columns:1fr;gap:4px;}}"
         + "".join(
             f".rr-card:has(#rr-pick-{i}:checked) .rr-detail-{i}{{display:block;}}"
             for i in range(len(days))
@@ -972,7 +894,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         + "</style>"
     )
     return f"{css}<div class='rr-card'>{head}{body}{legend}{details}</div>"
-
 
 
 HEAT_INDEX_CATEGORIES = [
@@ -1070,11 +991,10 @@ def render_temperature_chart_html(
     datasets_json = json.dumps(datasets)
     category_lines_json = json.dumps(category_lines_for_labels)
     category_full_labels_json = json.dumps(category_full_labels)
-    theme = _theme_colors()
     return f"""
     <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
-    <style>body {{ font-family: {FONT_STACK}; margin: 0; background-color:{theme['bg']};color:{theme['text']}; }}</style>
-    <div style="background-color:{theme['bg']};color:{theme['text']};padding:8px;">
+    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
+    <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:320px;">
         <canvas id="tempChart"></canvas>
       </div>
@@ -1086,8 +1006,6 @@ def render_temperature_chart_html(
       const datasets = {datasets_json};
       const categoryLines = {category_lines_json};
       const categoryFullLabels = new Set({category_full_labels_json});
-      Chart.defaults.color = "{theme['text']}";
-      Chart.defaults.borderColor = "{theme['grid']}";
       const categoryLabelPlugin = {{
         id: "categoryLabelPlugin",
         afterDatasetsDraw(chart) {{
@@ -1119,7 +1037,7 @@ def render_temperature_chart_html(
             legend: {{
               display: true, position: "bottom",
               labels: {{
-                boxWidth: 12, font: {{ size: 10 }}, color: "{theme['text']}",
+                boxWidth: 12, font: {{ size: 10 }}, color: "#333333",
                 filter: (item) => !item.text.includes("P10") && !item.text.includes("P90")
                   && !categoryFullLabels.has(item.text),
               }},
@@ -1145,10 +1063,10 @@ def render_temperature_chart_html(
             y: {{
               min: {y_min},
               max: {y_max},
-              ticks: {{ stepSize: {y_step}, callback: (v) => v + "\\u00b0C", color: "{theme['muted']}" }},
-              grid: {{ color: "{theme['grid']}" }},
+              ticks: {{ stepSize: {y_step}, callback: (v) => v + "\\u00b0C", color: "#666666" }},
+              grid: {{ color: "#e5e5e5" }},
             }},
-            x: {{ ticks: {{ color: "{theme['muted']}", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
+            x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
           }},
         }},
       }});
@@ -1159,12 +1077,9 @@ def render_temperature_chart_html(
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
-    theme = _theme_colors()
-    is_dark = _theme_is_dark()
-    text, line, bg = theme["text"], theme["line"], theme["bg"]
     header_cells = "".join(
         f"<th style='padding:8px 12px;font-size:12px;white-space:nowrap;"
-        f"color:{text};border-bottom:2px solid {line};'>{_fmt_window(w)}</th>"
+        f"color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>{_fmt_window(w)}</th>"
         for w in windows
     )
     rows_html = ""
@@ -1175,31 +1090,31 @@ def render_table_html(result: dict) -> str:
             val = data[threshold].get(w["label"])
             if val is None:
                 row_cells += (
-                    f"<td style='padding:8px 12px;text-align:center;color:{theme['muted']};"
-                    f"border-bottom:1px solid {line};'>—</td>"
+                    f"<td style='padding:8px 12px;text-align:center;color:{BASE_TEXT};"
+                    f"border-bottom:1px solid {BORDER};'>—</td>"
                 )
                 continue
-            r, g, b = _cell_rgb_for_value(threshold, val, dark=is_dark)
-            cell_bg = f"rgb({r},{g},{b})"
-            text_color = _cell_text_color(_relative_luminance(r, g, b))
+            br, bg_g, bb = _cell_rgb_for_value(threshold, val)
+            bg = f"rgb({br},{bg_g},{bb})"
+            text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
             row_cells += (
                 f"<td style='padding:8px 12px;text-align:center;"
-                f"background-color:{cell_bg};color:{text_color};font-weight:600;"
-                f"border-bottom:1px solid {line};'>{val:.0f}%</td>"
+                f"background-color:{bg};color:{text_color};font-weight:600;"
+                f"border-bottom:1px solid {BORDER};'>{val:.0f}%</td>"
             )
         rows_html += (
             f"<tr><td style='padding:8px 12px;font-weight:700;white-space:nowrap;"
-            f"color:{text};background-color:{color_hex}33;"
-            f"border-bottom:1px solid {line};'>≥{threshold} mm</td>{row_cells}</tr>"
+            f"color:{BASE_TEXT};background-color:{color_hex}33;"
+            f"border-bottom:1px solid {BORDER};'>≥{threshold} mm</td>{row_cells}</tr>"
         )
     col_width_px = _estimate_col_width_px(windows)
     min_width_px = (len(windows) + 1) * col_width_px
     return (
-        f"<div style=\"overflow-x:auto;background-color:{bg};border-radius:8px;padding:4px;\">"
+        f"<div style=\"overflow-x:auto;background-color:{CARD_BG};border-radius:8px;padding:4px;\">"
         f"<table style=\"border-collapse:collapse;width:100%;min-width:{min_width_px}px;"
         f"table-layout:fixed;font-family:{FONT_STACK};font-size:13px;\">"
         f"<thead><tr>"
-        f"<th style='padding:8px 12px;text-align:left;color:{text};border-bottom:2px solid {line};'>Threshold</th>"
+        f"<th style='padding:8px 12px;text-align:left;color:{BASE_TEXT};border-bottom:2px solid {BORDER};'>Threshold</th>"
         f"{header_cells}"
         f"</tr></thead>"
         f"<tbody>{rows_html}</tbody>"
@@ -1207,19 +1122,17 @@ def render_table_html(result: dict) -> str:
         f"</div>"
     )
 
-
 def _pick_dynamic_threshold(data: dict, window_label: str):
-    """Highest rainfall threshold above 1 mm whose true probability is at least 65%."""
     for threshold in (100, 50, 20, 5):
         val = data.get(threshold, {}).get(window_label)
         if val is not None and val >= 65:
             return threshold, val
     return None
 
-def _cell_style(threshold_mm: int, val, dark: bool = False) -> tuple[str, str]:
+def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
     if val is None:
-        return "background-color:transparent;", (_theme_colors()["text"] if dark else BASE_TEXT)
-    br, bg_g, bb = _cell_rgb_for_value(threshold_mm, val, dark=dark)
+        return "background-color:transparent;", BASE_TEXT
+    br, bg_g, bb = _cell_rgb_for_value(threshold_mm, val)
     bg = f"background-color:rgb({br},{bg_g},{bb});"
     text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
     return bg, text_color
@@ -1428,7 +1341,7 @@ with main:
                             f"Each bar is a {pct_period_hours}-hour accumulation (UTC+8). Slices sit on the same 2am-based grid "
                             f"at every time step, so a day's total is identical however you slice it; a slice the forecast only "
                             f"partly covers is left empty."
-                            + (" The chance columns are ECMWF's 24h threshold probabilities, which run 8am–8am, "
+                            + (" The chance of rain column uses ECMWF's 24h threshold probabilities, which run 8am–8am, "
                                "so each is matched to the day it starts on." if card_thr else "")
                         )
                         show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
