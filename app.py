@@ -629,22 +629,63 @@ _tip_hour_label = _hour_label
 def _hour_label_html(hour: int) -> str:
     return f"{hour % 12 or 12}<small class='rr-ap'>{'am' if hour % 24 < 12 else 'pm'}</small>"
 
+def _chance_descriptor(probability: float) -> str:
+    """Human-readable chance bands for the >=1 mm forecast probability."""
+    if probability < 5:
+        return "Very low"
+    if probability < 35:
+        return "Low"
+    if probability < 65:
+        return "Medium"
+    if probability < 95:
+        return "High"
+    return "Very high"
+
+
+def _rain_amount_descriptor(rain_mm: float) -> str:
+    """Daily rainfall descriptors using the requested total-amount cutoffs."""
+    if rain_mm < 5:
+        return "v. light"
+    if rain_mm < 20:
+        return "light"
+    if rain_mm < 50:
+        return "mod."
+    if rain_mm < 100:
+        return "heavy"
+    return "intense"
+
+
+def _rain_range_descriptor(median_mm: float, p90_mm: float) -> str:
+    """Describe the median and P90 rainfall bands without calling P90 a maximum."""
+    median_label = _rain_amount_descriptor(median_mm)
+    p90_label = _rain_amount_descriptor(p90_mm)
+    return median_label if median_label == p90_label else f"{median_label} to {p90_label}"
+
+
 def _chance_chip(val_1mm, secondary: tuple[int, float] | None = None) -> str:
-    """One compact chance card: P(>=1 mm), plus an optional >=65% higher threshold."""
+    """Color-coded >=1 mm chance, optional >=65% higher threshold, and chance label."""
     if val_1mm is None:
         return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
     bg, text_color = _cell_style(1, val_1mm)
-    secondary_html = (
-        f"<small>{secondary[1]:.0f}% &ge;{secondary[0]} mm</small>"
-        if secondary is not None else ""
-    )
+    descriptor = _chance_descriptor(float(val_1mm))
+    chance_number = f"<b>{val_1mm:.0f}<span class='rr-percent-sign'>%</span></b>"
+    small_label = f"<small class='rr-secondary'>{descriptor}</small>"
+    if secondary is not None:
+        # Keep the descriptive text beside the main value when a second
+        # probability must occupy the line below it.
+        content = (
+            f"<div class='rr-prob-head'>{chance_number}{small_label}</div>"
+            f"<small class='rr-secondary rr-prob-secondary'>{secondary[1]:.0f}% &ge;{secondary[0]} mm</small>"
+        )
+    else:
+        # With no higher-threshold probability, center the two-line group.
+        content = chance_number + small_label
+    accessibility = f"{val_1mm:.0f}% chance of at least 1 mm rainfall ({descriptor.lower()})"
+    if secondary is not None:
+        accessibility += f", {secondary[1]:.0f}% chance of at least {secondary[0]} mm rainfall"
     return (
-        f"<div class='rr-chip' style='{bg}color:{text_color};' "
-        f"aria-label='{val_1mm:.0f}% chance of at least 1 mm rainfall"
-        + (f", {secondary[1]:.0f}% chance of at least {secondary[0]} mm rainfall'" if secondary else "'")
-        + ">"
-        f"<b>{val_1mm:.0f}<span class='rr-percent-sign'>%</span></b>"
-        f"{secondary_html}</div>"
+        f"<div class='rr-chip' style='{bg}color:{text_color};' aria-label='{accessibility}'>"
+        f"{content}</div>"
     )
 
 
@@ -742,6 +783,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             float(v) for v in np.percentile(members, [10, 25, 50, 75, 90])
         ]
         p90_txt = _fmt_mm(total_p90)
+        intensity_label = _rain_range_descriptor(total_med, total_p90)
         is_partial = len(day_members[day]) < bins_per_day
         partial = "<span class='rr-part'>partial</span>" if is_partial else ""
         slots = "".join(bar(row[k], k, row_index < 2) if k in row else empty_bar for k in range(n_slots))
@@ -775,12 +817,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<input type='radio' class='rr-radio' name='rr-selected-day' id='{radio_id}'{checked}>"
             f"<label for='{radio_id}' class='{row_cls} rr-data rr-selectable' "
             f"aria-label='Show details for {day:%A %d %B}'>"
-            f"<div class='rr-day'><b>{day:%a}</b><span>{day.day} {day:%b}</span></div>"
+            f"<div class='rr-day'><b>{day:%a}</b><span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chips}<div class='rr-slots' style='{grid}'>{slots}</div>"
             f"<div class='rr-tot'><div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
-            f"<small>mm</small></div>"
-            f"<span class='rr-range' title='90th percentile: 90% of ensemble members forecast this amount or less'>"
-            f"<span>P90</span> {p90_txt} mm</span>{partial}</div></label>"
+            f"<small class='rr-secondary'>mm</small></div>"
+            f"<small class='rr-secondary rr-range' title='90th percentile of ensemble rainfall, not the actual maximum'>"
+            f"{p90_txt} mm max</small>"
+            f"<small class='rr-secondary rr-rain-desc' title='Rainfall amount categories for the median to the 90th percentile'>"
+            f"{intensity_label}</small>{partial}</div></label>"
         )
         items = [
             ("P10", total_p10), ("P25", total_p25),
@@ -799,7 +843,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<span>Day total: 2am–2am (PHT){partial_note}</span></div>"
             f"<div class='rr-detail-main'><b>{_fmt_mm(total_med)}</b><small>mm median</small></div></div>"
             f"<div class='rr-quantiles'>{quantiles_html}</div>"
-            f"{chance_detail}</section>"
+            f"{chance_detail}"
+            "<div class='rr-detail-note'>Daily-row 'max' is the 90th percentile, "
+            "not the highest possible rainfall amount.</div></section>"
         )
 
     legend_chance = (
@@ -813,7 +859,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f"<span><i style='background:{_RAIN_P90}'></i>P90</span>"
         "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>above scale</span>"
         f"<span>Full bar = {cap} mm per {step}h</span>"
-        "<span>Day total: median; P90 = 90th percentile (not a maximum)</span>"
         f"{legend_chance}</div>"
     )
 
@@ -823,14 +868,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "<style>"
         f".rr-card{{background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
-        f".rr-row.rr-c{{grid-template-columns:2.3rem 3.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.15rem;column-gap:8px;}}"
+        f".rr-row.rr-c{{grid-template-columns:2.3rem 4.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.6rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}.rr-ap{font-size:.46rem;}"
         ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
         ".rr-h-r{text-align:center;}.rr-h-span{grid-column:span 2;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
-        ".rr-day b{font-size:.82rem;font-weight:700;}.rr-day span{font-size:.62rem;color:#6b7280;}"
+        ".rr-day b{font-size:.82rem;font-weight:700;}"
+        ".rr-secondary{font-size:.56rem;font-weight:400;line-height:1.2;letter-spacing:-.01em;color:#737D88;white-space:nowrap;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
         f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;cursor:pointer;}}"
@@ -841,14 +887,17 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;}"
         ".rr-total-main{display:flex;align-items:baseline;justify-content:center;gap:2px;}"
         ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
-        ".rr-tot .rr-total-main small{font-size:.57rem;font-weight:400;color:#737D88;}"
-        ".rr-tot .rr-range{display:block;font-size:.60rem;color:#798795;margin-top:3px;font-variant-numeric:tabular-nums;}"
-        ".rr-tot .rr-range span{color:#9AA3AE;font-size:.55rem;margin-right:2px;font-weight:600;}"
+        ".rr-tot .rr-total-main small{font-size:.56rem;font-weight:400;color:#737D88;}"
+        ".rr-tot .rr-range{display:block;margin-top:3px;font-variant-numeric:tabular-nums;}"
+        ".rr-rain-desc{display:block;margin-top:3px;text-align:center;}"
         ".rr-tot .rr-part{font-size:.57rem;font-style:italic;color:#6b7280;}"
-        ".rr-chip{box-sizing:border-box;width:100%;height:2.5rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
+        ".rr-chip{box-sizing:border-box;width:100%;height:2.8rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
         ".rr-chip b{display:block;font-size:.92rem;font-weight:750;letter-spacing:-.015em;font-variant-numeric:tabular-nums;}"
         ".rr-chip .rr-percent-sign{font-size:.73em;font-weight:600;}"
-        ".rr-chip small{display:block;font-size:.54rem;margin-top:2px;white-space:nowrap;opacity:.84;}"
+        ".rr-chip .rr-secondary{display:block;font-size:.56rem;margin-top:2px;color:inherit;opacity:.78;}"
+        ".rr-prob-head{display:flex;align-items:baseline;justify-content:center;gap:2px;max-width:100%;white-space:nowrap;}"
+        ".rr-chip .rr-prob-head b{font-size:.72rem;}"
+        ".rr-chip .rr-prob-head .rr-secondary{margin-top:0;}"
         ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
         "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
