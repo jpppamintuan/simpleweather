@@ -668,30 +668,20 @@ def _rain_range_descriptor(median_mm: float, p90_mm: float) -> str:
 def _chance_chip(
     val_1mm, secondary: tuple[int, float] | None = None, *, partial: bool = False
 ) -> str:
-    """A single chance card for the highest threshold with >=65% probability.
+    """Compact, color-coded card for the highest threshold with >=65% chance.
 
-    If no higher threshold qualifies, show the chance of >=1 mm as a fallback.
+    Fall back to the >=1 mm probability when no higher level qualifies.
+    Descriptors are reserved for the detailed view, where their meaning is clear.
     """
-    if secondary is None:
-        threshold, probability = 1, val_1mm
-    else:
-        threshold, probability = secondary
-
+    threshold, probability = (1, val_1mm) if secondary is None else secondary
     if probability is None:
         return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
-
     bg, text_color = _cell_style(threshold, probability)
-    # Partial days retain their data-quality marker in the day-total column;
-    # the ordinary chance descriptor is suppressed for those days.
-    descriptor = (
-        "" if partial
-        else f"<small class='rr-secondary rr-chance-desc'>{_chance_descriptor(float(probability))}</small>"
-    )
     return (
         f"<div class='rr-chip' style='{bg}color:{text_color};' "
         f"aria-label='{probability:.0f}% chance of at least {threshold} mm rainfall'>"
         "<span class='rr-prob-head'>"
-        f"<b>{probability:.0f}</b><small class='rr-percent-sign'>%</small>{descriptor}"
+        f"<b>{probability:.0f}</b><small class='rr-percent-sign'>%</small>"
         "</span>"
         f"<small class='rr-chip-threshold'>&ge;{threshold} mm</small>"
         "</div>"
@@ -817,7 +807,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         total_p10, total_p25, total_med, total_p75, total_p90 = [
             float(v) for v in np.percentile(members, [10, 25, 50, 75, 90])
         ]
-        intensity = _rain_range_descriptor(total_med, total_p90)
         is_partial = len(day_members[day]) < bins_per_day
         partial = "<span class='rr-part'>(partial data)</span>" if is_partial else ""
         overview_bars = "".join(
@@ -838,7 +827,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             cards = []
             for threshold in AVAILABLE_THRESHOLDS_MM:
                 val = chance_data.get(threshold, {}).get(label) if label else None
-                bg, text_color = _cell_style(threshold, val)
+                value_bg, value_text = _cell_style(threshold, val)
+                # The left segment always uses the full table's fixed 20% threshold tint.
+                # The right segment uses that threshold's probability-dependent tier.
+                # Their shared edge needs no border or separating line.
+                threshold_rgb = _tint_toward_white_rgb(
+                    *_hex_to_rgb(THRESHOLD_COLORS[threshold]), 0.20,
+                )
+                label_bg = f"background-color:rgb({','.join(map(str, threshold_rgb))});"
+                label_text = _cell_text_color(_relative_luminance(*threshold_rgb))
                 probability = "—" if val is None else f"{val:.0f}%"
                 descriptor = "unavailable" if val is None else _chance_descriptor(float(val))
                 rainfall_label = {
@@ -846,11 +843,12 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
                     50: "heavy", 100: "intense",
                 }[threshold]
                 cards.append(
-                    f"<div class='rr-detail-chance' style='{bg}color:{text_color};' "
+                    f"<div class='rr-detail-chance' "
                     f"aria-label='Chance of at least {threshold} mm: {probability}, {descriptor}; {rainfall_label} rain or more'>"
+                    f"<div class='rr-detail-chance-label' style='{label_bg}color:{label_text};'>"
                     f"<small class='rr-detail-chance-threshold'>&ge;{threshold} mm</small>"
-                    f"<small class='rr-detail-chance-meaning'>{rainfall_label} or more</small>"
-                    "<div class='rr-detail-chance-reading'>"
+                    f"<small class='rr-detail-chance-meaning'>{rainfall_label} or more</small></div>"
+                    f"<div class='rr-detail-chance-value' style='{value_bg}color:{value_text};'>"
                     f"<b>{probability}</b><small class='rr-detail-chance-desc'>{descriptor}</small>"
                     "</div></div>"
                 )
@@ -872,12 +870,12 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<div class='rr-day'><b>{day:%a}</b>"
             f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
-            f"<div class='rr-tot'><div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
+            f"<div class='rr-tot{' rr-tot-partial' if is_partial else ''}'>"
+            f"<div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
             "<small class='rr-secondary'>mm</small></div>"
             f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
             f"High: {_fmt_mm(total_p90)} mm</small>"
-            "<small class='rr-secondary rr-rain-desc' title='Rainfall amount categories for the median to the 90th percentile'>"
-            f"{intensity}</small>{partial}</div></button>"
+            f"{partial}</div></button>"
         )
         quantile_values = [
             ("P10", total_p10), ("P25", total_p25),
@@ -942,19 +940,18 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
         ".rr-empty .rr-fill{opacity:.25;}"
-        ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;}"
+        ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;min-width:0;height:2.8rem;border-radius:6px;background:#F2F5F7;box-shadow:inset 0 0 0 1px rgba(0,0,0,.035);}"
+        ".rr-tot-partial{height:3.3rem;}"
         ".rr-total-main{display:flex;align-items:baseline;justify-content:center;gap:2px;}"
         ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
         ".rr-tot .rr-total-main small{font-size:.56rem;font-weight:400;color:#737D88;}"
         ".rr-tot .rr-range{display:block;margin-top:3px;font-variant-numeric:tabular-nums;}"
-        ".rr-rain-desc{display:block;margin-top:3px;text-align:center;}"
         ".rr-tot .rr-part{font-size:.57rem;font-style:italic;color:#6b7280;}"
         ".rr-chip{box-sizing:border-box;width:100%;height:2.8rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
         ".rr-chip b{font-size:.98rem;font-weight:750;letter-spacing:-.015em;font-variant-numeric:tabular-nums;}"
         ".rr-prob-head{display:flex;align-items:baseline;justify-content:center;gap:2px;max-width:100%;white-space:nowrap;}"
         ".rr-chip .rr-prob-head b{font-size:.98rem;}"
         ".rr-chip .rr-percent-sign{font-size:.56rem;font-weight:400;opacity:.85;}"
-        ".rr-chip .rr-prob-head .rr-secondary{display:inline;font-size:.56rem;font-weight:400;margin-top:0;margin-left:2px;color:inherit;opacity:.85;}"
         ".rr-chip .rr-chip-threshold{font-size:.56rem;font-weight:400;margin-top:3px;color:inherit;opacity:.85;}"
         ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
@@ -990,14 +987,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
         ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
-        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:minmax(51px,auto) minmax(0,1fr) minmax(97px,auto);column-gap:8px;align-items:center;border-radius:6px;"
-        "padding:7px 12px;text-align:left;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
-        ".rr-detail-chance small{font-size:.63rem;white-space:nowrap;opacity:.86;}"
-        ".rr-detail-chance-threshold{font-weight:700;}"
-        ".rr-detail-chance-meaning{font-weight:400;opacity:.72;}"
-        ".rr-detail-chance-reading{display:flex;justify-content:flex-end;align-items:baseline;gap:8px;}"
-        ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;}"
-        ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;min-width:55px;text-align:right;}"
+        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:30% minmax(0,1fr);align-items:stretch;gap:0;overflow:hidden;border-radius:6px;background:transparent;}"
+        ".rr-detail-chance-label{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;padding:7px 7px;text-align:left;min-width:0;}"
+        ".rr-detail-chance-value{min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:7px 10px;}"
+        ".rr-detail-chance small{font-size:.63rem;line-height:1.15;}"
+        ".rr-detail-chance-threshold{font-weight:700;white-space:nowrap;flex-shrink:0;}"
+        ".rr-detail-chance-meaning{font-weight:400;opacity:.8;white-space:normal;min-width:0;}"
+        ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap;}"
+        ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;min-width:58px;text-align:right;opacity:.9;white-space:nowrap;}"
         ".rr-detail-bars{margin-top:14px;padding-top:0;border-top:1px solid #E0E8EE;}"
         ".rr-detail-bar-hours{margin-bottom:7px;}"
         ".rr-time-range{display:flex;justify-content:center;white-space:nowrap;font-size:.55rem;letter-spacing:-.035em;color:#6b7280;}"
@@ -1012,7 +1009,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-ap{font-size:.53rem;}.rr-h{font-size:.69rem;}"
         ".rr-tot .rr-total-main b{font-size:1.12rem;}"
         ".rr-chip{height:3.2rem;}.rr-chip b,.rr-chip .rr-prob-head b{font-size:1.12rem;}"
-        ".rr-chip .rr-percent-sign,.rr-chip .rr-prob-head .rr-secondary,.rr-chip .rr-chip-threshold{font-size:.68rem;}"
+        ".rr-chip .rr-percent-sign,.rr-chip .rr-chip-threshold{font-size:.68rem;}"
+        ".rr-tot{height:3.2rem;}.rr-tot-partial{height:3.65rem;}"
         ".rr-legend,.rr-detail-note{font-size:.71rem;}"
         ".rr-detail-top strong{font-size:1rem;}.rr-detail-main b{font-size:1.4rem;}"
         ".rr-detail-main small{font-size:.75rem;}"
@@ -1030,9 +1028,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail{padding:10px 7px;}"
         ".rr-quantiles{gap:2px;}"
         ".rr-detail-chances{gap:4px;}"
-        ".rr-detail-chance{padding:7px 9px;grid-template-columns:minmax(48px,auto) minmax(0,1fr) minmax(82px,auto);column-gap:5px;}"
-        ".rr-detail-chance-meaning{font-size:.58rem;}"
-        ".rr-detail-chance-reading{gap:5px;}"
+        ".rr-detail-chance{grid-template-columns:34% minmax(0,1fr);}"
+        ".rr-detail-chance-label{padding:7px 4px;gap:3px;}"
+        ".rr-detail-chance-value{padding:7px 8px;gap:6px;}"
+        ".rr-detail-chance-meaning{font-size:.56rem;}"
+        ".rr-detail-chance .rr-detail-chance-desc{min-width:47px;}"
         ".rr-time-range{display:flex;flex-direction:column;align-items:center;font-size:.57rem;line-height:1.05;}"
         ".rr-section-heading{font-size:.78rem;}.rr-section-heading small{font-size:.59rem;}"
         ".rr-quantile b{font-size:.88rem;}.rr-qmedian b{font-size:.98rem;}"
