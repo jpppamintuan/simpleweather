@@ -696,8 +696,10 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     """Selectable six-day rainfall outlook with an accessible, detailed day panel.
 
     The overview bars retain the existing median/P90 colors and absolute scale.
-    Only the detailed bars expose percentile tooltips. The day selectors use
-    separate native radio controls and labels, without JavaScript or a rerun.
+    Only the detailed bars expose percentile tooltips. The card is rendered
+    inside an isolated Streamlit iframe with explicit, toggleable day state.
+    Clicking the active day closes its details; selecting another opens it
+    immediately without a Streamlit rerun.
     """
     periods = pct_result["days"]
     step = pct_result["period_hours"]
@@ -797,11 +799,13 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
     body = ""
     details = ""
-    radio_controls = ""
+    rendered_days = 0
     for index, day in enumerate(days):
         row = rows.get(day, {})
         if not day_members.get(day):
             continue
+        index = rendered_days
+        rendered_days += 1
         # Compute total percentiles after summing each member across the day.
         members = np.sum(day_members[day], axis=0)
         total_p10, total_p25, total_med, total_p75, total_p90 = [
@@ -831,10 +835,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
                 bg, text_color = _cell_style(threshold, val)
                 probability = "—" if val is None else f"{val:.0f}%"
                 descriptor = "unavailable" if val is None else _chance_descriptor(float(val))
+                rainfall_label = {
+                    1: "very light", 5: "light", 20: "moderate",
+                    50: "heavy", 100: "intense",
+                }[threshold]
                 cards.append(
                     f"<div class='rr-detail-chance' style='{bg}color:{text_color};' "
-                    f"aria-label='Chance of at least {threshold} mm: {probability}, {descriptor}'>"
+                    f"aria-label='Chance of at least {threshold} mm: {probability}, {descriptor}; {rainfall_label} rain or more'>"
                     f"<small class='rr-detail-chance-threshold'>&ge;{threshold} mm</small>"
+                    f"<small class='rr-detail-chance-meaning'>{rainfall_label} or more</small>"
                     "<div class='rr-detail-chance-reading'>"
                     f"<b>{probability}</b><small class='rr-detail-chance-desc'>{descriptor}</small>"
                     "</div></div>"
@@ -845,17 +854,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
                 "<div class='rr-detail-chances'>" + "".join(cards) + "</div>"
             )
 
-        # Crucial: radio and label are siblings, not nested. The old nested
-        # control with a redundant `for` association could require two taps.
-        # A single native label activation now selects one and only one input.
-        radio_id = f"rr-pick-{index}"
-        checked = " checked" if index == 0 else ""
-        radio_controls += (
-            f"<input class='rr-radio' type='radio' name='rr-selected-day' id='{radio_id}'"
-            f" aria-label='Show details for {day:%A %d %B}'{checked}>"
-        )
+        # A real button, not a radio/label pair: keyboard accessible, explicit
+        # click state, and repeat clicks can collapse the expanded details.
+        initial_class = " is-selected" if index == 0 else ""
+        expanded = "true" if index == 0 else "false"
         body += (
-            f"<label class='{row_cls} rr-data rr-selectable' for='{radio_id}'>"
+            f"<button type='button' class='{row_cls} rr-data rr-selectable{initial_class}' "
+            f"data-rr-day='{index}' aria-expanded='{expanded}' "
+            f"aria-controls='rr-detail-{index}' "
+            f"aria-label='Toggle rainfall details for {day:%A %d %B}'>"
             f"<div class='rr-day'><b>{day:%a}</b>"
             f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
@@ -864,7 +871,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
             f"High: {_fmt_mm(total_p90)} mm</small>"
             "<small class='rr-secondary rr-rain-desc' title='Rainfall amount categories for the median to the 90th percentile'>"
-            f"{intensity}</small>{partial}</div></label>"
+            f"{intensity}</small>{partial}</div></button>"
         )
         quantile_values = [
             ("P10", total_p10), ("P25", total_p25),
@@ -884,7 +891,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             period_note += " Partial day: not all time bins are available."
 
         details += (
-            f"<section class='rr-detail rr-detail-{index}' aria-label='Details for {day:%A %d %B}'>"
+            f"<section id='rr-detail-{index}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
+            f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
             f"<strong>{day:%A, %d %B}</strong>"
             f"<div class='rr-detail-main'><small>Day total:</small>"
@@ -964,11 +972,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail .rr-bar:hover .rr-tip,.rr-detail .rr-bar:focus .rr-tip{display:block;}"
         ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
         ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
-        ".rr-radio{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none;}"
-        ".rr-selectable{position:relative;cursor:pointer;border-radius:6px;transition:background-color .12s ease;}"
+        ".rr-selectable{position:relative;display:grid;width:100%;box-sizing:border-box;appearance:none;-webkit-appearance:none;"
+        "cursor:pointer;color:inherit;font:inherit;text-align:left;background:transparent;border:0;"
+        "border-top:1px solid #EEF0F3;border-radius:6px;transition:background-color .12s ease;}"
         ".rr-selectable:hover{background-color:#F8FAFC;}"
-        ".rr-selectable:focus-within{outline:2px solid #159BD6;outline-offset:1px;}"
+        ".rr-selectable.is-selected{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
+        ".rr-selectable:focus-visible{outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
+        ".rr-detail.is-open{display:block;}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
         ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
@@ -984,10 +995,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
         ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
-        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:minmax(56px,1fr) minmax(0,2fr);align-items:center;border-radius:6px;"
+        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:minmax(51px,auto) minmax(0,1fr) minmax(97px,auto);column-gap:8px;align-items:center;border-radius:6px;"
         "padding:7px 12px;text-align:left;box-shadow:inset 0 0 0 1px rgba(0,0,0,.07);}"
         ".rr-detail-chance small{font-size:.63rem;white-space:nowrap;opacity:.86;}"
-        ".rr-detail-chance-reading{display:flex;justify-content:flex-end;align-items:baseline;gap:12px;}"
+        ".rr-detail-chance-meaning{font-weight:400;opacity:.72;}"
+        ".rr-detail-chance-reading{display:flex;justify-content:flex-end;align-items:baseline;gap:8px;}"
         ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;}"
         ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;min-width:55px;text-align:right;}"
         ".rr-detail-bars{margin-top:14px;padding-top:0;border-top:1px solid #E0E8EE;}"
@@ -1018,32 +1030,80 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "}"
         "@media(max-width:460px){"
         ".rr-h-chance{white-space:normal;}"
+        ".rr-selectable.is-selected .rr-day{padding-left:6px;}"
         ".rr-detail{padding:10px 7px;}"
         ".rr-quantiles{gap:2px;}"
         ".rr-detail-chances{gap:4px;}"
-        ".rr-detail-chance{padding:7px 9px;}"
+        ".rr-detail-chance{padding:7px 9px;grid-template-columns:minmax(48px,auto) minmax(0,1fr) minmax(82px,auto);column-gap:5px;}"
+        ".rr-detail-chance-meaning{font-size:.58rem;}"
+        ".rr-detail-chance-reading{gap:5px;}"
         ".rr-time-range{display:flex;flex-direction:column;align-items:center;font-size:.57rem;line-height:1.05;}"
         ".rr-section-heading{font-size:.78rem;}.rr-section-heading small{font-size:.59rem;}"
         ".rr-quantile b{font-size:.68rem;}.rr-qmedian b{font-size:.75rem;}"
         ".rr-detail-chance b{font-size:.86rem;}"
         "}"
-        + "".join(
-            (
-                f"#rr-pick-{i}:checked ~ .rr-overview label[for='rr-pick-{i}']"
-                "{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
-                f"#rr-pick-{i}:focus-visible ~ .rr-overview label[for='rr-pick-{i}']"
-                "{outline:2px solid #159BD6;outline-offset:1px;}"
-                f"#rr-pick-{i}:checked ~ .rr-details .rr-detail-{i}{{display:block;}}"
-            )
-            for i in range(len(days))
-        )
         + "</style>"
     )
-    # All controls are direct siblings of overview and detail panes, allowing
-    # ordinary CSS sibling selectors to update on the *first* native radio click.
-    return (f"{css}<div class='rr-card'>{radio_controls}"
+    # Keep all interactive DOM inside the iframe. Streamlit's markdown element
+    # can be re-rendered by React, which makes radio/label state unreliable.
+    # Explicit click handling also permits closing an already expanded day.
+    javascript = """<script>
+    (() => {
+      const card = document.querySelector('.rr-card');
+      if (!card) return;
+      const rows = Array.from(card.querySelectorAll('.rr-selectable[data-rr-day]'));
+      const panels = Array.from(card.querySelectorAll('.rr-detail'));
+      let selectedDay = rows.length ? 0 : -1;
+
+      function updateFrameHeight() {
+        window.requestAnimationFrame(() => {
+          const height = Math.ceil(Math.max(
+            document.documentElement.scrollHeight,
+            document.body.scrollHeight,
+            card.getBoundingClientRect().bottom + 2
+          ));
+          window.parent.postMessage({
+            isStreamlitMessage: true,
+            type: 'streamlit:setFrameHeight',
+            height: height
+          }, '*');
+        });
+      }
+
+      function selectDay(nextIndex) {
+        selectedDay = nextIndex;
+        rows.forEach((row, index) => {
+          const active = index === selectedDay;
+          row.classList.toggle('is-selected', active);
+          row.setAttribute('aria-expanded', String(active));
+        });
+        panels.forEach((panel, index) => {
+          panel.classList.toggle('is-open', index === selectedDay);
+        });
+        updateFrameHeight();
+      }
+
+      rows.forEach((row, index) => {
+        row.addEventListener('click', () => {
+          selectDay(selectedDay === index ? -1 : index);
+        });
+      });
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(updateFrameHeight).observe(card);
+      }
+      window.addEventListener('load', updateFrameHeight);
+      updateFrameHeight();
+    })();
+    </script>"""
+    viewport = (
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<style>html,body{margin:0;padding:0;overflow-x:hidden;}"
+        "body{min-width:0;}*{box-sizing:border-box;}</style>"
+    )
+    return (viewport + css + f"<div class='rr-card'>"
             f"<div class='rr-overview'>{head}{body}{legend}</div>"
-            f"<div class='rr-details'>{details}</div></div>")
+            f"<div class='rr-details'>{details}</div></div>" + javascript)
+
 
 
 HEAT_INDEX_CATEGORIES = [
@@ -1496,7 +1556,13 @@ with main:
                         )
                         show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
                         if show_pct_graph:
-                            st.markdown(render_rain_rows_html(pct_result, card_thr, max_days=6), unsafe_allow_html=True)
+                            rain_card_html = render_rain_rows_html(pct_result, card_thr, max_days=6)
+                            if hasattr(st, "iframe"):
+                                st.iframe(rain_card_html, height="content")
+                            else:
+                                # Streamlit <1.56: postMessage inside the card
+                                # resizes this legacy component after each tap.
+                                components.html(rain_card_html, height=1080, scrolling=False)
                         else:
                             stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
                             stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
