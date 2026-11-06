@@ -515,6 +515,262 @@ def _tooltip_html_for_window(w: dict, data: dict) -> str:
     rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
     return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
 
+def render_14day_outlook_html(result: dict, *, simple_mode: bool = False) -> str:
+    """Interactive 14-day outlook: linked probability ribbon, daily bars and rainfall fingerprints.
+
+    All views use the SAME ECMWF 24-hour 08:00-to-08:00 PHT windows.
+    Missing values stay missing; rainfall-range fingerprints require five valid,
+    monotonically nonincreasing exceedance probabilities.
+    """
+    today_ph = datetime.now(PH_TZ).date()
+    windows = [
+        w for w in result.get("windows", [])
+        if w["start_utc"].astimezone(PH_TZ).date() >= today_ph
+    ]
+    if not windows:
+        # Show the latest available 14-day period if the stored run is stale;
+        # the existing status footer and ECMWF run metadata give its age.
+        windows = result.get("windows", [])
+    windows = windows[:14]
+    records = []
+    for w in windows:
+        values = []
+        for threshold in AVAILABLE_THRESHOLDS_MM:
+            candidate = result.get("data", {}).get(threshold, {}).get(w["label"])
+            try:
+                candidate = float(candidate) if candidate is not None else None
+            except (ValueError, TypeError):
+                candidate = None
+            values.append(round(candidate, 4) if candidate is not None and math.isfinite(candidate) else None)
+        records.append({
+            "date": w["start_utc"].astimezone(PH_TZ).date().isoformat(),
+            "start": w["start_utc"].isoformat(),
+            "end": w["end_utc"].isoformat(),
+            "values": values,
+        })
+    if not records:
+        return ""
+    # Escape angle brackets in JSON so data cannot prematurely close <script>.
+    encoded = json.dumps(records, ensure_ascii=True).replace("<", "\\u003c")
+    return (_FOURTEEN_DAY_TEMPLATE
+            .replace("__RECORDS__", encoded)
+            .replace("__SIMPLE__", "true" if simple_mode else "false"))
+
+_FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Simpleweather | Rainfall Outlook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#1d2530;--muted:#687585;--muted2:#8994a1;--line:#e7ebf0;--surface:#fff;--bg:#f5f7fa;--blue:#00bfff;--shadow:0 10px 34px rgba(23,40,63,.035);--radius:20px}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Source Sans 3','Source Sans Pro',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:24px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
+@media (max-width:720px){main{padding:17px 10px 45px}.page-heading{align-items:flex-start}.page-heading h1{font-size:29px}.shell{padding:17px 12px;border-radius:18px}.part{padding:13px 10px;border-radius:13px}.top-controls{align-items:stretch}.view-tabs{width:100%}.view-tab{flex:1;font-size:12px;padding:9px 8px}.simple-toggle{margin-left:auto}.threshold-section{padding:12px 10px}.chips{gap:5px}.threshold-chip{font-size:12px;gap:4px;padding:4px 2px;min-height:37px}.threshold-chip .swatch{width:6px;height:6px}.context-line{font-size:11.5px}.bar-header{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;margin:5px 4px}.day-bar{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;padding:5px 4px;min-height:39px}.day-label{flex-wrap:wrap;column-gap:4px;row-gap:0}.day-label .weekday{font-size:12px}.day-label .date{font-size:11px}.probability{font-size:13px}.probability.simple{font-size:10px}.track{height:11px}.fingerprint{grid-template-columns:70px minmax(0,1fr) 14px;gap:8px;padding:6px 4px}.finger-track{height:17px}.five-chances{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.chance-tile .amount{font-size:10px;padding:5px}.chance-tile .value{font-size:13px;padding:7px 5px}.chance-tile .descriptor{font-size:9px}.amount-distribution{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{padding:12px 10px}.panel-head h3{font-size:15px}.panel-head .tap-hint{display:none}.demo-pill{display:none}.shell-title h2{font-size:20px}.graph-wrap svg{min-height:0}}
+@media (prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
+
+html,body{margin:0;padding:0;min-height:0;height:auto;overflow-x:hidden!important;background:#fff}
+main{padding:0!important;max-width:100%;margin:0}
+.shell{border:1px solid #e8edf2;border-radius:15px;padding:14px 12px;box-shadow:none;background:#fff}
+.shell-title{margin-bottom:8px}.shell-title h2{font-size:18px}.shell-title p{font-size:12px}
+.part{padding:13px 12px;margin-top:12px;border-radius:13px}.threshold-section{margin-bottom:10px}
+.top-controls{margin:10px 0 15px}.panel{margin-top:12px}
+.graph-scroll{overflow-x:auto;overscroll-behavior-x:contain}
+.graph-scroll svg{display:block;width:100%;min-width:545px;min-height:0;height:auto;cursor:crosshair;touch-action:pan-y}
+.day-label .today-mini{display:none}.day-label.is-today .today-mini{display:inline}
+.day-bar .probability.simple{font-size:11px;white-space:nowrap}
+.chance-rows{display:flex;flex-direction:column;gap:5px}
+.chance-row{display:flex;overflow:hidden;border-radius:9px;border:1px solid #e7ebf0;min-height:42px}
+.chance-left{width:35%;display:flex;align-items:center;gap:6px;padding:7px 9px;min-width:0}
+.chance-left strong{font-size:12px;white-space:nowrap}.chance-left span{font-size:10.5px;line-height:1.2;opacity:.75}
+.chance-right{flex:1;display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:7px 10px;min-width:0}
+.chance-right strong{font-size:15px;font-variant-numeric:tabular-nums}
+.chance-right span{min-width:60px;text-align:right;font-size:11px;opacity:.9}
+.panel-head .window{line-height:1.45}.panel-head .tap-hint{white-space:normal;text-align:right}
+.fingerprint.missing .finger-track{background:#f0f1f4;display:grid;place-items:center;color:#8793a0;font-size:11px}
+.panel[hidden], [hidden]{display:none!important}
+@media(max-width:720px){
+ .shell{padding:12px 9px;border-radius:13px}.shell-title{gap:7px}.shell-title h2{font-size:16px}
+ .shell-title p{font-size:11px}.rain-icon{width:32px;height:32px;border-radius:10px}
+ .part{padding:11px 8px}.graph-scroll svg{width:545px}
+ .chance-left{width:40%;gap:4px;padding:6px}.chance-left strong{font-size:11px}.chance-left span{font-size:10px}
+ .chance-right{gap:5px;padding:6px}.chance-right strong{font-size:14px}.chance-right span{min-width:52px;font-size:10px}
+ .probability.simple{font-size:10px!important}.bar-header,.day-bar{grid-template-columns:70px minmax(0,1fr) 82px}
+ .part-heading{align-items:start}.part-heading .kicker{font-size:10px}
+ .panel-head .tap-hint{display:none}
+}
+@media(max-width:355px){.chance-left span{font-size:9px}.bar-header,.day-bar{grid-template-columns:66px minmax(0,1fr) 82px;gap:5px}}
+</style>
+<meta name="color-scheme" content="light"></head>
+<body>
+<main>
+<div class="shell">
+    <div class="shell-title"><div><h2>Rainfall outlook</h2><p>See how the chances of different rainfall amounts change over the next two weeks.</p></div>
+      <div class="rain-icon" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.4A4.4 4.4 0 0017.7 8 6.3 6.3 0 005.6 9.6 3.6 3.6 0 006.8 17H18"/><path d="m8.2 20 1-1.6M12 21l1-1.6M16 20l1-1.6"/></svg></div>
+    </div>
+    <div class="top-controls">
+      <div class="view-tabs" role="tablist" aria-label="14-day forecast view">
+        <button class="view-tab" id="tab-chances" role="tab" aria-controls="view-chances" aria-selected="true" data-view="chances">Rain chances</button>
+        <button class="view-tab" id="tab-amounts" role="tab" aria-controls="view-amounts" aria-selected="false" data-view="amounts">Possible amounts</button>
+      </div>
+    </div>
+    <div id="view-chances" role="tabpanel" aria-labelledby="tab-chances">
+      <div class="threshold-section">
+        <div class="question">Choose the amount of rain you want to check</div>
+        <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
+        <div class="context-line"><span id="threshold-explanation">Chance of moderate rain or more</span><strong>24-hour rainfall</strong></div>
+      </div>
+      <div class="part graph-section">
+        <div class="part-heading"><div><div class="section-label">How rain chances change</div><div class="kicker">Five rainfall levels; the chosen one stands out</div></div><span class="kicker" id="graph-selected-label">Tap the graph to inspect a day</span></div>
+        <div class="graph-scroll"><svg id="trend-svg" viewBox="0 0 900 305" role="img" tabindex="0" aria-label="Interactive daily graph showing chances of different rainfall thresholds. Tap or click a date to select it."></svg></div>
+        <div class="legend" id="graph-legend"></div>
+      </div>
+      <div class="part bars-section">
+        <div class="part-heading"><div><div class="section-label">Day-by-day chances</div><div class="kicker">Tap any rainfall bar to explore that day</div></div><span id="bar-count" class="kicker">Daily outlook</span></div>
+        <div class="bar-header"><span>Day</span><span>Chance of at least the chosen amount</span><span style="text-align:right">Chance</span></div>
+        <div class="bar-day-list" id="bar-list"></div>
+      </div>
+    </div>
+    <div id="view-amounts" role="tabpanel" aria-labelledby="tab-amounts" hidden>
+      <div class="part" style="margin-top:4px">
+        <div class="part-heading"><div><div class="section-label">Possible rainfall amounts</div><div class="kicker">Each complete bar represents the different possible daily rainfall amounts</div></div></div>
+        <div class="fingerprint-list" id="fingerprint-list"></div>
+        <div class="legend-grid" id="fingerprint-legend"></div>
+        <div class="finger-tip" style="margin-top:13px">Wider color segments mean a greater chance of that rainfall range. Tap any day for details.</div>
+      </div>
+    </div>
+    <div class="panel" id="day-panel" aria-live="polite"></div>
+    <div class="exact"><details id="exact-details"><summary>See all exact probabilities</summary><div class="table-scroll" id="exact-table"></div></details></div>
+    <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
+      <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible amounts" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
+    </div>
+  </div>
+</main>
+<script>
+(() => {
+  'use strict';
+  const records = __RECORDS__;
+  const simple = __SIMPLE__;
+  const thresholds = [1,5,20,50,100];
+  const colors = ['#00BFFF','#D4B62F','#FFA500','#EF4646','#800080'];
+  const sourceColors = ['#00BFFF','#FFFF00','#FFA500','#FF0000','#800080'];
+  const amountWords = ['very light','light','moderate','heavy','intense'];
+  const ranges = ['<1 mm','1 to <5 mm','5 to <20 mm','20 to <50 mm','50 to <100 mm','100 mm or more'];
+  const rangeColors = ['#BECBD6','#72CAE7','#E9D46A','#F1AB60','#DE7771','#966EAE'];
+  const byId = id => document.getElementById(id);
+  const fmt = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
+  const fmtHour = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',hour:'numeric',hour12:true});
+  const state={view:'chances',threshold:2,day:records.length?0:null};
+  const numeric = x => x!==null && Number.isFinite(x);
+  const chanceWords = p=>!numeric(p)?'unavailable':p<5?'very low':p<35?'low':p<65?'medium':p<95?'high':'very high';
+  const pct = p=>numeric(p)?`${Math.round(p)}%`:'—';
+  function phDateKey(now){const p=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now); const find=t=>p.find(x=>x.type===t).value;return `${find('year')}-${find('month')}-${find('day')}`;}
+  const dates = records.map((r,i)=>({...r,i,startDate:new Date(r.start),endDate:new Date(r.end)}));
+  function dayName(d){return fmt.format(d.startDate);}
+  function windowName(d){return `${fmtHour.format(d.startDate).replace(' ','').toLowerCase()} ${fmt.format(d.startDate)} – ${fmtHour.format(d.endDate).replace(' ','').toLowerCase()} ${fmt.format(d.endDate)} (PHT)`;}
+  function dayLabel(d){const parts=dayName(d).split(',');const weekday=parts[0]; const rest=parts.slice(1).join(',').trim();const today=(d.date===phDateKey(new Date()));return `<span class="day-label ${today?'is-today':''}"><span class="weekday">${weekday}</span><span class="date">${rest}</span><span class="today-mini">TODAY</span></span>`;}
+  function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
+  function tint(hex,strength){return `rgb(${rgb(hex).map(v=>Math.round(255*(1-strength)+v*strength)).join(',')})`;}
+  function tier(p){return p<5?0:p<35?.05:p<65?.35:p<95?.65:1;}
+  function shade(hex,p){return !numeric(p)?'#f2f4f6':p<5?'#fff':tint(hex,tier(p));}
+  function ink(hex,p){if(!numeric(p)||p<95)return '#273747';const [r,g,b]=rgb(hex);return (.299*r+.587*g+.114*b)/255>.5?'#273747':'#fff';}
+  function bins(values){
+    if(values.some(v=>!numeric(v)))return null;
+    if(values.some((v,i)=>v<0||v>100||(i>0&&v>values[i-1]+.01)))return null;
+    return [100-values[0],values[0]-values[1],values[1]-values[2],values[2]-values[3],values[3]-values[4],values[4]].map(v=>Math.max(0,v));
+  }
+  function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
+  function controls(){
+    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${colors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="swatch"></span>${t} mm</button>`).join('');
+    byId('threshold-explanation').textContent=`Chance of ${amountWords[state.threshold]} rain or more`;
+    document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
+    byId('view-chances').hidden=state.view!=='chances';byId('view-amounts').hidden=state.view!=='amounts';
+    byId('bar-count').textContent=`${dates.length} days`;
+    resizeFrame();
+  }
+  const X=i=>48+(dates.length<=1?0:i/(dates.length-1)*606), Y=p=>217-p*1.71;
+  function pathLine(series){
+    let segments=[], points=[];
+    series.forEach((v,i)=>{if(numeric(v))points.push([X(i),Y(v)]);else if(points.length){segments.push(points);points=[];}});
+    if(points.length)segments.push(points);
+    return segments.map(points=>'M'+points.map(q=>q.map(x=>x.toFixed(1)).join(',')).join(' L')).join(' ');
+  }
+  function areaBands(upper,lower){
+    let paths=[],stack=[];
+    function flush(){if(stack.length){const upper=stack.map(p=>p[0]),lower=stack.map(p=>p[1]);paths.push('M'+upper.map(p=>p.join(',')).join(' L')+' L'+lower.reverse().map(p=>p.join(',')).join(' L')+' Z');stack=[];}}
+    upper.forEach((v,i)=>{if(numeric(v)&&numeric(lower[i]))stack.push([[X(i),Y(v)],[X(i),Y(lower[i])]]);else flush();});flush();
+    return paths;
+  }
+  function graph(){
+    let out=''; const v=thresholds.map((_,t)=>dates.map(d=>d.values[t]));
+    for(const p of [0,25,50,75,100]){out+=`<line x1="48" x2="654" y1="${Y(p)}" y2="${Y(p)}" stroke="#e7ebf0"/><text x="40" y="${Y(p)+4}" text-anchor="end" fill="#7d8b9a" font-size="12">${p}%</text>`;}
+    dates.forEach((d,i)=>{if(i%2===0||i===dates.length-1){out+=`<text x="${X(i)}" y="239" text-anchor="middle" fill="#66788a" font-size="11">${fmt.format(d.startDate).split(',')[0]} ${d.startDate.toLocaleDateString('en-GB',{timeZone:'Asia/Manila',day:'numeric'})}</text>`;}});
+    for(let t=0;t<5;t++){
+      const low=t===4?dates.map(()=>0):v[t+1];
+      areaBands(v[t],low).forEach(d=>{out+=`<path d="${d}" fill="${sourceColors[t]}" fill-opacity="${state.threshold===t?'.31':'.13'}" stroke="none"/>`;});
+    }
+    v.forEach((serie,t)=>{out+=`<path d="${pathLine(serie)}" fill="none" stroke="${colors[t]}" stroke-width="${t===state.threshold?3.2:1.35}" stroke-opacity="${t===state.threshold?1:.58}" stroke-linecap="round" stroke-linejoin="round"/>`;});
+    if(state.day!==null){const i=state.day,p=v[state.threshold][i];out+=`<line x1="${X(i)}" x2="${X(i)}" y1="42" y2="217" stroke="#92aabb" stroke-dasharray="4 4"/>`;if(numeric(p))out+=`<circle cx="${X(i)}" cy="${Y(p)}" r="5.5" fill="#fff" stroke="${colors[state.threshold]}" stroke-width="3"/>`;}
+    out+='<rect x="48" y="39" width="606" height="180" fill="transparent"/>';
+    byId('trend-svg').innerHTML=out;
+    byId('graph-legend').innerHTML=thresholds.map((t,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${sourceColors[i]};opacity:${state.threshold===i?1:.6}"></span>${t} mm</span>`).join('');
+    byId('graph-selected-label').textContent=state.day===null?'Tap the graph to inspect a day':dayName(dates[state.day]);
+  }
+  function bars(){
+    byId('bar-list').innerHTML=dates.map((d,i)=>{const p=d.values[state.threshold];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${colors[state.threshold]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
+  }
+  function fingerprints(){
+    byId('fingerprint-list').innerHTML=dates.map((d,i)=>{const b=bins(d.values);return `<button class="fingerprint ${b?'':'missing'}" type="button" data-day="${i}" aria-pressed="${state.day===i}" aria-label="${dayName(d)}. Open rainfall possibilities.">${dayLabel(d)}<span class="finger-track">${b?b.map((p,j)=>p>0?`<span class="finger-segment" style="flex:${p};background:${rangeColors[j]}" title="${ranges[j]}: ${p.toFixed(0)}%"></span>`:'').join(''):'Data unavailable'}</span><span aria-hidden="true" style="text-align:right;color:#8997a4">›</span></button>`;}).join('');
+    byId('fingerprint-legend').innerHTML=ranges.map((r,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${rangeColors[i]}"></span>${r}</span>`).join('');
+  }
+  function details(){
+    const panel=byId('day-panel');if(state.day===null){panel.hidden=true;panel.innerHTML='';resizeFrame();return;}panel.hidden=false;
+    const d=dates[state.day];let h=`<div class="panel-head"><div><h3>${d.date===phDateKey(new Date())?'TODAY / ':''}${dayName(d)}</h3><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
+    h+='<div class="smallheading">Chances of rain</div><div class="chance-rows">';
+    thresholds.forEach((t,i)=>{const p=d.values[i];const s=shade(sourceColors[i],p),lc=tint(sourceColors[i],.20),tc=ink(sourceColors[i],p);h+=`<div class="chance-row"><div class="chance-left" style="background:${lc}"><strong>≥${t} mm</strong><span>${amountWords[i]} or more</span></div><div class="chance-right" style="background:${s};color:${tc}"><strong>${pct(p)}</strong><span>${numeric(p)?chanceWords(p):'no data'}</span></div></div>`;});
+    h+='</div>';
+    if(state.view==='amounts'){
+      h+='<div class="smallheading">Possible 24-hour rainfall totals</div><div class="amount-distribution">';
+      const b=bins(d.values);
+      h+=b?b.map((p,i)=>`<div class="amount-small"><div class="low"><i class="amount-swatch" style="background:${rangeColors[i]}"></i>${ranges[i]}</div><div class="big">${Math.round(p)}%</div></div>`).join(''):'<div class="empty">The complete probability distribution is unavailable for this day.</div>';
+      h+='</div>';
+    }
+    panel.innerHTML=h;resizeFrame();
+  }
+  function exact(){
+    const th=thresholds.map((t,i)=>`<th style="background:${tint(sourceColors[i],.20)}">≥${t} mm</th>`).join('');
+    const rows=dates.map(d=>`<tr><td>${dayName(d)}</td>${d.values.map((p,i)=>`<td style="background:${shade(sourceColors[i],p)};color:${ink(sourceColors[i],p)}">${pct(p)}</td>`).join('')}</tr>`).join('');
+    byId('exact-table').innerHTML=`<table><thead><tr><th>Day</th>${th}</tr></thead><tbody>${rows}</tbody></table>`;
+  }
+  function resizeFrame(){
+    requestAnimationFrame(()=>{
+      const card=document.querySelector('.shell');if(!card)return;
+      const h=Math.max(1,Math.ceil(card.getBoundingClientRect().bottom+3));
+      try{const frame=window.frameElement;if(frame&&frame.style){frame.style.setProperty('height',`${h}px`,'important');frame.style.setProperty('min-height','0px','important');}}catch(e){}
+      window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*');
+    });
+  }
+  function redrawSelection(){graph();bars();fingerprints();details();resizeFrame();}
+  function redraw(){controls();redrawSelection();}
+  byId('threshold-chips').addEventListener('click',e=>{const b=e.target.closest('button[data-threshold]');if(!b)return;state.threshold=Number(b.dataset.threshold);redraw();});
+  byId('bar-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
+  byId('fingerprint-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
+  document.querySelectorAll('.view-tab').forEach(b=>b.addEventListener('click',()=>{state.view=b.dataset.view;redraw();}));
+  const svg=byId('trend-svg');svg.setAttribute('viewBox','0 0 700 256');
+  svg.addEventListener('click',e=>{const m=svg.getScreenCTM();if(!m)return;const point=svg.createSVGPoint();point.x=e.clientX;point.y=e.clientY;const p=point.matrixTransform(m.inverse());if(p.x<44||p.x>660||p.y<35||p.y>224)return;const n=Math.max(1,dates.length-1),i=Math.max(0,Math.min(dates.length-1,Math.round((p.x-48)/606*n)));setDay(i);});
+  svg.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();state.day=Math.max(0,Math.min(dates.length-1,(state.day===null?0:state.day)+(e.key==='ArrowRight'?1:-1)));redrawSelection();}else if(e.key==='Enter'||e.key===' '){e.preventDefault();state.day=state.day===null?0:null;redrawSelection();}});
+  byId('exact-details').addEventListener('toggle',resizeFrame);
+  if(typeof ResizeObserver!=='undefined')new ResizeObserver(resizeFrame).observe(document.querySelector('.shell'));
+  window.addEventListener('resize',resizeFrame);
+  if(document.fonts?.ready)document.fonts.ready.then(resizeFrame);
+  window.addEventListener('load',resizeFrame);
+  exact();redraw();resizeFrame();
+})();
+</script></body></html>'''
+
 def render_ribbon_chart_html(result: dict) -> str:
     """Nested-area exceedance ribbon with persistent selected-day details."""
     windows = result["windows"]
@@ -1741,14 +1997,24 @@ with main:
                     if not thr_result["windows"]:
                         st.warning("The extended rain chances are temporarily unavailable.")
                     else:
-                        num_days_shown = len(thr_result["windows"])
+                        today_ph = datetime.now(PH_TZ).date()
+                        upcoming_windows = [
+                            w for w in thr_result["windows"]
+                            if w["start_utc"].astimezone(PH_TZ).date() >= today_ph
+                        ]
+                        num_days_shown = min(14, len(upcoming_windows or thr_result["windows"]))
                         st.subheader(f"{num_days_shown}-day rain chances for {rain_name}")
                         st.caption("Chance of getting at least each rainfall amount during a day.")
-                        show_graph = st.toggle("Show as graph", key="thr_show_graph")
-                        if show_graph:
-                            components.html(render_ribbon_chart_html(thr_result), height=650)
+                        outlook_html = render_14day_outlook_html(
+                            thr_result,
+                            simple_mode=st.session_state.get("rain_simple_mode", False),
+                        )
+                        if hasattr(st, "iframe"):
+                            st.iframe(outlook_html, height="content")
                         else:
-                            st.markdown(render_table_html(thr_result), unsafe_allow_html=True)
+                            # The embedded outlook reports its height after each
+                            # tab switch, day selection and details expansion.
+                            components.html(outlook_html, height=980, scrolling=False)
         else:
             st.info("Choose a location and click **Get rainfall forecast**.")
 
@@ -1891,6 +2157,16 @@ if view_mode == "Rainfall Forecast":
                 "the higher thresholds qualify. Simple mode replaces these numbers with "
                 "plain-language probability and rainfall-intensity categories; the day-total "
                 "category spans the ensemble median through P90."
+            )
+            st.markdown(
+                "**Long-range outlook.** Rain chances is a linked view of the same five "
+                "exceedance probabilities: the ribbon graph and horizontal daily bars "
+                "both use the chosen rainfall threshold. Possible amounts converts "
+                "those nested chances into six exclusive 24-hour rainfall ranges "
+                "that add to 100%. Missing or inconsistent probabilities are not "
+                "silently treated as zero. The outlook uses up to 14 upcoming "
+                "8:00 AM-to-8:00 AM forecast windows; actual days depend on which "
+                "forecast periods are available."
             )
             st.markdown(
                 "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
