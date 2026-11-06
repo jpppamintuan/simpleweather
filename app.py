@@ -709,10 +709,16 @@ main{padding:0!important;max-width:100%;margin:0}
 .threshold-chip,.outlook-simple .threshold-chip{height:96px;min-height:96px;max-height:96px}
 .outlook-simple .threshold-chip .chip-meaning{font-size:9px}
 }
-/* Quick fade transitions add polish without moving forecast values. */
+/* Minimal, monochrome icons; keep text only as accessible labels/tooltips. */
+.subview-tab{display:inline-flex;align-items:center;justify-content:center;width:40px;height:34px;padding:0}
+.subview-tab svg{display:block;width:19px;height:19px;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;fill:none}
+@media(max-width:720px){.subview-tab{width:38px;height:34px;padding:0}}
+/* All forecast appearance changes fade in AND out over 200 ms. */
 @keyframes forecastFadeIn{from{opacity:0}to{opacity:1}}
-.panel:not([hidden]),.part:not([hidden]),[role="tabpanel"]:not([hidden]){animation:forecastFadeIn .1s ease-out both}
-@media(prefers-reduced-motion:reduce){.panel,.part,[role="tabpanel"]{animation:none!important}}
+@keyframes forecastFadeOut{from{opacity:1}to{opacity:0}}
+.panel:not([hidden]),.part:not([hidden]),[role="tabpanel"]:not([hidden]),.threshold-section:not([hidden]){animation:forecastFadeIn .2s ease-out both}
+.is-fading-out{animation:forecastFadeOut .2s ease-in both!important;pointer-events:none}
+@media(prefers-reduced-motion:reduce){.panel,.part,[role="tabpanel"],.threshold-section,.is-fading-out{animation:none!important}}
 /* Inline day details use the same panel without leaving an empty slot below. */
 .inline-day-panel{width:100%;margin:5px 0 10px;border-radius:10px}
 /* Final consistency adjustments with the six-day card. */
@@ -757,9 +763,9 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       <div class="subview-switch" role="group" aria-label="Explore chance of rain">
         <span class="subview-title">Explore chance of rain</span>
         <div class="subview-tabs">
-          <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true">Graph</button>
-          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false">Bars</button>
-          <button type="button" class="subview-tab" data-subview="matrix" aria-pressed="false">Matrix</button>
+          <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true" aria-label="Graph" title="Graph"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 20V4M3 20h18M5 16l5-6 4 3 6-8"/></svg></button>
+          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false" aria-label="Bars" title="Bars"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg></button>
+          <button type="button" class="subview-tab" data-subview="matrix" aria-pressed="false" aria-label="Matrix" title="Matrix"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
         </div>
       </div>
       <div class="threshold-section" id="outlook-thresholds">
@@ -790,7 +796,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       </div>
     </div>
     <div id="day-panel-anchor"></div>
-    <div class="panel" id="day-panel" aria-live="polite"></div>
+    <div class="panel" id="day-panel" aria-live="polite" hidden></div>
     <div class="footnote"><span>Each day covers 8 AM–8 AM Philippine time.</span>
       <details><summary>How to read this forecast</summary><div style="padding-top:6px">Graph and Bars show the chance of reaching at least the chosen rainfall amount. Possible totals shows the chance of each separate rainfall range. Tap a day to see the full breakdown. Missing data is not the same as 0%. Rainfall chances do not directly measure flood risk.</div></details>
     </div>
@@ -816,6 +822,26 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   const byId = id => document.getElementById(id);
   // Keep this reference even when a row list is rebuilt with innerHTML.
   const dayPanel = byId('day-panel');
+  const fadeMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
+  const fadeTimers = new WeakMap();
+  function setVisible(el, visible){
+    const pending = fadeTimers.get(el);
+    if(pending !== undefined){window.clearTimeout(pending);fadeTimers.delete(el);}
+    el.classList.remove('is-fading-out');
+    if(visible){
+      if(el.hidden) el.hidden = false;
+    } else if(!el.hidden){
+      if(!fadeMs){el.hidden = true;return;}
+      el.classList.add('is-fading-out');
+      const timer = window.setTimeout(()=>{
+        el.hidden = true;
+        el.classList.remove('is-fading-out');
+        fadeTimers.delete(el);
+        resizeFrame();
+      }, fadeMs);
+      fadeTimers.set(el, timer);
+    }
+  }
   const fmt = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
   const fmtFull = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'long',day:'numeric',month:'long'});
   const fmtWeek = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short'});
@@ -849,10 +875,12 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     choices.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.threshold)===state.threshold)));
     document.body.classList.toggle('outlook-simple',simple);
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
-    byId('view-chances').hidden=state.view!=='chances';byId('view-amounts').hidden=state.view!=='amounts';
-    byId('outlook-graph').hidden=state.subview!=='graph';byId('outlook-bars').hidden=state.subview!=='bars';
-    byId('outlook-matrix').hidden=state.subview!=='matrix';
-    byId('outlook-thresholds').hidden=state.subview==='matrix';
+    setVisible(byId('view-chances'),state.view==='chances');
+    setVisible(byId('view-amounts'),state.view==='amounts');
+    setVisible(byId('outlook-graph'),state.subview==='graph');
+    setVisible(byId('outlook-bars'),state.subview==='bars');
+    setVisible(byId('outlook-matrix'),state.subview==='matrix');
+    setVisible(byId('outlook-thresholds'),state.subview!=='matrix');
     document.querySelectorAll('.subview-tab').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.subview===state.subview)));
     byId('bar-count').textContent=`${dates.length} days`;
     resizeFrame();
@@ -951,10 +979,10 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     // directly below the selected day, preserving the same detail content.
     byId('day-panel-anchor').after(panel);
     if(state.day===null){
-      panel.hidden=true;panel.innerHTML='';panel.classList.remove('inline-day-panel');
+      setVisible(panel,false);
       resizeFrame();return;
     }
-    panel.hidden=false;
+    setVisible(panel,true);
     const d=dates[state.day];const today=d.date===phDateKey(new Date());
     let h=`<div class="panel-head"><div><div class="panel-day"><span class="today-mini ${today?'show-today':''}">TODAY</span><h3>${dayName(d)}</h3></div><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
     if(state.view==='amounts'){
@@ -1550,9 +1578,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-selectable.is-selected{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
         ".rr-selectable:focus-visible{outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
-        ".rr-detail.is-open{display:block;animation:rrFadeIn .1s ease-out both;}"
+        ".rr-detail.is-open{display:block;animation:rrFadeIn .2s ease-out both;}"
+        ".rr-detail.is-closing{display:block;animation:rrFadeOut .2s ease-in both!important;pointer-events:none;}"
         "@keyframes rrFadeIn{from{opacity:0}to{opacity:1}}"
-        "@media(prefers-reduced-motion:reduce){.rr-detail.is-open{animation:none!important;}}"
+        "@keyframes rrFadeOut{from{opacity:1}to{opacity:0}}"
+        "@media(prefers-reduced-motion:reduce){.rr-detail.is-open,.rr-detail.is-closing{animation:none!important;}}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
         ".rr-detail-main{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:2px;white-space:nowrap;text-align:right;}"
@@ -1665,6 +1695,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       const rows = Array.from(card.querySelectorAll('.rr-selectable[data-rr-day]'));
       const panels = Array.from(card.querySelectorAll('.rr-detail'));
       let selectedDay = rows.length ? 0 : -1;
+      const fadeMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
+      const exitTimers = new WeakMap();
       const formatPHTDate = (at) => {
         const parts = new Intl.DateTimeFormat('en-US', {
           timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'
@@ -1737,8 +1769,28 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         });
         panels.forEach((panel, index) => {
           const active = index === selectedDay;
-          panel.classList.toggle('is-open', active);
-          if (active && rows[index]) rows[index].insertAdjacentElement('afterend', panel);
+          const pending = exitTimers.get(panel);
+          if (pending !== undefined) {
+            window.clearTimeout(pending);
+            exitTimers.delete(panel);
+          }
+          panel.classList.remove('is-closing');
+          if (active) {
+            panel.classList.add('is-open');
+            if (rows[index]) rows[index].insertAdjacentElement('afterend', panel);
+          } else if (panel.classList.contains('is-open')) {
+            if (fadeMs === 0) {
+              panel.classList.remove('is-open');
+            } else {
+              panel.classList.add('is-closing');
+              const timer = window.setTimeout(() => {
+                panel.classList.remove('is-open', 'is-closing');
+                exitTimers.delete(panel);
+                updateFrameHeight();
+              }, fadeMs);
+              exitTimers.set(panel, timer);
+            }
+          }
         });
         updateFrameHeight();
       }
@@ -1854,8 +1906,9 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-root{border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;color:#111}
     .rr-root .rr-variant{padding:0;border:0;border-radius:0;background:transparent}
     .rr-variant[hidden]{display:none!important}
-    .rr-variant:not([hidden]){animation:rrFadeIn .1s ease-out both}
-    @media(prefers-reduced-motion:reduce){.rr-variant:not([hidden]){animation:none!important}}
+    .rr-variant:not([hidden]){animation:rrFadeIn .2s ease-out both}
+    .rr-variant.is-closing{animation:rrFadeOut .2s ease-in both!important;pointer-events:none}
+    @media(prefers-reduced-motion:reduce){.rr-variant:not([hidden]),.rr-variant.is-closing{animation:none!important}}
     .rr-card-controls{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:14px 0 12px}
     .rr-card-title{font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;color:#1d2530;margin:0}
     .rr-card-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px}
@@ -1899,6 +1952,8 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
       const available=Array.from(root.querySelectorAll('.rr-variant'));
       const mode=root.querySelector('#rr-mode-toggle');
       const buttons=Array.from(root.querySelectorAll('[data-rr-period]'));
+      const fadeMs=window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:200;
+      const exitTimers=new WeakMap();
       function resize(){requestAnimationFrame(()=>{
         const h=Math.ceil(root.getBoundingClientRect().bottom+2);
         try {const frame=window.frameElement;if(frame){frame.style.setProperty('height',h+'px','important');frame.style.setProperty('min-height','0px','important');}} catch(e){}
@@ -1909,7 +1964,23 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
         const simple=mode.checked?'simple':'standard';
         let chosen=available.find(v=>v.dataset.rrVariant===period+'-'+simple);
         if(!chosen)chosen=available.find(v=>v.dataset.rrVariant.endsWith('-'+simple))||available[0];
-        available.forEach(v=>{v.hidden=v!==chosen;});
+        available.forEach(v=>{
+          const pending=exitTimers.get(v);
+          if(pending!==undefined){window.clearTimeout(pending);exitTimers.delete(v);}
+          v.classList.remove('is-closing');
+          if(v===chosen){v.hidden=false;}
+          else if(!v.hidden){
+            if(fadeMs===0){v.hidden=true;}
+            else{
+              v.classList.add('is-closing');
+              const timer=window.setTimeout(()=>{
+                v.hidden=true;v.classList.remove('is-closing');
+                exitTimers.delete(v);resize();
+              },fadeMs);
+              exitTimers.set(v,timer);
+            }
+          }
+        });
         buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.rrPeriod===chosen.dataset.rrVariant.split('-')[0])));
         root.dataset.rainSimple=String(mode.checked);
         resize();
