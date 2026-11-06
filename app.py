@@ -31,9 +31,23 @@ from ecmwf_client import (
 import github_data_source
 st.set_page_config(page_title="Simpleweather", page_icon="🌧️", layout="wide")
 st.markdown(
-    '<link href="https://fonts.googleapis.com/css2?'
-    "family=Source+Sans+3:wght@400;600;700;800&display=swap\" "
-    'rel="stylesheet">',
+    """
+    <style>
+      :root {
+        --simpleweather-font: -apple-system, BlinkMacSystemFont,
+          "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+      }
+      /* Streamlit's main page and its native headers and form controls. */
+      html, body, .stApp, [data-testid="stAppViewContainer"],
+      [data-testid="stAppViewContainer"] :is(h1, h2, h3, h4, h5, h6, p, label,
+          button, input, select, textarea),
+      [data-testid="stWidgetLabel"], [data-testid="stWidgetLabel"] *,
+      [data-testid="stSidebar"] :is(h1, h2, h3, h4, h5, h6, p, label,
+          button, input, select, textarea) {
+        font-family: var(--simpleweather-font) !important;
+      }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 st.title("Simpleweather")
@@ -439,7 +453,7 @@ def _relative_luminance(r: int, g: int, b: int) -> float:
 BASE_TEXT = "#111111"
 CARD_BG = "#ffffff"
 BORDER = "rgba(0,0,0,0.12)"
-FONT_STACK = "'Source Sans 3', 'Source Sans Pro', -apple-system, sans-serif"
+FONT_STACK = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif"
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
     return (255, 255, 255)
@@ -570,12 +584,12 @@ _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
 <title>Simpleweather | Rainfall Outlook</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
+
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
 <style>
 :root{--ink:#1d2530;--muted:#687585;--muted2:#8994a1;--line:#e7ebf0;--surface:#fff;--bg:#f5f7fa;--blue:#00bfff;--shadow:0 10px 34px rgba(23,40,63,.035);--radius:20px}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Source Sans 3','Source Sans Pro',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:14px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',system-ui,sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:14px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
 @media (max-width:720px){main{padding:17px 10px 45px}.page-heading{align-items:flex-start}.page-heading h1{font-size:29px}.shell{padding:17px 12px;border-radius:18px}.part{padding:13px 10px;border-radius:13px}.top-controls{align-items:stretch}.view-tabs{width:100%}.view-tab{flex:1;font-size:12px;padding:9px 8px}.simple-toggle{margin-left:auto}.threshold-section{padding:12px 10px}.chips{gap:5px}.threshold-chip{font-size:12px;gap:4px;padding:4px 2px;min-height:37px}.threshold-chip .swatch{width:6px;height:6px}.context-line{font-size:11.5px}.bar-header{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;margin:5px 4px}.day-bar{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;padding:5px 4px;min-height:39px}.day-label{flex-wrap:wrap;column-gap:4px;row-gap:0}.day-label .weekday{font-size:12px}.day-label .date{font-size:11px}.probability{font-size:13px}.probability.simple{font-size:10px}.track{height:11px}.fingerprint{grid-template-columns:70px minmax(0,1fr) 14px;gap:8px;padding:6px 4px}.finger-track{height:17px}.five-chances{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.chance-tile .amount{font-size:10px;padding:5px}.chance-tile .value{font-size:13px;padding:7px 5px}.chance-tile .descriptor{font-size:9px}.amount-distribution{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{padding:12px 10px}.panel-head h3{font-size:15px}.panel-head .tap-hint{display:none}.demo-pill{display:none}.shell-title h2{font-size:20px}.graph-wrap svg{min-height:0}}
 @media (prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
 
@@ -712,6 +726,12 @@ main{border-radius:14px;overflow:hidden}
  .chip-meaning-text{gap:2px}
 }
 @media(max-width:355px){.threshold-section{padding-left:7px;padding-right:7px}.chips{gap:3px}.outlook-simple .threshold-chip .chip-meaning{font-size:9.3px;letter-spacing:-.04em}}
+/* Streamlit handles the two-column layout. Remove the legacy standalone
+   14-day page gutters so both embedded card borders start at the same Y. */
+html,body{margin:0!important;padding:0!important;overflow-x:hidden}
+main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:0}
+.shell{margin:0;padding-top:13px}
+@media(max-width:720px){.shell{padding-top:10px}}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -954,7 +974,7 @@ def render_ribbon_chart_html(result: dict) -> str:
     datasets_json = json.dumps(datasets)
     day_details_json = json.dumps(day_detail_html_by_day)
     return f"""
-    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+
     <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
     <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:300px;">
@@ -1163,7 +1183,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     today_ph = datetime.now(PH_TZ).date()
     days = [d for d in sorted(set(rows) | set(day_members)) if d >= today_ph][:max_days]
     if not days:
-        return "<div style='padding:14px;font-family:Source Sans 3,sans-serif'>No upcoming daily rainfall forecast is available. Try refreshing the data.</div>"
+        return f"<div style='padding:14px;font-family:{FONT_STACK}'>No upcoming daily rainfall forecast is available. Try refreshing the data.</div>"
 
     # Threshold forecasts cover 8am–8am; rainfall totals cover 2am–2am.
     chance_data, chance_label = None, {}
@@ -1691,7 +1711,6 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     </script>"""
     viewport = (
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        "<link href='https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap' rel='stylesheet'>"
         "<style>html,body{margin:0;padding:0;min-height:0;height:auto;overflow-x:hidden;}"
         "body{min-width:0;}*{box-sizing:border-box;}</style>"
     )
@@ -1914,7 +1933,7 @@ def render_temperature_chart_html(
     category_lines_json = json.dumps(category_lines_for_labels)
     category_full_labels_json = json.dumps(category_full_labels)
     return f"""
-    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700;800&display=swap" rel="stylesheet">
+
     <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
     <div style="background-color:#ffffff;padding:8px;">
       <div style="position:relative;width:100%;height:320px;">
@@ -2156,6 +2175,71 @@ def render_status_footer() -> None:
     )
 
 location_name, lat, lon, true_lat, true_lon = location_picker("shared")
+
+# One request obtains both forecast types for the chosen location. Changing
+# between the rainfall and temperature views only changes the presentation.
+forecast_clicked = st.button("Get forecast", type="primary", key="forecast_button")
+if forecast_clicked:
+    request_started = time.perf_counter()
+    st.session_state.pop("last_rain", None)
+    for key in (
+        "last_temp_result", "last_temp_location_name", "last_temp_true",
+        "last_temp_was_cached", "last_temp_elapsed",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.pop("last_forecast_elapsed", None)
+
+    thr_out = pct_out = temp_out = None
+    try:
+        thr_out = get_forecast_with_progress(lat, lon, THRESHOLD_LEAD_DAYS)
+    except Exception as exc:
+        st.error(f"Rainfall chances are unavailable: {type(exc).__name__}: {exc}")
+        with st.expander("Rainfall chances: error details"):
+            st.exception(exc)
+    try:
+        pct_out = get_percentile_raw_with_progress(lat, lon, PERCENTILE_MAX_LEAD_HOURS)
+    except Exception as exc:
+        st.error(f"Rainfall amounts are unavailable: {type(exc).__name__}: {exc}")
+        with st.expander("Rainfall amounts: error details"):
+            st.exception(exc)
+    try:
+        temp_out = get_temperature_percentiles_with_progress(lat, lon, PERCENTILE_MAX_LEAD_HOURS)
+    except Exception as exc:
+        st.error(f"Temperature forecast is unavailable: {type(exc).__name__}: {exc}")
+        with st.expander("Temperature forecast: error details"):
+            st.exception(exc)
+
+    pct_raw_new, pct_cached_new = pct_out if pct_out else (None, False)
+    if thr_out is not None or pct_raw_new is not None:
+        st.session_state["last_rain"] = {
+            "location_name": location_name,
+            "true": (true_lat, true_lon),
+            "thr": thr_out[0] if thr_out else None,
+            "thr_cached": thr_out[1] if thr_out else True,
+            "pct_raw": pct_raw_new,
+            "pct_cached": pct_cached_new,
+        }
+    else:
+        st.warning("Rainfall forecasts aren't available for this location right now.")
+
+    if temp_out is not None and temp_out[0] is not None:
+        temp_result, temp_was_cached = temp_out
+        st.session_state["last_temp_result"] = temp_result
+        st.session_state["last_temp_location_name"] = location_name
+        st.session_state["last_temp_true"] = (true_lat, true_lon)
+        st.session_state["last_temp_was_cached"] = temp_was_cached
+    else:
+        st.warning("Temperature forecast data isn't available for this location right now.")
+
+    st.session_state["last_forecast_elapsed"] = time.perf_counter() - request_started
+    # Only label the complete unified request "from cache" when all three
+    # sources were available and served from cache.
+    st.session_state["last_forecast_cached"] = all(
+        entry is not None and entry[0] is not None and entry[1]
+        for entry in (thr_out, pct_out, temp_out)
+    )
+    st.session_state["last_forecast_location"] = location_name
+
 st.divider()
 if "view_mode" not in st.session_state:
     st.session_state["view_mode"] = "Rainfall Forecast"
@@ -2178,53 +2262,17 @@ with main:
             ".st-key-rain_split [data-testid='stColumn'],.st-key-rain_split [data-testid='column']"
             "{width:100% !important;flex:1 1 auto !important;min-width:0 !important;}"
             "}"
-            "@media (orientation: landscape){.st-key-thr_divider{display:none;}}"
             "</style>",
             unsafe_allow_html=True,
         )
         lead_days = THRESHOLD_LEAD_DAYS
         pct_lead_hours = PERCENTILE_MAX_LEAD_HOURS
-        rain_clicked = st.button("Get rainfall forecast", type="primary", key="rain_button")
-        rain_elapsed_placeholder = st.empty()
-        if rain_clicked:
-            rain_started_at = time.time()
-            thr_out = None
-            pct_out = None
-            try:
-                thr_out = get_forecast_with_progress(lat, lon, lead_days)
-            except Exception as e:
-                st.error(f"Failed to fetch threshold probabilities: {type(e).__name__}: {e}")
-                with st.expander("Full error details (threshold)"):
-                    st.exception(e)
-            try:
-                pct_out = get_percentile_raw_with_progress(lat, lon, pct_lead_hours)
-            except Exception as e:
-                st.error(f"Failed to read rainfall percentiles: {type(e).__name__}: {e}")
-                with st.expander("Full error details (percentile)"):
-                    st.exception(e)
-            pct_raw_new, pct_cached_new = pct_out if pct_out else (None, False)
-            if thr_out is None and pct_raw_new is None:
-                st.error("Rainfall data isn't available right now -- please try again shortly.")
-                st.stop()
-            st.session_state["last_rain"] = {
-                "location_name": location_name,
-                "true": (true_lat, true_lon),
-                "thr": thr_out[0] if thr_out else None,
-                "thr_cached": thr_out[1] if thr_out else True,
-                "pct_raw": pct_raw_new,
-                "pct_cached": pct_cached_new,
-                "elapsed": time.time() - rain_started_at,
-            }
         if "last_rain" in st.session_state:
             rain = st.session_state["last_rain"]
             rain_name = rain["location_name"]
             rain_true = rain["true"]
             thr_result = rain["thr"]
             pct_raw_result = rain["pct_raw"]
-            all_cached = (thr_result is None or rain["thr_cached"]) and (pct_raw_result is None or rain["pct_cached"])
-            rain_elapsed_placeholder.caption(
-                f"⏱️ Loaded in {rain['elapsed']:.1f}s" + (" (from cache)" if all_cached else "")
-            )
             card_thr = thr_result if (thr_result is not None and thr_result["windows"]) else None
             with st.container(key="rain_split"):
                 left_col, right_col = st.columns([1, 1], gap="large")
@@ -2253,8 +2301,6 @@ with main:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
                     model_label = f"ECMWF ENS {RESOLUTION_LABELS.get(resolution, resolution)}"
-                    with st.container(key="thr_divider"):
-                        st.divider()
                     if not thr_result["windows"]:
                         st.warning("The extended rain chances are temporarily unavailable.")
                     else:
@@ -2272,7 +2318,7 @@ with main:
                             # tab switch, day selection and details expansion.
                             components.html(outlook_html, height=980, scrolling=False)
         else:
-            st.info("Choose a location and click **Get rainfall forecast**.")
+            st.info("Choose a location and click **Get forecast**.")
 
     elif view_mode == "Temperature Forecast":
         st.caption(
@@ -2282,33 +2328,9 @@ with main:
         )
         temp_location_name, temp_lat, temp_lon = location_name, lat, lon
         temp_lead_hours = PERCENTILE_MAX_LEAD_HOURS
-        temp_clicked = st.button("Get temperature forecast", key="temp_button")
-        temp_elapsed_placeholder = st.empty()
-        if temp_clicked:
-            temp_request_started_at = time.time()
-            try:
-                temp_result, temp_was_cached = get_temperature_percentiles_with_progress(
-                    temp_lat, temp_lon, temp_lead_hours
-                )
-            except Exception as e:
-                st.error(f"Failed to read temperature forecast: {type(e).__name__}: {e}")
-                with st.expander("Full error details"):
-                    st.exception(e)
-                st.stop()
-            temp_elapsed = time.time() - temp_request_started_at
-            st.session_state["last_temp_result"] = temp_result
-            st.session_state["last_temp_location_name"] = temp_location_name
-            st.session_state["last_temp_true"] = (true_lat, true_lon)
-            st.session_state["last_temp_was_cached"] = temp_was_cached
-            st.session_state["last_temp_elapsed"] = temp_elapsed
         if "last_temp_result" in st.session_state:
             temp_result = st.session_state["last_temp_result"]
             temp_location_name = st.session_state["last_temp_location_name"]
-            temp_was_cached = st.session_state["last_temp_was_cached"]
-            temp_elapsed = st.session_state["last_temp_elapsed"]
-            temp_elapsed_placeholder.caption(
-                f"⏱️ Loaded in {temp_elapsed:.1f}s" + (" (from cache)" if temp_was_cached else "")
-            )
             temp_steps = temp_result["steps"]
             if not temp_steps:
                 st.warning("No data available for this forecast range.")
@@ -2370,9 +2392,17 @@ with main:
             st.caption(_coords_caption(temp_location_name, *st.session_state.get("last_temp_true", (true_lat, true_lon)), temp_result))
         else:
             st.info(
-                "Choose a location and click **Get temperature forecast** to see temperature "
+                "Choose a location and click **Get forecast** to see temperature "
                 "and heat index percentiles."
             )
+
+
+# Keep load timing beneath the displayed forecasts, not near the fetch button.
+if st.session_state.get("last_forecast_elapsed") is not None:
+    st.caption(
+        f"⏱️ Loaded in {st.session_state['last_forecast_elapsed']:.1f}s"
+        + (" (from cache)" if st.session_state.get("last_forecast_cached") else "")
+    )
 
 # Keep technical methodology and exact locations in the rainfall page footnote.
 if view_mode == "Rainfall Forecast":
