@@ -818,7 +818,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     # Full ranges above the expanded bars, with a line break on narrow screens.
     detail_slot_headers = "".join(
         "<div class='rr-slot'><span class='rr-time-range'>"
-        f"<span class='rr-now-tag'>NOW</span><span>{_tip_hour_label(h)}–</span><span>{_tip_hour_label(h + step)}</span>"
+        f"<span class='rr-now-tag'>NOW:</span><span>{_tip_hour_label(h)}–</span><span>{_tip_hour_label(h + step)}</span>"
         "</span></div>"
         for h in slot_hours
     )
@@ -940,8 +940,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         }
         quantiles = "".join(
             f"<div class='rr-quantile{' rr-qmedian' if name == 'Median' else ''}'>"
+            "<div class='rr-quantile-caption'>"
             f"<small class='rr-quantile-name'>{name}</small>"
-            f"<small class='rr-quantile-help'><i>({quantile_meanings[name]})</i></small>"
+            f"<small class='rr-quantile-help'><i>({quantile_meanings[name]})</i></small></div>"
             f"<b>{_fmt_mm(amount)} <em>mm</em></b>"
             f"<small class='rr-quantile-desc'>{_rain_amount_descriptor(amount)}</small></div>"
             for name, amount in quantile_values
@@ -982,7 +983,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f".rr-card{{container-type:inline-size;background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-card button,.rr-card .rr-tip{{font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
-        f".rr-row.rr-c{{grid-template-columns:2.3rem 4.45rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.6rem;column-gap:6px;}}"
+        f".rr-row.rr-c{{grid-template-columns:2.3rem 5.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.85rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
@@ -1060,7 +1061,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f".rr-detail-bar-values .rr-bar{{height:70px;max-width:{detail_bar_max_px}px;}}"
         ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:9px;line-height:1.35;}"
         "@container (min-width:430px){"
-        ".rr-row.rr-c{grid-template-columns:2.8rem 5.25rem minmax(0,170px) 5.35rem;column-gap:8px;}"
+        ".rr-row.rr-c{grid-template-columns:2.8rem 6.4rem minmax(0,170px) 6.4rem;column-gap:8px;}"
         ".rr-row:not(.rr-c){grid-template-columns:3.1rem minmax(0,170px) 4.4rem;}"
         ".rr-day b{font-size:.98rem;}"
         ".rr-secondary,.rr-tot .rr-total-main small,.rr-chip .rr-secondary{font-size:.68rem;}"
@@ -1101,24 +1102,25 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-today-tag{display:none;font-size:.56rem;font-weight:400;color:#737D88;line-height:1.15;letter-spacing:.025em;}"
         ".rr-selectable.rr-today .rr-today-tag,.rr-detail.rr-today .rr-today-tag{display:block;}"
         ".rr-detail-date{display:flex;flex-direction:column;gap:2px;}"
-        ".rr-now-tag{display:none;color:#087DB4;font-weight:800;font-size:.57rem;letter-spacing:.02em;}"
+        ".rr-now-tag{display:none;color:#087DB4;font-weight:800;font-size:.57rem;letter-spacing:.02em;margin-inline-end:4px;}"
         ".rr-detail-bar-hours .rr-slot.rr-now .rr-now-tag{display:block;}"
         ".rr-detail-bar-hours .rr-slot.rr-now .rr-time-range{color:#087DB4;font-weight:700;}"
         ".rr-detail-bar-values .rr-slot.rr-now .rr-bar,.rr-selectable .rr-slot.rr-now .rr-bar{outline:1.5px solid #168ECC;outline-offset:2px;border-radius:6px;}"
-        ".rr-quantile-help{display:block;min-height:2.4em;font-size:.48rem!important;line-height:1.15;color:#87929C;font-weight:400;overflow-wrap:normal;}"
+        ".rr-quantile-caption{min-height:2.5rem;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;margin-bottom:3px;}"
+        ".rr-quantile-help{display:block;min-height:0;font-size:.48rem!important;line-height:1.1;color:#87929C;font-weight:400;overflow-wrap:normal;}"
         ".rr-quantile-help i{font-style:italic;}"
-        ".rr-chip-simple{gap:3px;padding:2px 3px;}"
+        ".rr-chip-simple{gap:2px;padding:2px 3px;}"
         ".rr-simple-chance,.rr-simple-threshold{display:block;white-space:nowrap;letter-spacing:-.02em;}"
-        ".rr-simple-chance{font-size:.52rem;font-weight:750;}"
-        ".rr-simple-threshold{font-size:.51rem;font-weight:400;}"
+        ".rr-simple-chance{font-size:.88rem;font-weight:750;}"
+        ".rr-simple-threshold{font-size:.88rem;font-weight:400;}"
         ".rr-total-simple{padding:3px;}"
-        ".rr-total-plain{font-weight:700;font-size:.59rem;line-height:1.2;text-align:center;white-space:normal;overflow-wrap:normal;}"
+        ".rr-total-plain{font-weight:700;font-size:.88rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
         ".rr-total-line{display:block;white-space:nowrap;}"
-        ".rr-row.rr-c.rr-simple{grid-template-columns:2.35rem minmax(91px,1fr) minmax(0,170px) minmax(60px,.9fr);column-gap:4px;}"
+        "/* Both modes share the same .rr-row.rr-c grid; do not override it for Simple mode. */"
         "@container (min-width:430px){"
-        ".rr-row.rr-c.rr-simple{grid-template-columns:2.8rem minmax(105px,1fr) minmax(0,170px) minmax(86px,1fr);column-gap:7px;}"
-        ".rr-simple-chance{font-size:.73rem;}.rr-simple-threshold{font-size:.68rem;}"
-        ".rr-total-plain{font-size:.83rem;}"
+        "/* Desktop keeps the cards centered in exactly the same columns. */"
+        ".rr-simple-chance,.rr-simple-threshold{font-size:1rem;}"
+        ".rr-total-plain{font-size:1rem;}"
         ".rr-today-tag{font-size:.68rem;}"
         ".rr-quantile-help{font-size:.61rem!important;}"
         "}"
@@ -1145,11 +1147,37 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       function updateFrameHeight() {
         window.requestAnimationFrame(() => {
           const bounds = card.getBoundingClientRect();
+          const height = Math.max(1, Math.ceil(bounds.bottom + 2));
+          // Streamlit's modern st.iframe observes content height, but older
+          // components.html versions can retain the original fixed height.
+          // Trusted inline HTML is same-origin, so also resize its iframe
+          // element directly when sandbox permissions allow this.
+          try {
+            const frame = window.frameElement;
+            if (frame && frame.style) {
+              frame.style.setProperty('height', `${height}px`, 'important');
+              frame.style.setProperty('min-height', '0px', 'important');
+            }
+          } catch (err) { /* Cross-origin embedding: use the message below. */ }
           window.parent.postMessage({
             isStreamlitMessage: true,
             type: 'streamlit:setFrameHeight',
-            height: Math.max(1, Math.ceil(bounds.top + bounds.height + 2))
+            height
           }, '*');
+        });
+      }
+
+      function fitSimpleText() {
+        // Start from one readable font size for both card types. Only shrink
+        // an individual phrase if it exceeds the available card width.
+        card.querySelectorAll('.rr-simple-chance, .rr-simple-threshold, .rr-total-line').forEach(el => {
+          el.style.fontSize = '';
+          let px = parseFloat(getComputedStyle(el).fontSize);
+          let attempts = 0;
+          while (el.scrollWidth > el.clientWidth + 1 && px > 8.5 && attempts++ < 30) {
+            px = Math.max(8.5, px - 0.5);
+            el.style.fontSize = `${px}px`;
+          }
         });
       }
 
@@ -1203,15 +1231,17 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         });
       });
       if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(updateFrameHeight).observe(card);
+        new ResizeObserver(() => { fitSimpleText(); updateFrameHeight(); }).observe(card);
       }
       if (document.fonts && document.fonts.ready) {
-        document.fonts.ready.then(updateFrameHeight);
+        document.fonts.ready.then(() => {fitSimpleText(); updateFrameHeight();});
       }
+      window.addEventListener('resize', () => {fitSimpleText(); updateFrameHeight();});
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) refreshTime();
       });
-      window.addEventListener('load', () => {refreshTime();updateFrameHeight();});
+      window.addEventListener('load', () => {fitSimpleText();refreshTime();updateFrameHeight();});
+      fitSimpleText();
       refreshTime();
       window.setInterval(refreshTime, 60 * 1000);
     })();
@@ -1670,7 +1700,7 @@ with main:
                         else:
                             # Streamlit <1.56: postMessage inside the card
                             # resizes this legacy component after each tap.
-                            components.html(rain_card_html, height=1080, scrolling=False)
+                            components.html(rain_card_html, height=510, scrolling=False)
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
