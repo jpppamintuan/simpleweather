@@ -1440,8 +1440,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
         # A real button, not a radio/label pair: keyboard accessible, explicit
         # click state, and repeat clicks can collapse the expanded details.
-        initial_class = " is-selected" if index == 0 else ""
-        expanded = "true" if index == 0 else "false"
+        # Keep all day details closed on the initial render.
+        initial_class = ""
+        expanded = "false"
         simple_total_descriptor = _simple_rain_range(total_med, total_p90)
         total_is_range = " to " in simple_total_descriptor
         if total_is_range:
@@ -1491,7 +1492,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             for name, amount in quantile_values
         )
         details += (
-            f"<section id='rr-detail-{index}' data-rr-date='{day:%Y-%m-%d}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
+            f"<section id='rr-detail-{index}' data-rr-date='{day:%Y-%m-%d}' class='rr-detail rr-detail-{index}' "
             f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
             f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A}, {day.day} {day:%B}</strong></div>"
@@ -1667,19 +1668,19 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile-help i{font-style:italic;}"
         ".rr-chip-simple{gap:2px;padding:2px 3px;}"
         ".rr-simple-chance,.rr-simple-threshold{display:block;white-space:nowrap;letter-spacing:-.02em;}"
-        ".rr-simple-chance{font-size:.82rem;font-weight:750;}"
-        ".rr-simple-threshold{font-size:.72rem;font-weight:400;}"
-        ".rr-total-simple{padding:3px;}"
-        ".rr-total-plain{font-weight:700;font-size:.88rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
+        ".rr-simple-chance{font-size:.78rem;font-weight:750;}"
+        ".rr-simple-threshold{font-size:.68rem;font-weight:400;}"
+        ".rr-total-simple{padding:2px;}"
+        ".rr-total-plain{font-weight:700;font-size:.84rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
         ".rr-total-line{display:block;white-space:nowrap;}"
-        ".rr-total-range{font-size:.82rem;}"
+        ".rr-total-range{font-size:.77rem;}"
         "/* Both modes share the same .rr-row.rr-c grid; do not override it for Simple mode. */"
         "@container (min-width:430px){"
         "/* Desktop keeps the cards centered in exactly the same columns. */"
-        ".rr-simple-chance{font-size:.94rem;}"
-        ".rr-simple-threshold{font-size:.82rem;}"
-        ".rr-total-plain{font-size:1rem;}"
-        ".rr-total-range{font-size:.93rem;}"
+        ".rr-simple-chance{font-size:.88rem;}"
+        ".rr-simple-threshold{font-size:.76rem;}"
+        ".rr-total-plain{font-size:.94rem;}"
+        ".rr-total-range{font-size:.86rem;}"
         ".rr-today-tag{font-size:.68rem;}"
         ".rr-quantile-help{font-size:.61rem!important;}"
         "}"
@@ -1694,7 +1695,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       if (!card) return;
       const rows = Array.from(card.querySelectorAll('.rr-selectable[data-rr-day]'));
       const panels = Array.from(card.querySelectorAll('.rr-detail'));
-      let selectedDay = rows.length ? 0 : -1;
+      let selectedDay = -1;
       const fadeMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
       const exitTimers = new WeakMap();
       const formatPHTDate = (at) => {
@@ -1729,6 +1730,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       }
 
       function fitSimpleText() {
+        if (card.hidden) return; // A hidden variant has no usable width.
         // Fit both chance lines together so the chance description always
         // retains a slightly larger type size than the rainfall description.
         card.querySelectorAll('.rr-chip-simple').forEach(chip => {
@@ -1740,22 +1742,29 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
           const room = chip.clientWidth - parseFloat(computed.paddingLeft) - parseFloat(computed.paddingRight) - 2;
           // These spans size to their text; compare with the card's inner
           // width rather than their own clientWidth (which hides overflow).
+          // Apply a single scale factor to BOTH lines, retaining their
+          // relative sizes even when a narrow card requires text fitting.
           let scale = 1;
-          for (let attempt = 0; attempt < 10; attempt++) {
+          for (let attempt = 0; attempt < 18; attempt++) {
             const widest = Math.max(...lines.map(el => el.scrollWidth));
             if (widest <= room + 1) break;
-            scale *= (room - 1) / widest;
-            lines.forEach((el, i) => {el.style.fontSize = `${Math.max(8.5, base[i] * scale)}px`;});
+            scale = Math.max(.58, scale * (room - 1) / widest);
+            lines.forEach((el, i) => { el.style.fontSize = `${(base[i] * scale).toFixed(2)}px`; });
+            if (scale <= .58) break;
           }
         });
-        // The total's one- or two-line label can scale on its own.
-        card.querySelectorAll('.rr-total-line').forEach(el => {
-          el.style.fontSize = '';
-          let px = parseFloat(getComputedStyle(el).fontSize);
+        // Scale the ENTIRE daily total phrase together. Its two visual lines
+        // must retain the same font size (e.g., "Light" / "to moderate").
+        card.querySelectorAll('.rr-total-plain').forEach(group => {
+          group.style.fontSize = '';
+          const lines = Array.from(group.querySelectorAll('.rr-total-line'));
+          if (!lines.length) return;
+          let px = parseFloat(getComputedStyle(group).fontSize);
+          const room = group.clientWidth;
           let attempts = 0;
-          while (el.scrollWidth > el.clientWidth + 1 && px > 8.5 && attempts++ < 30) {
-            px = Math.max(8.5, px - 0.5);
-            el.style.fontSize = `${px}px`;
+          while (lines.some(line => line.scrollWidth > room + 1) && px > 7.5 && attempts++ < 35) {
+            px = Math.max(7.5, px - .3);
+            group.style.fontSize = `${px.toFixed(2)}px`;
           }
         });
       }
@@ -1841,9 +1850,12 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       document.addEventListener('visibilitychange', () => {
         if (!document.hidden) refreshTime();
       });
+      card.addEventListener('rr:activated', () => {
+        fitSimpleText();refreshTime();updateFrameHeight();
+      });
       window.addEventListener('load', () => {fitSimpleText();refreshTime();updateFrameHeight();});
       fitSimpleText();
-      selectDay(selectedDay); // Show the first expanded panel below its row.
+      selectDay(selectedDay); // Start collapsed; the first tap opens the chosen day.
       refreshTime();
       window.setInterval(refreshTime, 60 * 1000);
     })();
@@ -1968,7 +1980,10 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
           const pending=exitTimers.get(v);
           if(pending!==undefined){window.clearTimeout(pending);exitTimers.delete(v);}
           v.classList.remove('is-closing');
-          if(v===chosen){v.hidden=false;}
+          if(v===chosen){
+            v.hidden=false;
+            requestAnimationFrame(()=>v.dispatchEvent(new Event('rr:activated')));
+          }
           else if(!v.hidden){
             if(fadeMs===0){v.hidden=true;}
             else{
