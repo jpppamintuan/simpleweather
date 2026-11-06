@@ -33,9 +33,9 @@ st.set_page_config(page_title="Simpleweather", page_icon="🌧️", layout="wide
 st.markdown(
     """
     <style>
+      @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap');
       :root {
-        --simpleweather-font: -apple-system, BlinkMacSystemFont,
-          "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+        --simpleweather-font: 'Source Sans 3', 'Source Sans Pro', sans-serif;
       }
       /* Streamlit's main page and its native headers and form controls. */
       html, body, .stApp, [data-testid="stAppViewContainer"],
@@ -51,7 +51,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("Simpleweather")
-st.caption("Check upcoming rainfall and explore the chance of heavier rain.")
+st.caption("Rainfall, temperature and heat index forecasts for locations across the Philippines.")
 LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
@@ -453,7 +453,7 @@ def _relative_luminance(r: int, g: int, b: int) -> float:
 BASE_TEXT = "#111111"
 CARD_BG = "#ffffff"
 BORDER = "rgba(0,0,0,0.12)"
-FONT_STACK = "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', 'Segoe UI', system-ui, sans-serif"
+FONT_STACK = "'Source Sans 3', 'Source Sans Pro', sans-serif"
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
     return (255, 255, 255)
@@ -586,10 +586,11 @@ _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
 <title>Simpleweather | Rainfall Outlook</title>
 
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
 :root{--ink:#1d2530;--muted:#687585;--muted2:#8994a1;--line:#e7ebf0;--surface:#fff;--bg:#f5f7fa;--blue:#00bfff;--shadow:0 10px 34px rgba(23,40,63,.035);--radius:20px}
-*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','SF Pro Display','Segoe UI',system-ui,sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:14px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
+*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Source Sans 3','Source Sans Pro',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:14px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
 @media (max-width:720px){main{padding:17px 10px 45px}.page-heading{align-items:flex-start}.page-heading h1{font-size:29px}.shell{padding:17px 12px;border-radius:18px}.part{padding:13px 10px;border-radius:13px}.top-controls{align-items:stretch}.view-tabs{width:100%}.view-tab{flex:1;font-size:12px;padding:9px 8px}.simple-toggle{margin-left:auto}.threshold-section{padding:12px 10px}.chips{gap:5px}.threshold-chip{font-size:12px;gap:4px;padding:4px 2px;min-height:37px}.threshold-chip .swatch{width:6px;height:6px}.context-line{font-size:11.5px}.bar-header{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;margin:5px 4px}.day-bar{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;padding:5px 4px;min-height:39px}.day-label{flex-wrap:wrap;column-gap:4px;row-gap:0}.day-label .weekday{font-size:12px}.day-label .date{font-size:11px}.probability{font-size:13px}.probability.simple{font-size:10px}.track{height:11px}.fingerprint{grid-template-columns:70px minmax(0,1fr) 14px;gap:8px;padding:6px 4px}.finger-track{height:17px}.five-chances{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.chance-tile .amount{font-size:10px;padding:5px}.chance-tile .value{font-size:13px;padding:7px 5px}.chance-tile .descriptor{font-size:9px}.amount-distribution{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{padding:12px 10px}.panel-head h3{font-size:15px}.panel-head .tap-hint{display:none}.demo-pill{display:none}.shell-title h2{font-size:20px}.graph-wrap svg{min-height:0}}
 @media (prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
 
@@ -708,10 +709,13 @@ main{padding:0!important;max-width:100%;margin:0}
 .threshold-chip,.outlook-simple .threshold-chip{height:96px;min-height:96px;max-height:96px}
 .outlook-simple .threshold-chip .chip-meaning{font-size:9px}
 }
+/* Inline day details use the same panel without leaving an empty slot below. */
+.inline-day-panel{width:100%;margin:5px 0 10px;border-radius:10px}
 /* Final consistency adjustments with the six-day card. */
 .chips{grid-template-columns:repeat(5,minmax(0,1fr))}
 .threshold-chip{min-width:0;position:relative}
-.outlook-simple .threshold-chip .simple-swatch{position:absolute;top:6px;left:5px}
+.outlook-simple .threshold-chip .chip-meaning{display:flex;flex-direction:row;align-items:center;justify-content:center;gap:5px}
+.outlook-simple .threshold-chip .simple-swatch{position:static;inset:auto;align-self:center;flex:0 0 7px;margin:0}
 html,body{background:transparent!important}
 main{border-radius:14px;overflow:hidden}
 .shell{border-radius:14px;overflow:hidden}
@@ -781,6 +785,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
         <div class="finger-tip" style="margin-top:13px">Wider color segments mean a greater chance of that rainfall range. Tap any day for details.</div>
       </div>
     </div>
+    <div id="day-panel-anchor"></div>
     <div class="panel" id="day-panel" aria-live="polite"></div>
     <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
       <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible totals" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
@@ -800,6 +805,8 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   const ranges = ['<1 mm','1 to <5 mm','5 to <20 mm','20 to <50 mm','50 to <100 mm','100 mm or more'];
   const rangeColors = ['#CAD7E1', ...sourceColors.map(c=>tint(c,.65))];
   const byId = id => document.getElementById(id);
+  // Keep this reference even when a row list is rebuilt with innerHTML.
+  const dayPanel = byId('day-panel');
   const fmt = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
   const fmtFull = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'long',day:'numeric',month:'long'});
   const fmtWeek = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short'});
@@ -842,17 +849,64 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     resizeFrame();
   }
   const X=i=>48+(dates.length<=1?0:i/(dates.length-1)*606), Y=p=>217-p*1.71;
+  // Gently rounded, shape-preserving Bezier segments. Every curve passes
+  // through the original ECMWF daily values; missing days break the path.
+  const coord = n => Number(n).toFixed(2);
+  function smoothCommands(points){
+    if(points.length<2)return '';
+    const n=points.length, slopes=new Array(n), delta=[];
+    for(let i=0;i<n-1;i++){
+      const dx=points[i+1][0]-points[i][0];
+      delta.push(dx?(points[i+1][1]-points[i][1])/dx:0);
+    }
+    slopes[0]=delta[0];slopes[n-1]=delta[n-2];
+    for(let i=1;i<n-1;i++){
+      const a=delta[i-1],b=delta[i];
+      if(a*b<=0){slopes[i]=0;continue;}
+      const h0=Math.abs(points[i][0]-points[i-1][0]);
+      const h1=Math.abs(points[i+1][0]-points[i][0]);
+      const w0=2*h1+h0,w1=h1+2*h0;
+      slopes[i]=(w0+w1)/(w0/a+w1/b);
+    }
+    const smoothing=0.58; // mild curve; lower than a full cubic spline
+    let out='';
+    for(let i=0;i<n-1;i++){
+      const a=points[i],b=points[i+1],dx=b[0]-a[0];
+      out+=` C${coord(a[0]+dx/3)},${coord(a[1]+slopes[i]*dx/3*smoothing)}`+
+           ` ${coord(b[0]-dx/3)},${coord(b[1]-slopes[i+1]*dx/3*smoothing)}`+
+           ` ${coord(b[0])},${coord(b[1])}`;
+    }
+    return out;
+  }
+  function smoothPath(points){
+    if(!points.length)return '';
+    return `M${coord(points[0][0])},${coord(points[0][1])}`+smoothCommands(points);
+  }
   function pathLine(series){
-    let segments=[], points=[];
-    series.forEach((v,i)=>{if(numeric(v))points.push([X(i),Y(v)]);else if(points.length){segments.push(points);points=[];}});
+    const segments=[];let points=[];
+    series.forEach((v,i)=>{
+      if(numeric(v))points.push([X(i),Y(v)]);
+      else if(points.length){segments.push(points);points=[];}
+    });
     if(points.length)segments.push(points);
-    return segments.map(points=>'M'+points.map(q=>q.map(x=>x.toFixed(1)).join(',')).join(' L')).join(' ');
+    return segments.map(smoothPath).join(' ');
   }
   function areaBands(upper,lower){
-    let paths=[],stack=[];
-    function flush(){if(stack.length){const upper=stack.map(p=>p[0]),lower=stack.map(p=>p[1]);paths.push('M'+upper.map(p=>p.join(',')).join(' L')+' L'+lower.reverse().map(p=>p.join(',')).join(' L')+' Z');stack=[];}}
-    upper.forEach((v,i)=>{if(numeric(v)&&numeric(lower[i]))stack.push([[X(i),Y(v)],[X(i),Y(lower[i])]]);else flush();});flush();
-    return paths;
+    const paths=[];let stack=[];
+    function flush(){
+      if(stack.length>=2){
+        const top=stack.map(p=>p[0]);
+        const bottom=stack.map(p=>p[1]).reverse();
+        paths.push(smoothPath(top)+` L${coord(bottom[0][0])},${coord(bottom[0][1])}`+
+                   smoothCommands(bottom)+' Z');
+      }
+      stack=[];
+    }
+    upper.forEach((v,i)=>{
+      if(numeric(v)&&numeric(lower[i]))stack.push([[X(i),Y(v)],[X(i),Y(lower[i])]]);
+      else flush();
+    });
+    flush();return paths;
   }
   function graph(){
     let out=''; const v=thresholds.map((_,t)=>dates.map(d=>d.values[t]));
@@ -886,7 +940,15 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     byId('fingerprint-legend').innerHTML=ranges.map((r,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${rangeColors[i]}"></span>${r}</span>`).join('');
   }
   function details(){
-    const panel=byId('day-panel');if(state.day===null){panel.hidden=true;panel.innerHTML='';resizeFrame();return;}panel.hidden=false;
+    const panel=dayPanel;
+    // Graph details stay at the bottom; Bars and Possible totals expand
+    // directly below the selected day, preserving the same detail content.
+    byId('day-panel-anchor').after(panel);
+    if(state.day===null){
+      panel.hidden=true;panel.innerHTML='';panel.classList.remove('inline-day-panel');
+      resizeFrame();return;
+    }
+    panel.hidden=false;
     const d=dates[state.day];const today=d.date===phDateKey(new Date());
     let h=`<div class="panel-head"><div><div class="panel-day"><span class="today-mini ${today?'show-today':''}">TODAY</span><h3>${dayName(d)}</h3></div><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
     if(state.view==='amounts'){
@@ -899,7 +961,16 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       thresholds.forEach((t,i)=>{const p=d.values[i];const s=shade(sourceColors[i],p),lc=tint(sourceColors[i],.20),tc=ink(sourceColors[i],p);h+=`<div class="chance-row"><div class="chance-left" style="background:${lc}"><strong>≥${t} mm</strong><span>${amountWords[i]} or more</span></div><div class="chance-right" style="background:${s};color:${tc}"><strong>${pct(p)}</strong><span>${numeric(p)?chanceWords(p):'no data'}</span></div></div>`;});
       h+='</div>';
     }
-    panel.innerHTML=h;resizeFrame();
+    panel.innerHTML=h;
+    let target=null;
+    if(state.view==='amounts'){
+      target=byId('fingerprint-list').querySelector(`.fingerprint[data-day="${state.day}"]`);
+    }else if(state.subview==='bars'){
+      target=byId('bar-list').querySelector(`.day-bar[data-day="${state.day}"]`);
+    }
+    panel.classList.toggle('inline-day-panel',Boolean(target));
+    if(target)target.after(panel);
+    resizeFrame();
   }
   function exact(){
     const th=thresholds.map((t,i)=>`<th style="background:${tint(sourceColors[i],.20)}">≥${t} mm</th>`).join('');
@@ -1372,7 +1443,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             ("Median", total_med), ("P75", total_p75), ("P90", total_p90),
         ]
         quantile_meanings = {
-            "P10": "lower-end estimate", "P25": "below typical",
+            "P10": "lower estimate", "P25": "below typical",
             "Median": "most likely", "P75": "above typical",
             "P90": "higher estimate",
         }
@@ -1652,7 +1723,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
           row.setAttribute('aria-expanded', String(active));
         });
         panels.forEach((panel, index) => {
-          panel.classList.toggle('is-open', index === selectedDay);
+          const active = index === selectedDay;
+          panel.classList.toggle('is-open', active);
+          if (active && rows[index]) rows[index].insertAdjacentElement('afterend', panel);
         });
         updateFrameHeight();
       }
@@ -1705,12 +1778,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       });
       window.addEventListener('load', () => {fitSimpleText();refreshTime();updateFrameHeight();});
       fitSimpleText();
+      selectDay(selectedDay); // Show the first expanded panel below its row.
       refreshTime();
       window.setInterval(refreshTime, 60 * 1000);
     })();
     </script>"""
     viewport = (
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap'>"
         "<style>html,body{margin:0;padding:0;min-height:0;height:auto;overflow-x:hidden;}"
         "body{min-width:0;}*{box-sizing:border-box;}</style>"
     )
