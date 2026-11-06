@@ -94,7 +94,7 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
                 key=f"{key_prefix}_place_search_{chosen_province}",
             )
         place = next(p for p in places_in_province if p["name"] == chosen_name)
-        if st.toggle("Show map", value=True, key=f"{key_prefix}_show_map"):
+        if st.toggle("Show map", value=False, key=f"{key_prefix}_show_map"):
             st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=9)
         return place["display_name"], place["lat"], place["lon"], place["lat"], place["lon"]
     coord_col1, coord_col2 = st.columns(2)
@@ -108,7 +108,7 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
             "Longitude", min_value=PH_BBOX["lon_min"], max_value=PH_BBOX["lon_max"],
             value=121.0, step=0.01, format="%.4f", key=f"{key_prefix}_custom_lon",
         )
-    if st.toggle("Show map", value=True, key=f"{key_prefix}_show_map"):
+    if st.toggle("Show map", value=False, key=f"{key_prefix}_show_map"):
         st.map(pd.DataFrame({"lat": [custom_lat], "lon": [custom_lon]}), zoom=9)
     location_name = f"Custom ({custom_lat:.4f}°N, {custom_lon:.4f}°E)"
     return location_name, custom_lat, custom_lon, custom_lat, custom_lon
@@ -651,7 +651,7 @@ main{padding:0!important;max-width:100%;margin:0}
 
 /* Shared six-day visual language for the 14-day interface. */
 #trend-svg:focus:not(:focus-visible){outline:none}
-.day-label{gap:1px}.day-label .day-short{font-size:12px;font-weight:700;white-space:nowrap;line-height:1.15;color:#25303a}
+.day-label{gap:1px}.day-label .day-short{font-size:12px;font-weight:400;white-space:nowrap;line-height:1.15;color:#25303a}.day-label .day-short strong{font-weight:700}
 .day-label .today-mini{color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em}
 .panel-head h3{font-size:16px;font-weight:700;letter-spacing:0;color:#1d2832}
 .panel-head .window{font-size:11px;color:#737d88}
@@ -694,6 +694,24 @@ main{padding:0!important;max-width:100%;margin:0}
 .threshold-chip,.outlook-simple .threshold-chip{height:96px;min-height:96px;max-height:96px}
 .outlook-simple .threshold-chip .chip-meaning{font-size:9px}
 }
+/* Final consistency adjustments with the six-day card. */
+.chips{grid-template-columns:repeat(5,minmax(0,1fr))}
+.threshold-chip{min-width:0;position:relative}
+.outlook-simple .threshold-chip .simple-swatch{position:absolute;top:6px;left:5px}
+html,body{background:transparent!important}
+main{border-radius:14px;overflow:hidden}
+.shell{border-radius:14px;overflow:hidden}
+.day-label .day-short{font-weight:400}
+.day-label .day-short strong{font-weight:700}
+.outlook-simple .threshold-chip .chip-meaning{font-size:12.5px;line-height:1.15;gap:5px}
+.chip-meaning-text{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-width:0}
+.chip-meaning-text>span{display:block;white-space:nowrap}
+@media(max-width:720px){
+ main,.shell{border-radius:10px}
+ .outlook-simple .threshold-chip .chip-meaning{font-size:10px;letter-spacing:-.035em;gap:0}
+ .chip-meaning-text{gap:2px}
+}
+@media(max-width:355px){.threshold-section{padding-left:7px;padding-right:7px}.chips{gap:3px}.outlook-simple .threshold-chip .chip-meaning{font-size:9.3px;letter-spacing:-.04em}}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -703,7 +721,7 @@ main{padding:0!important;max-width:100%;margin:0}
     <div class="top-controls">
       <div class="view-tabs" role="tablist" aria-label="14-day forecast view">
         <button class="view-tab" id="tab-chances" role="tab" aria-controls="view-chances" aria-selected="true" data-view="chances">Chance of rain</button>
-        <button class="view-tab" id="tab-amounts" role="tab" aria-controls="view-amounts" aria-selected="false" data-view="amounts">Possible amounts</button>
+        <button class="view-tab" id="tab-amounts" role="tab" aria-controls="view-amounts" aria-selected="false" data-view="amounts">Possible totals</button>
       </div>
       <label class="simple-toggle" for="outlook-simple"><input type="checkbox" id="outlook-simple"> Simple mode</label>
     </div>
@@ -745,7 +763,7 @@ main{padding:0!important;max-width:100%;margin:0}
     </div>
     <div class="panel" id="day-panel" aria-live="polite"></div>
     <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
-      <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible amounts" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
+      <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible totals" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
     </div>
   </div>
 </main>
@@ -775,9 +793,9 @@ main{padding:0!important;max-width:100%;margin:0}
   const pct = p=>numeric(p)?`${Math.round(p)}%`:'—';
   function phDateKey(now){const p=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now); const find=t=>p.find(x=>x.type===t).value;return `${find('year')}-${find('month')}-${find('day')}`;}
   const dates = records.map((r,i)=>({...r,i,startDate:new Date(r.start),endDate:new Date(r.end)}));
-  function dayName(d){return fmtFull.format(d.startDate);}
+  function dayName(d){return `${fmtWeekFull.format(d.startDate)}, ${fmtDayMonthFull.format(d.startDate)}`;}
   function windowName(d){return `${fmtHour.format(d.startDate).replace(' ','').toLowerCase()} ${fmt.format(d.startDate)} – ${fmtHour.format(d.endDate).replace(' ','').toLowerCase()} ${fmt.format(d.endDate)} (PHT)`;}
-  function dayLabel(d){const today=d.date===phDateKey(new Date());return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="day-short">${fmtWeek.format(d.startDate)} / ${fmtDayMonth.format(d.startDate)}</span></span>`;}
+  function dayLabel(d){const today=d.date===phDateKey(new Date());return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="day-short"><strong>${fmtWeek.format(d.startDate)}</strong> ${fmtDayMonth.format(d.startDate)}</span></span>`;}
   function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
   function tint(hex,strength){return `rgb(${rgb(hex).map(v=>Math.round(255*(1-strength)+v*strength)).join(',')})`;}
   function tier(p){return p<5?0:p<35?.05:p<65?.35:p<95?.65:1;}
@@ -791,7 +809,7 @@ main{padding:0!important;max-width:100%;margin:0}
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
     const choices=byId('threshold-chips');
-    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span>${amountWords[i]} rain or more</span></span></button>`).join('');
+    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span class="chip-meaning-text"><span class="chip-meaning-level">${amountWords[i]}</span><span class="chip-meaning-rest">rain or more</span></span></span></button>`).join('');
     choices.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.threshold)===state.threshold)));
     document.body.classList.toggle('outlook-simple',simple);
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
@@ -865,7 +883,7 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function exact(){
     const th=thresholds.map((t,i)=>`<th style="background:${tint(sourceColors[i],.20)}">≥${t} mm</th>`).join('');
-    const rows=dates.map(d=>`<tr><td><strong>${fmtWeekFull.format(d.startDate)},</strong> ${fmtDayMonthFull.format(d.startDate)}</td>${d.values.map((p,i)=>`<td style="background:${shade(sourceColors[i],p)};color:${ink(sourceColors[i],p)}">${pct(p)}</td>`).join('')}</tr>`).join('');
+    const rows=dates.map(d=>`<tr><td><strong>${fmtWeekFull.format(d.startDate)}</strong> ${fmtDayMonthFull.format(d.startDate)}</td>${d.values.map((p,i)=>`<td style="background:${shade(sourceColors[i],p)};color:${ink(sourceColors[i],p)}">${pct(p)}</td>`).join('')}</tr>`).join('');
     byId('exact-table').innerHTML=`<table><thead><tr><th>Day</th>${th}</tr></thead><tbody>${rows}</tbody></table>`;
   }
   function resizeFrame(){
@@ -879,6 +897,14 @@ main{padding:0!important;max-width:100%;margin:0}
   function redrawSelection(){graph();bars();fingerprints();details();resizeFrame();}
   function redraw(){controls();redrawSelection();}
   function focusThreshold(i){
+    if(state.threshold===i){
+      // The user's first repeat tap closes any open day panel, without
+      // changing the active threshold or requiring a double tap.
+      if(state.day!==null){state.day=null;redrawSelection();return;}
+      // An additional tap in Graph restores the full-color five-ribbon view.
+      if(state.subview==='graph'){showAllThresholds();return;}
+      return;
+    }
     state.threshold=i;
     if(state.subview==='bars')state.barThreshold=i;
     else state.graphThreshold=i;
@@ -2201,7 +2227,7 @@ with main:
             )
             card_thr = thr_result if (thr_result is not None and thr_result["windows"]) else None
             with st.container(key="rain_split"):
-                left_col, right_col = st.columns([5, 6], gap="large")
+                left_col, right_col = st.columns([1, 1], gap="large")
             with left_col:
                 pct_result = None
                 if pct_raw_result is None:
@@ -2392,7 +2418,7 @@ if view_mode == "Rainfall Forecast":
                 "**Long-range outlook.** Rain chances offers two ways to inspect the same five "
                 "exceedance probabilities: a ribbon graph and horizontal daily bars "
                 "that share the chosen rainfall threshold. The 14-day card has its own "
-                "independent Simple mode switch. Possible amounts converts "
+                "independent Simple mode switch. Possible totals converts "
                 "those nested chances into six exclusive 24-hour rainfall ranges "
                 "that add to 100%. Missing or inconsistent probabilities are not "
                 "silently treated as zero. The outlook uses up to 14 upcoming "
