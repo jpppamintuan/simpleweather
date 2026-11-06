@@ -515,7 +515,7 @@ def _tooltip_html_for_window(w: dict, data: dict) -> str:
     rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
     return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
 
-def render_14day_outlook_html(result: dict, *, simple_mode: bool = False) -> str:
+def render_14day_outlook_html(result: dict) -> str:
     """Interactive 14-day outlook: linked probability ribbon, daily bars and rainfall fingerprints.
 
     All views use the SAME ECMWF 24-hour 08:00-to-08:00 PHT windows.
@@ -552,9 +552,7 @@ def render_14day_outlook_html(result: dict, *, simple_mode: bool = False) -> str
         return ""
     # Escape angle brackets in JSON so data cannot prematurely close <script>.
     encoded = json.dumps(records, ensure_ascii=True).replace("<", "\\u003c")
-    return (_FOURTEEN_DAY_TEMPLATE
-            .replace("__RECORDS__", encoded)
-            .replace("__SIMPLE__", "true" if simple_mode else "false"))
+    return _FOURTEEN_DAY_TEMPLATE.replace("__RECORDS__", encoded)
 
 _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
 <html lang="en">
@@ -603,6 +601,38 @@ main{padding:0!important;max-width:100%;margin:0}
  .panel-head .tap-hint{display:none}
 }
 @media(max-width:355px){.chance-left span{font-size:9px}.bar-header,.day-bar{grid-template-columns:66px minmax(0,1fr) 82px;gap:5px}}
+/* Match the calm type, spacing, and selection treatment of the six-day card. */
+.shell{border-radius:14px;padding:15px 15px 17px;box-shadow:none}
+.shell-title h2{font-size:18px;font-weight:720}
+.shell-title p{font-size:12px}
+.rain-icon{background:#eef6f9;color:#4a99ba}
+.part{border-radius:11px;padding:13px 13px;margin-top:10px}
+.threshold-section{border-radius:10px;margin-bottom:11px}
+.day-label{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px}
+.day-label .weekday{line-height:1.13;font-weight:700}
+.day-label .date{font-size:11px;color:#737d88;line-height:1.13}
+.day-label .today-mini{display:none;color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em;line-height:1.15}
+.day-label.is-today .today-mini{display:block}
+.panel-day .today-mini{display:none;color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em}
+.panel-day .today-mini.show-today{display:block}
+.panel-day h3{line-height:1.23}
+.panel-head{align-items:center}
+.day-bar,.fingerprint{border-radius:7px}
+.day-bar[aria-pressed="true"],.fingerprint[aria-pressed="true"]{background:#f3f8fb;box-shadow:inset 2px 0 #00bfff}
+.subview-switch{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:13px 0 3px;padding:0 2px}
+.subview-title{font-size:12px;color:#6d7b89;font-weight:600}
+.subview-tabs{display:flex;gap:3px;background:#eef1f5;padding:3px;border-radius:9px}
+.subview-tab{border:0;border-radius:7px;background:transparent;color:#637285;padding:6px 15px;font-size:12px;font-weight:650;white-space:nowrap}
+.subview-tab[aria-pressed="true"]{background:#fff;color:#1d2530;box-shadow:0 1px 4px #1e3b5020}
+.part[hidden],#outlook-exact[hidden]{display:none!important}
+@media(max-width:720px){
+ .shell{padding:12px 9px;border-radius:10px}
+ .shell-title h2{font-size:16px}
+ .subview-switch{gap:7px}
+ .subview-tab{padding:6px 11px}
+ .bar-header,.day-bar{grid-template-columns:69px minmax(0,1fr) 82px}
+ .day-bar,.fingerprint{min-height:47px}
+}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -616,6 +646,7 @@ main{padding:0!important;max-width:100%;margin:0}
         <button class="view-tab" id="tab-chances" role="tab" aria-controls="view-chances" aria-selected="true" data-view="chances">Rain chances</button>
         <button class="view-tab" id="tab-amounts" role="tab" aria-controls="view-amounts" aria-selected="false" data-view="amounts">Possible amounts</button>
       </div>
+      <label class="simple-toggle" for="outlook-simple"><input type="checkbox" id="outlook-simple"> Simple mode</label>
     </div>
     <div id="view-chances" role="tabpanel" aria-labelledby="tab-chances">
       <div class="threshold-section">
@@ -623,12 +654,19 @@ main{padding:0!important;max-width:100%;margin:0}
         <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
         <div class="context-line"><span id="threshold-explanation">Chance of moderate rain or more</span><strong>24-hour rainfall</strong></div>
       </div>
-      <div class="part graph-section">
+      <div class="subview-switch" role="group" aria-label="Explore rain chances">
+        <span class="subview-title">Explore rain chances</span>
+        <div class="subview-tabs">
+          <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true">Graph</button>
+          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false">Daily bars</button>
+        </div>
+      </div>
+      <div class="part graph-section" id="outlook-graph">
         <div class="part-heading"><div><div class="section-label">How rain chances change</div><div class="kicker">Five rainfall levels; the chosen one stands out</div></div><span class="kicker" id="graph-selected-label">Tap the graph to inspect a day</span></div>
         <div class="graph-scroll"><svg id="trend-svg" viewBox="0 0 900 305" role="img" tabindex="0" aria-label="Interactive daily graph showing chances of different rainfall thresholds. Tap or click a date to select it."></svg></div>
         <div class="legend" id="graph-legend"></div>
       </div>
-      <div class="part bars-section">
+      <div class="part bars-section" id="outlook-bars" hidden>
         <div class="part-heading"><div><div class="section-label">Day-by-day chances</div><div class="kicker">Tap any rainfall bar to explore that day</div></div><span id="bar-count" class="kicker">Daily outlook</span></div>
         <div class="bar-header"><span>Day</span><span>Chance of at least the chosen amount</span><span style="text-align:right">Chance</span></div>
         <div class="bar-day-list" id="bar-list"></div>
@@ -636,14 +674,14 @@ main{padding:0!important;max-width:100%;margin:0}
     </div>
     <div id="view-amounts" role="tabpanel" aria-labelledby="tab-amounts" hidden>
       <div class="part" style="margin-top:4px">
-        <div class="part-heading"><div><div class="section-label">Possible rainfall amounts</div><div class="kicker">Each complete bar represents the different possible daily rainfall amounts</div></div></div>
+        <div class="part-heading"><div><div class="section-label">Possible rainfall totals for the day</div><div class="kicker">Each bar shows the possible amounts for that day</div></div></div>
         <div class="fingerprint-list" id="fingerprint-list"></div>
         <div class="legend-grid" id="fingerprint-legend"></div>
         <div class="finger-tip" style="margin-top:13px">Wider color segments mean a greater chance of that rainfall range. Tap any day for details.</div>
       </div>
     </div>
     <div class="panel" id="day-panel" aria-live="polite"></div>
-    <div class="exact"><details id="exact-details"><summary>See all exact probabilities</summary><div class="table-scroll" id="exact-table"></div></details></div>
+    <div class="exact" id="outlook-exact"><details id="exact-details"><summary>See all exact probabilities</summary><div class="table-scroll" id="exact-table"></div></details></div>
     <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
       <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible amounts" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
     </div>
@@ -653,7 +691,7 @@ main{padding:0!important;max-width:100%;margin:0}
 (() => {
   'use strict';
   const records = __RECORDS__;
-  const simple = __SIMPLE__;
+  let simple = false; // Independent of the six-day card; off by default.
   const thresholds = [1,5,20,50,100];
   const colors = ['#00BFFF','#D4B62F','#FFA500','#EF4646','#800080'];
   const sourceColors = ['#00BFFF','#FFFF00','#FFA500','#FF0000','#800080'];
@@ -663,7 +701,7 @@ main{padding:0!important;max-width:100%;margin:0}
   const byId = id => document.getElementById(id);
   const fmt = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
   const fmtHour = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',hour:'numeric',hour12:true});
-  const state={view:'chances',threshold:2,day:records.length?0:null};
+  const state={view:'chances',subview:'graph',threshold:2,day:null};
   const numeric = x => x!==null && Number.isFinite(x);
   const chanceWords = p=>!numeric(p)?'unavailable':p<5?'very low':p<35?'low':p<65?'medium':p<95?'high':'very high';
   const pct = p=>numeric(p)?`${Math.round(p)}%`:'—';
@@ -671,7 +709,7 @@ main{padding:0!important;max-width:100%;margin:0}
   const dates = records.map((r,i)=>({...r,i,startDate:new Date(r.start),endDate:new Date(r.end)}));
   function dayName(d){return fmt.format(d.startDate);}
   function windowName(d){return `${fmtHour.format(d.startDate).replace(' ','').toLowerCase()} ${fmt.format(d.startDate)} – ${fmtHour.format(d.endDate).replace(' ','').toLowerCase()} ${fmt.format(d.endDate)} (PHT)`;}
-  function dayLabel(d){const parts=dayName(d).split(',');const weekday=parts[0]; const rest=parts.slice(1).join(',').trim();const today=(d.date===phDateKey(new Date()));return `<span class="day-label ${today?'is-today':''}"><span class="weekday">${weekday}</span><span class="date">${rest}</span><span class="today-mini">TODAY</span></span>`;}
+  function dayLabel(d){const parts=dayName(d).split(',');const weekday=parts[0];const rest=parts.slice(1).join(',').trim();const today=(d.date===phDateKey(new Date()));return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="weekday">${weekday}</span><span class="date">${rest}</span></span>`;}
   function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
   function tint(hex,strength){return `rgb(${rgb(hex).map(v=>Math.round(255*(1-strength)+v*strength)).join(',')})`;}
   function tier(p){return p<5?0:p<35?.05:p<65?.35:p<95?.65:1;}
@@ -684,10 +722,13 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
-    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${colors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="swatch"></span>${t} mm</button>`).join('');
+    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="swatch"></span>${t} mm</button>`).join('');
     byId('threshold-explanation').textContent=`Chance of ${amountWords[state.threshold]} rain or more`;
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
     byId('view-chances').hidden=state.view!=='chances';byId('view-amounts').hidden=state.view!=='amounts';
+    byId('outlook-exact').hidden=state.view!=='chances';
+    byId('outlook-graph').hidden=state.subview!=='graph';byId('outlook-bars').hidden=state.subview!=='bars';
+    document.querySelectorAll('.subview-tab').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.subview===state.subview)));
     byId('bar-count').textContent=`${dates.length} days`;
     resizeFrame();
   }
@@ -717,10 +758,10 @@ main{padding:0!important;max-width:100%;margin:0}
     out+='<rect x="48" y="39" width="606" height="180" fill="transparent"/>';
     byId('trend-svg').innerHTML=out;
     byId('graph-legend').innerHTML=thresholds.map((t,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${sourceColors[i]};opacity:${state.threshold===i?1:.6}"></span>${t} mm</span>`).join('');
-    byId('graph-selected-label').textContent=state.day===null?'Tap the graph to inspect a day':dayName(dates[state.day]);
+    byId('graph-selected-label').textContent=state.day===null?'Tap the graph for a day’s details':dayName(dates[state.day]);
   }
   function bars(){
-    byId('bar-list').innerHTML=dates.map((d,i)=>{const p=d.values[state.threshold];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${colors[state.threshold]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
+    byId('bar-list').innerHTML=dates.map((d,i)=>{const p=d.values[state.threshold];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[state.threshold]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
   }
   function fingerprints(){
     byId('fingerprint-list').innerHTML=dates.map((d,i)=>{const b=bins(d.values);return `<button class="fingerprint ${b?'':'missing'}" type="button" data-day="${i}" aria-pressed="${state.day===i}" aria-label="${dayName(d)}. Open rainfall possibilities.">${dayLabel(d)}<span class="finger-track">${b?b.map((p,j)=>p>0?`<span class="finger-segment" style="flex:${p};background:${rangeColors[j]}" title="${ranges[j]}: ${p.toFixed(0)}%"></span>`:'').join(''):'Data unavailable'}</span><span aria-hidden="true" style="text-align:right;color:#8997a4">›</span></button>`;}).join('');
@@ -728,14 +769,16 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function details(){
     const panel=byId('day-panel');if(state.day===null){panel.hidden=true;panel.innerHTML='';resizeFrame();return;}panel.hidden=false;
-    const d=dates[state.day];let h=`<div class="panel-head"><div><h3>${d.date===phDateKey(new Date())?'TODAY / ':''}${dayName(d)}</h3><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
-    h+='<div class="smallheading">Chances of rain</div><div class="chance-rows">';
-    thresholds.forEach((t,i)=>{const p=d.values[i];const s=shade(sourceColors[i],p),lc=tint(sourceColors[i],.20),tc=ink(sourceColors[i],p);h+=`<div class="chance-row"><div class="chance-left" style="background:${lc}"><strong>≥${t} mm</strong><span>${amountWords[i]} or more</span></div><div class="chance-right" style="background:${s};color:${tc}"><strong>${pct(p)}</strong><span>${numeric(p)?chanceWords(p):'no data'}</span></div></div>`;});
-    h+='</div>';
+    const d=dates[state.day];const today=d.date===phDateKey(new Date());
+    let h=`<div class="panel-head"><div><div class="panel-day"><span class="today-mini ${today?'show-today':''}">TODAY</span><h3>${dayName(d)}</h3></div><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
     if(state.view==='amounts'){
-      h+='<div class="smallheading">Possible 24-hour rainfall totals</div><div class="amount-distribution">';
+      h+='<div class="smallheading">Possible rainfall totals for the day</div><div class="amount-distribution">';
       const b=bins(d.values);
       h+=b?b.map((p,i)=>`<div class="amount-small"><div class="low"><i class="amount-swatch" style="background:${rangeColors[i]}"></i>${ranges[i]}</div><div class="big">${Math.round(p)}%</div></div>`).join(''):'<div class="empty">The complete probability distribution is unavailable for this day.</div>';
+      h+='</div>';
+    } else {
+      h+='<div class="smallheading">Chances of rain</div><div class="chance-rows">';
+      thresholds.forEach((t,i)=>{const p=d.values[i];const s=shade(sourceColors[i],p),lc=tint(sourceColors[i],.20),tc=ink(sourceColors[i],p);h+=`<div class="chance-row"><div class="chance-left" style="background:${lc}"><strong>≥${t} mm</strong><span>${amountWords[i]} or more</span></div><div class="chance-right" style="background:${s};color:${tc}"><strong>${pct(p)}</strong><span>${numeric(p)?chanceWords(p):'no data'}</span></div></div>`;});
       h+='</div>';
     }
     panel.innerHTML=h;resizeFrame();
@@ -758,7 +801,9 @@ main{padding:0!important;max-width:100%;margin:0}
   byId('threshold-chips').addEventListener('click',e=>{const b=e.target.closest('button[data-threshold]');if(!b)return;state.threshold=Number(b.dataset.threshold);redraw();});
   byId('bar-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
   byId('fingerprint-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
-  document.querySelectorAll('.view-tab').forEach(b=>b.addEventListener('click',()=>{state.view=b.dataset.view;redraw();}));
+  document.querySelectorAll('.view-tab').forEach(b=>b.addEventListener('click',()=>{state.view=b.dataset.view;state.day=null;redraw();}));
+  document.querySelectorAll('.subview-tab').forEach(b=>b.addEventListener('click',()=>{state.subview=b.dataset.subview;redraw();}));
+  byId('outlook-simple').addEventListener('change',e=>{simple=e.target.checked;redraw();});
   const svg=byId('trend-svg');svg.setAttribute('viewBox','0 0 700 256');
   svg.addEventListener('click',e=>{const m=svg.getScreenCTM();if(!m)return;const point=svg.createSVGPoint();point.x=e.clientX;point.y=e.clientY;const p=point.matrixTransform(m.inverse());if(p.x<44||p.x>660||p.y<35||p.y>224)return;const n=Math.max(1,dates.length-1),i=Math.max(0,Math.min(dates.length-1,Math.round((p.x-48)/606*n)));setDay(i);});
   svg.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();state.day=Math.max(0,Math.min(dates.length-1,(state.day===null?0:state.day)+(e.key==='ArrowRight'?1:-1)));redrawSelection();}else if(e.key==='Enter'||e.key===' '){e.preventDefault();state.day=state.day===null?0:null;redrawSelection();}});
@@ -1082,7 +1127,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     head = (
         f"<div class='{row_cls} rr-head'><div></div>{chance_head}"
         f"<div class='rr-slots' style='{grid}'>{slot_headers}</div>"
-        "<div class='rr-h rr-h-r'>Day total</div></div>"
+        "<div class='rr-h rr-h-r'>Total for the day</div></div>"
     )
 
     body = ""
@@ -1209,7 +1254,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
             f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A, %d %B}</strong></div>"
-            f"<div class='rr-detail-main'><small>Day total:</small>"
+            f"<div class='rr-detail-main'><small>Total for the day:</small>"
             f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
             "<small>From lower to higher estimates</small></div>"
@@ -1958,36 +2003,39 @@ with main:
                     period_labels = {h: f"{h}-hourly" for h in AVAILABLE_PERIOD_HOURS}
                     if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
                         st.session_state["pct_period_hours"] = 3
-                    selected_period_label = st.segmented_control(
-                        "Rainfall timing",
-                        list(period_labels.values()),
-                        default=period_labels[st.session_state["pct_period_hours"]],
-                        key="pct_period_control",
-                    )
-                    if selected_period_label is not None:
-                        st.session_state["pct_period_hours"] = next(
-                            h for h, label in period_labels.items() if label == selected_period_label
+                    # One bordered card groups both controls with the rainfall
+                    # forecast, matching the tab placement inside the 14-day card.
+                    with st.container(border=True, key="six_day_forecast_card"):
+                        selected_period_label = st.segmented_control(
+                            "Rainfall timing",
+                            list(period_labels.values()),
+                            default=period_labels[st.session_state["pct_period_hours"]],
+                            key="pct_period_control",
                         )
-                    pct_period_hours = st.session_state["pct_period_hours"]
-                    pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
-                    pct_days = pct_result["days"]
-                    if not pct_days:
-                        st.warning(
-                            f"Not enough rainfall data for the {pct_period_hours}-hourly view. "
-                            "Try the shorter interval."
-                        )
-                    else:
+                        if selected_period_label is not None:
+                            st.session_state["pct_period_hours"] = next(
+                                h for h, label in period_labels.items() if label == selected_period_label
+                            )
                         simple_mode = st.toggle("Simple mode", value=False, key="rain_simple_mode")
-                        st.caption("Tap a day to explore the forecast. Tap it again to close the details.")
-                        rain_card_html = render_rain_rows_html(
-                            pct_result, card_thr, max_days=6, simple_mode=simple_mode
-                        )
-                        if hasattr(st, "iframe"):
-                            st.iframe(rain_card_html, height="content")
+                        pct_period_hours = st.session_state["pct_period_hours"]
+                        pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
+                        pct_days = pct_result["days"]
+                        if not pct_days:
+                            st.warning(
+                                f"Not enough rainfall data for the {pct_period_hours}-hourly view. "
+                                "Try the shorter interval."
+                            )
                         else:
-                            # Streamlit <1.56: postMessage inside the card
-                            # resizes this legacy component after each tap.
-                            components.html(rain_card_html, height=510, scrolling=False)
+                            st.caption("Tap a day to explore the forecast. Tap it again to close the details.")
+                            rain_card_html = render_rain_rows_html(
+                                pct_result, card_thr, max_days=6, simple_mode=simple_mode
+                            )
+                            if hasattr(st, "iframe"):
+                                st.iframe(rain_card_html, height="content")
+                            else:
+                                # Streamlit <1.56: postMessage inside the card
+                                # resizes this legacy component after each tap.
+                                components.html(rain_card_html, height=510, scrolling=False)
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
@@ -2005,10 +2053,7 @@ with main:
                         num_days_shown = min(14, len(upcoming_windows or thr_result["windows"]))
                         st.subheader(f"{num_days_shown}-day rain chances for {rain_name}")
                         st.caption("Chance of getting at least each rainfall amount during a day.")
-                        outlook_html = render_14day_outlook_html(
-                            thr_result,
-                            simple_mode=st.session_state.get("rain_simple_mode", False),
-                        )
+                        outlook_html = render_14day_outlook_html(thr_result)
                         if hasattr(st, "iframe"):
                             st.iframe(outlook_html, height="content")
                         else:
@@ -2155,13 +2200,14 @@ if view_mode == "Rainfall Forecast":
                 "The main six-day card shows the highest rainfall threshold with "
                 "at least a 65% chance, or the chance of at least 1 mm if none of "
                 "the higher thresholds qualify. Simple mode replaces these numbers with "
-                "plain-language probability and rainfall-intensity categories; the day-total "
+                "plain-language probability and rainfall-intensity categories; the total-for-the-day "
                 "category spans the ensemble median through P90."
             )
             st.markdown(
-                "**Long-range outlook.** Rain chances is a linked view of the same five "
-                "exceedance probabilities: the ribbon graph and horizontal daily bars "
-                "both use the chosen rainfall threshold. Possible amounts converts "
+                "**Long-range outlook.** Rain chances offers two ways to inspect the same five "
+                "exceedance probabilities: a ribbon graph and horizontal daily bars "
+                "that share the chosen rainfall threshold. The 14-day card has its own "
+                "independent Simple mode switch. Possible amounts converts "
                 "those nested chances into six exclusive 24-hour rainfall ranges "
                 "that add to 100%. Missing or inconsistent probabilities are not "
                 "silently treated as zero. The outlook uses up to 14 upcoming "
