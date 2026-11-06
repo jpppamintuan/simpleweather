@@ -764,7 +764,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
         <span class="subview-title">Explore chance of rain</span>
         <div class="subview-tabs">
           <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true" aria-label="Graph" title="Graph"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 20V4M3 20h18M5 16l5-6 4 3 6-8"/></svg></button>
-          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false" aria-label="Bars" title="Bars"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="12" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="14" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></svg></button>
+          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false" aria-label="Bars" title="Bars"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="4" rx="1"/><rect x="3" y="10" width="13" height="4" rx="1"/><rect x="3" y="17" width="8" height="4" rx="1"/></svg></button>
           <button type="button" class="subview-tab" data-subview="matrix" aria-pressed="false" aria-label="Matrix" title="Matrix"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
         </div>
       </div>
