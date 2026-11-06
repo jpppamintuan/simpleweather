@@ -709,6 +709,10 @@ main{padding:0!important;max-width:100%;margin:0}
 .threshold-chip,.outlook-simple .threshold-chip{height:96px;min-height:96px;max-height:96px}
 .outlook-simple .threshold-chip .chip-meaning{font-size:9px}
 }
+/* Quick fade transitions add polish without moving forecast values. */
+@keyframes forecastFadeIn{from{opacity:0}to{opacity:1}}
+.panel:not([hidden]),.part:not([hidden]),[role="tabpanel"]:not([hidden]){animation:forecastFadeIn .1s ease-out both}
+@media(prefers-reduced-motion:reduce){.panel,.part,[role="tabpanel"]{animation:none!important}}
 /* Inline day details use the same panel without leaving an empty slot below. */
 .inline-day-panel{width:100%;margin:5px 0 10px;border-radius:10px}
 /* Final consistency adjustments with the six-day card. */
@@ -763,12 +767,12 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
         <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
       </div>
       <div class="part graph-section" id="outlook-graph">
-        <div class="part-heading"><div><div class="section-label">How rain chances change</div><div class="kicker">Five rainfall levels; the chosen one stands out</div></div><span class="kicker" id="graph-selected-label">Tap the graph to inspect a day</span></div>
+        <div class="part-heading"><div class="section-label">Rainfall chances over time</div><span class="kicker" id="graph-selected-label">Tap a day for details</span></div>
         <div class="graph-scroll"><svg id="trend-svg" viewBox="0 0 900 305" role="img" tabindex="0" aria-label="Interactive daily graph showing chances of different rainfall thresholds. Tap or click a date to select it."></svg></div>
         <div class="legend" id="graph-legend"></div>
       </div>
       <div class="part bars-section" id="outlook-bars" hidden>
-        <div class="part-heading"><div><div class="section-label">Day-by-day chances</div><div class="kicker">Tap any rainfall bar to explore that day</div></div><span id="bar-count" class="kicker">Daily outlook</span></div>
+        <div class="part-heading"><div class="section-label">Day-by-day chances</div><span id="bar-count" class="kicker">Daily outlook</span></div>
         <div class="bar-header"><span>Day</span><span>Chance of at least the chosen amount</span><span style="text-align:right">Chance</span></div>
         <div class="bar-day-list" id="bar-list"></div>
       </div>
@@ -779,16 +783,16 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     </div>
     <div id="view-amounts" role="tabpanel" aria-labelledby="tab-amounts" hidden>
       <div class="part" style="margin-top:4px">
-        <div class="part-heading"><div><div class="section-label">Possible rainfall totals for the day</div><div class="kicker">Each bar shows the possible amounts for that day</div></div></div>
+        <div class="part-heading"><div class="section-label">Possible rainfall totals for the day</div></div>
         <div class="fingerprint-list" id="fingerprint-list"></div>
         <div class="legend-grid" id="fingerprint-legend"></div>
-        <div class="finger-tip" style="margin-top:13px">Wider color segments mean a greater chance of that rainfall range. Tap any day for details.</div>
+        <div class="finger-tip" style="margin-top:9px">Longer segments mean more likely rainfall amounts.</div>
       </div>
     </div>
     <div id="day-panel-anchor"></div>
     <div class="panel" id="day-panel" aria-live="polite"></div>
-    <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
-      <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible totals" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
+    <div class="footnote"><span>Each day covers 8 AM–8 AM Philippine time.</span>
+      <details><summary>How to read this forecast</summary><div style="padding-top:6px">Graph and Bars show the chance of reaching at least the chosen rainfall amount. Possible totals shows the chance of each separate rainfall range. Tap a day to see the full breakdown. Missing data is not the same as 0%. Rainfall chances do not directly measure flood risk.</div></details>
     </div>
   </div>
 </main>
@@ -802,6 +806,11 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   // Identical base colors in the options, graph lines, legend and bars.
   const colors = sourceColors;
   const amountWords = ['very light','light','moderate','heavy','intense'];
+  const amountButtonLines = [
+    ['very light','rain or more'], ['light rain','or more'],
+    ['moderate','rain or more'], ['heavy rain','or more'],
+    ['intense rain','or more']
+  ];
   const ranges = ['<1 mm','1 to <5 mm','5 to <20 mm','20 to <50 mm','50 to <100 mm','100 mm or more'];
   const rangeColors = ['#CAD7E1', ...sourceColors.map(c=>tint(c,.65))];
   const byId = id => document.getElementById(id);
@@ -836,7 +845,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
     const choices=byId('threshold-chips');
-    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span class="chip-meaning-text"><span class="chip-meaning-level">${amountWords[i]}</span><span class="chip-meaning-rest">rain or more</span></span></span></button>`).join('');
+    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span class="chip-meaning-text"><span class="chip-meaning-level">${amountButtonLines[i][0]}</span><span class="chip-meaning-rest">${amountButtonLines[i][1]}</span></span></span></button>`).join('');
     choices.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.threshold)===state.threshold)));
     document.body.classList.toggle('outlook-simple',simple);
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
@@ -849,32 +858,24 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     resizeFrame();
   }
   const X=i=>48+(dates.length<=1?0:i/(dates.length-1)*606), Y=p=>217-p*1.71;
-  // Gently rounded, shape-preserving Bezier segments. Every curve passes
-  // through the original ECMWF daily values; missing days break the path.
+  // Standard Catmull-Rom-to-Bezier curves, with moderate smoothing.
+  // Each segment starts/ends at the real daily values. Missing dates break
+  // the path rather than being interpolated as zero.
   const coord = n => Number(n).toFixed(2);
   function smoothCommands(points){
     if(points.length<2)return '';
-    const n=points.length, slopes=new Array(n), delta=[];
-    for(let i=0;i<n-1;i++){
-      const dx=points[i+1][0]-points[i][0];
-      delta.push(dx?(points[i+1][1]-points[i][1])/dx:0);
-    }
-    slopes[0]=delta[0];slopes[n-1]=delta[n-2];
-    for(let i=1;i<n-1;i++){
-      const a=delta[i-1],b=delta[i];
-      if(a*b<=0){slopes[i]=0;continue;}
-      const h0=Math.abs(points[i][0]-points[i-1][0]);
-      const h1=Math.abs(points[i+1][0]-points[i][0]);
-      const w0=2*h1+h0,w1=h1+2*h0;
-      slopes[i]=(w0+w1)/(w0/a+w1/b);
-    }
-    const smoothing=0.58; // mild curve; lower than a full cubic spline
+    const curve=0.85; // 0 = straight, 1 = conventional Catmull-Rom
     let out='';
-    for(let i=0;i<n-1;i++){
-      const a=points[i],b=points[i+1],dx=b[0]-a[0];
-      out+=` C${coord(a[0]+dx/3)},${coord(a[1]+slopes[i]*dx/3*smoothing)}`+
-           ` ${coord(b[0]-dx/3)},${coord(b[1]-slopes[i+1]*dx/3*smoothing)}`+
-           ` ${coord(b[0])},${coord(b[1])}`;
+    for(let i=0;i<points.length-1;i++){
+      const a=points[Math.max(0,i-1)];
+      const b=points[i];
+      const c=points[i+1];
+      const d=points[Math.min(points.length-1,i+2)];
+      const c1x=b[0]+(c[0]-a[0])*curve/6;
+      const c1y=b[1]+(c[1]-a[1])*curve/6;
+      const c2x=c[0]-(d[0]-b[0])*curve/6;
+      const c2y=c[1]-(d[1]-b[1])*curve/6;
+      out+=` C${coord(c1x)},${coord(c1y)} ${coord(c2x)},${coord(c2y)} ${coord(c[0])},${coord(c[1])}`;
     }
     return out;
   }
@@ -924,13 +925,18 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       areaBands(v[t],dates.map(()=>0)).forEach(d=>{out+=`<path d="${d}" fill="${sourceColors[t]}" fill-opacity=".20" stroke="none"/>`;});
     }
     v.forEach((serie,t)=>{const focused=state.threshold===null||state.threshold===t;out+=`<path d="${pathLine(serie)}" fill="none" stroke="${focused?colors[t]:'#aab4bf'}" stroke-width="${state.threshold===null?2:focused?3.2:1.2}" stroke-opacity="${focused?1:.43}" stroke-linecap="round" stroke-linejoin="round"/>`;});
-    if(state.day!==null){const i=state.day;out+=`<line x1="${X(i)}" x2="${X(i)}" y1="42" y2="217" stroke="#92aabb" stroke-dasharray="4 4"/>`;if(state.threshold!==null){const p=v[state.threshold][i];if(numeric(p))out+=`<circle cx="${X(i)}" cy="${Y(p)}" r="5.5" fill="#fff" stroke="${colors[state.threshold]}" stroke-width="3"/>`;}}
+    if(state.day!==null){
+      const i=state.day;
+      out+=`<line x1="${X(i)}" x2="${X(i)}" y1="42" y2="217" stroke="#92aabb" stroke-dasharray="4 4"/>`;
+      const shown=state.threshold===null?[0,1,2,3,4]:[state.threshold];
+      shown.forEach(t=>{const p=v[t][i];if(numeric(p))out+=`<circle cx="${X(i)}" cy="${Y(p)}" r="${state.threshold===null?3.5:5.5}" fill="#fff" stroke="${colors[t]}" stroke-width="2.4"/>`;});
+    }
     out+='<rect x="48" y="39" width="606" height="180" fill="transparent"/>';
     byId('trend-svg').innerHTML=out;
     const legend=byId('graph-legend');
     if(!legend.children.length)legend.innerHTML=thresholds.map((t,i)=>`<button type="button" class="legend-pill legend-button" data-legend-threshold="${i}" aria-pressed="false"><span class="legend-mark"></span>${t} mm</button>`).join('');
     legend.querySelectorAll('button').forEach(b=>{const i=Number(b.dataset.legendThreshold);b.setAttribute('aria-pressed',String(state.threshold===i));b.querySelector('.legend-mark').style.background=state.threshold===null||state.threshold===i?sourceColors[i]:'#abb5bf';});
-    byId('graph-selected-label').textContent=state.day===null?'Tap the graph for a day’s details':dayName(dates[state.day]);
+    byId('graph-selected-label').textContent=state.day===null?'Tap a day for details':dayName(dates[state.day]);
   }
   function bars(){
     byId('bar-list').innerHTML=dates.map((d,i)=>{const active=state.threshold??state.barThreshold;const p=d.values[active];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[active]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
@@ -1461,8 +1467,10 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
             f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A}, {day.day} {day:%B}</strong></div>"
-            f"<div class='rr-detail-main'><small>Total for the day:</small>"
-            f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
+            "<div class='rr-detail-main'><div class='rr-detail-total-top'>"
+            f"<small>Total for the day:</small><b>{_fmt_mm(total_med)}</b><small>mm</small></div>"
+            f"<small class='rr-detail-intensity'>{_rain_range_descriptor(total_med, total_p90)}</small>"
+            "</div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
             "<small>From lower to higher estimates</small></div>"
             f"<div class='rr-quantiles'>{quantiles}</div>"
@@ -1542,10 +1550,14 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-selectable.is-selected{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
         ".rr-selectable:focus-visible{outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
-        ".rr-detail.is-open{display:block;}"
+        ".rr-detail.is-open{display:block;animation:rrFadeIn .1s ease-out both;}"
+        "@keyframes rrFadeIn{from{opacity:0}to{opacity:1}}"
+        "@media(prefers-reduced-motion:reduce){.rr-detail.is-open{animation:none!important;}}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
-        ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
+        ".rr-detail-main{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:2px;white-space:nowrap;text-align:right;}"
+        ".rr-detail-total-top{display:flex;align-items:baseline;justify-content:flex-end;gap:4px;}"
+        ".rr-detail-intensity{display:block;font-size:.62rem;color:#7D8995;line-height:1.15;font-weight:400;}"
         ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
         ".rr-detail-main small{font-size:.62rem;color:#7D8995;letter-spacing:0;}"
         ".rr-section-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:15px;margin-bottom:7px;font-size:.77rem;font-weight:700;color:#263746;}"
@@ -1585,6 +1597,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-legend,.rr-detail-note{font-size:.71rem;}"
         ".rr-detail-top strong{font-size:1rem;}.rr-detail-main b{font-size:1.4rem;}"
         ".rr-detail-main small{font-size:.75rem;}"
+        ".rr-detail-main .rr-detail-intensity{font-size:.70rem;}"
         ".rr-quantile small,.rr-detail-chance small{font-size:.73rem;}"
         ".rr-section-heading{font-size:.94rem;}.rr-section-heading small{font-size:.73rem;}"
         ".rr-time-range{font-size:.69rem;}"
@@ -1841,6 +1854,8 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-root{border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;color:#111}
     .rr-root .rr-variant{padding:0;border:0;border-radius:0;background:transparent}
     .rr-variant[hidden]{display:none!important}
+    .rr-variant:not([hidden]){animation:rrFadeIn .1s ease-out both}
+    @media(prefers-reduced-motion:reduce){.rr-variant:not([hidden]){animation:none!important}}
     .rr-card-controls{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:14px 0 12px}
     .rr-card-title{font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;color:#1d2530;margin:0}
     .rr-card-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px}
@@ -1868,15 +1883,13 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
             for hours in (3, 6) if any(key.startswith(f'{hours}-') for key, _ in variants)
         )
         + "</div><label class='rr-simple-toggle'><input id='rr-mode-toggle' type='checkbox'>Simple mode</label></div>"
-        "<div class='rr-intro'>Tap a day to explore the forecast. Tap it again to close the details.</div>"
+        "<div class='rr-intro'>Tap a day for details.</div>"
     )
     guide = (
         "<details class='rr-reading-guide'><summary>How to read this forecast</summary>"
-        "<div class='rr-guide-body'>The bright blue bars show the most likely amount of rain "
-        "during each 3-hourly or 6-hourly period. The lighter part shows a higher estimate. "
-        "Chance of rain shows how likely a particular rainfall amount is to be reached. "
-        "Total for the day summarizes the expected rainfall. Tap a day for more detail "
-        "about the estimates, rainfall amounts and timing.</div></details>"
+        "<div class='rr-guide-body'>Bright blue shows the most likely rainfall amount; "
+        "pale blue-gray shows a higher estimate. Chance cards show the likelihood "
+        "of reaching their listed rainfall amounts. Tap a day for the full breakdown.</div></details>"
     )
     active_content = controls + "".join(variant_parts) + guide + "</div>"
     scripts = "".join(script for _, script in variants)
@@ -2492,51 +2505,24 @@ if view_mode == "Rainfall Forecast":
         )
         with st.container(key="rain_footnote_text"):
             st.markdown(
-                "**Rainfall amounts.** The six-day card uses ECMWF Ensemble Prediction System "
-                "(ENS) forecasts from 50 members. The bold daily amount is the ensemble median "
-                "(50th percentile). The pale part of each bar extends to P90 (90th percentile). "
-                "‘High’ means P90, an upper-end estimate—not a true maximum. "
-                "The expanded panel also shows P10, P25 and P75. "
-                "The median is the midpoint of ensemble estimates, not necessarily the single most probable amount."
+                "**Forecast estimates.** ECMWF ENS uses 50 ensemble members. The blue bars and "
+                "daily totals show the median (P50); the lighter bars and ‘High’ show P90 "
+                "(a higher estimate, not a true maximum). Expanded details include P10, P25 and P75. "
+                "The median is not necessarily the single most likely outcome."
             )
             st.markdown(
-                "**Timing.** The daily rainfall totals run from 2:00 AM to 2:00 AM "
-                "Philippine Time (UTC+8). The 3-hourly and 6-hourly views group the same "
-                "underlying forecast bins; totals don't change when switching views. "
-                "Incomplete time periods are left blank. The device clock is used to mark TODAY "
-                "and the ongoing rainfall interval as NOW, in Philippine time. The 24-hour threshold chances "
-                "run from 8:00 AM to 8:00 AM and are aligned to the date they begin."
+                "**Periods and probabilities.** Six-day totals cover 2 AM–2 AM PHT; "
+                "14-day rainfall chances cover 8 AM–8 AM PHT. Each threshold percentage is "
+                "the chance of at least that amount, and threshold chances cannot be added. "
+                "Possible totals shows separate ranges that sum to 100% when all data is available. "
+                "Missing values are not zeros; rainfall probability alone does not predict flooding."
             )
             st.markdown(
-                "**Reading the chart.** Bright blue shows the median rainfall, pale blue-gray "
-                "shows the range up to P90, and a dark cap means the higher estimate "
-                "exceeds the chart's vertical scale (10 mm per 3-hour period or 20 mm "
-                "per 6-hour period). Each threshold chance is the probability that "
-                "rainfall reaches or exceeds that amount during its 24-hour period. "
-                "The main six-day card shows the highest rainfall threshold with "
-                "at least a 65% chance, or the chance of at least 1 mm if none of "
-                "the higher thresholds qualify. Simple mode replaces these numbers with "
-                "plain-language probability and rainfall-intensity categories; the total-for-the-day "
-                "category spans the ensemble median through P90."
-            )
-            st.markdown(
-                "**Long-range outlook.** Rain chances offers two ways to inspect the same five "
-                "exceedance probabilities: a ribbon graph and horizontal daily bars "
-                "that share the chosen rainfall threshold. The 14-day card has its own "
-                "independent Simple mode switch. Possible totals converts "
-                "those nested chances into six exclusive 24-hour rainfall ranges "
-                "that add to 100%. Missing or inconsistent probabilities are not "
-                "silently treated as zero. The outlook uses up to 14 upcoming "
-                "8:00 AM-to-8:00 AM forecast windows; actual days depend on which "
-                "forecast periods are available."
-            )
-            st.markdown(
-                "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
-                "cycles; threshold probability products are issued for 00Z and 12Z only. "
-                "Published products are first available at 0.25° and typically update "
-                "to 0.1° later. Data is normally read from scheduled ingestion; "
-                "if stored threshold data is stale, the app may retrieve 0.25° chances live. "
-                "Source: ECMWF Open Data (CC BY 4.0)."
+                "**Source and updates.** ECMWF Open Data (CC BY 4.0). Rainfall amounts use "
+                "00/06/12/18Z runs; rainfall thresholds use 00/12Z. Data is normally fetched "
+                "from stored forecast products (0.25° or 0.1°); stale threshold data may "
+                "trigger a live 0.25° fetch. The exact coordinates, model grid point, "
+                "resolution and available run information appear below."
             )
             if "last_rain" in st.session_state:
                 _forecast = st.session_state["last_rain"]
