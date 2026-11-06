@@ -665,6 +665,32 @@ def _rain_range_descriptor(median_mm: float, p90_mm: float) -> str:
     return f"{abbreviations.get(low, low)} to {abbreviations.get(high, high)}"
 
 
+def _simple_rain_range(median_mm: float, p90_mm: float) -> str:
+    """Plain-language daily amount using the full median-to-P90 descriptors."""
+    low = _rain_amount_descriptor(median_mm)
+    high = _rain_amount_descriptor(p90_mm)
+    return low if low == high else f"{low} to {high}"
+
+
+def _simple_chance_chip(
+    val_1mm, secondary: tuple[int, float] | None = None, *, partial: bool = False
+) -> str:
+    """The same probability and threshold as standard mode, without numbers."""
+    threshold, probability = (1, val_1mm) if secondary is None else secondary
+    if probability is None:
+        return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
+    bg, text_color = _cell_style(threshold, probability)
+    chance_phrase = _chance_descriptor(float(probability)).capitalize() + " chance"
+    amount_phrase = _rain_amount_descriptor(float(threshold)).capitalize() + " rain"
+    return (
+        f"<div class='rr-chip rr-chip-simple' style='{bg}color:{text_color};' "
+        f"aria-label='{probability:.0f}% chance of at least {threshold} mm: {chance_phrase}, {amount_phrase}'>"
+        f"<span class='rr-simple-chance'>{chance_phrase}</span>"
+        f"<span class='rr-simple-threshold'>{amount_phrase}</span>"
+        "</div>"
+    )
+
+
 def _chance_chip(
     val_1mm, secondary: tuple[int, float] | None = None, *, partial: bool = False
 ) -> str:
@@ -688,7 +714,7 @@ def _chance_chip(
     )
 
 
-def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6) -> str:
+def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6, *, simple_mode: bool = False) -> str:
     """Selectable six-day rainfall outlook with an accessible, detailed day panel.
 
     The overview bars retain the existing median/P90 colors and absolute scale.
@@ -716,7 +742,12 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         day_members.setdefault(key, []).append(raw_bin["member_values_mm"])
     for day, row in rows.items():
         day_members.setdefault(day, [p["member_values_mm"] for p in row.values()])
-    days = sorted(set(rows) | set(day_members))[:max_days]
+    # Drop past 2am-to-2am daily rows based on Philippine time, not the
+    # ECMWF initialization day. The iframe checks the device clock too.
+    today_ph = datetime.now(PH_TZ).date()
+    days = [d for d in sorted(set(rows) | set(day_members)) if d >= today_ph][:max_days]
+    if not days:
+        return "<div style='padding:14px;font-family:Source Sans 3,sans-serif'>No upcoming daily rainfall forecast is available. Try refreshing the data.</div>"
 
     # Threshold forecasts cover 8am–8am; rainfall totals cover 2am–2am.
     chance_data, chance_label = None, {}
@@ -728,6 +759,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         }
     has_chance = chance_data is not None
     row_cls = "rr-row rr-c" if has_chance else "rr-row"
+    if simple_mode:
+        row_cls += " rr-simple"
     slot_hours = [ROW_ANCHOR_PH_HOUR + i * step for i in range(n_slots)]
     grid = f"grid-template-columns:repeat({n_slots},minmax(0,1fr));column-gap:{_RAIN_BAR_GAP_PX}px;"
     # Widen only the detailed bars. The overview bars and their spacing stay intact.
@@ -741,6 +774,9 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         return " rr-tip-l" if pos < 0.25 else (" rr-tip-r" if pos > 0.75 else "")
 
     def bar(period: dict, slot: int, *, tooltip: bool = False, below: bool = False) -> str:
+        start_ms = round(period["start_utc"].timestamp() * 1000)
+        end_ms = round(period["end_utc"].timestamp() * 1000)
+        slot_attrs = f"data-start-ms='{start_ms}' data-end-ms='{end_ms}'"
         stats = period["stats"]
         med, p75, p90, p25, p10 = (
             stats["median"], stats["p75"], stats["p90"], stats["p25"], stats["p10"]
@@ -757,7 +793,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         if not tooltip:
             # No tooltip markup and no tabindex: the entire overview row receives
             # the click instead of a nested focusable bar intercepting it.
-            return f"<div class='rr-slot'><div class='rr-bar'>{bars}</div></div>"
+            return f"<div class='rr-slot' {slot_attrs}><div class='rr-bar'>{bars}</div></div>"
         start = period["start_utc"].astimezone(PH_TZ)
         end = period["end_utc"].astimezone(PH_TZ)
         when = f"{start:%a %d %b} · {_tip_hour_label(start.hour)}–{_tip_hour_label(end.hour)}"
@@ -769,7 +805,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
         tip_cls = "rr-tip" + tip_side(slot) + (" rr-tip-b" if below else "")
         return (
-            f"<div class='rr-slot'><button type='button' class='rr-bar' aria-label='Rainfall {when}; tap for percentiles'>"
+            f"<div class='rr-slot' {slot_attrs}><button type='button' class='rr-bar' aria-label='Rainfall {when}; tap for percentiles'>"
             f"{bars}<span class='{tip_cls}'><b>{when}</b><br>"
             + "<br>".join(values) + f"{over_note}</span></button></div>"
         )
@@ -782,7 +818,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     # Full ranges above the expanded bars, with a line break on narrow screens.
     detail_slot_headers = "".join(
         "<div class='rr-slot'><span class='rr-time-range'>"
-        f"<span>{_tip_hour_label(h)}–</span><span>{_tip_hour_label(h + step)}</span>"
+        f"<span class='rr-now-tag'>NOW</span><span>{_tip_hour_label(h)}–</span><span>{_tip_hour_label(h + step)}</span>"
         "</span></div>"
         for h in slot_hours
     )
@@ -823,7 +859,10 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             label = chance_label.get(day)
             v1 = chance_data.get(1, {}).get(label) if label else None
             secondary = _pick_dynamic_threshold(chance_data, label) if label else None
-            chance_chip = _chance_chip(v1, secondary, partial=is_partial)
+            chance_chip = (
+                _simple_chance_chip(v1, secondary, partial=is_partial)
+                if simple_mode else _chance_chip(v1, secondary, partial=is_partial)
+            )
             cards = []
             for threshold in AVAILABLE_THRESHOLDS_MM:
                 val = chance_data.get(threshold, {}).get(label) if label else None
@@ -862,36 +901,56 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         # click state, and repeat clicks can collapse the expanded details.
         initial_class = " is-selected" if index == 0 else ""
         expanded = "true" if index == 0 else "false"
+        simple_total_descriptor = _simple_rain_range(total_med, total_p90)
+        if " to " in simple_total_descriptor:
+            first_amount, second_amount = simple_total_descriptor.split(" to ", 1)
+            simple_total_markup = (
+                f"<span class='rr-total-line'>{first_amount.capitalize()}</span>"
+                f"<span class='rr-total-line'>to {second_amount}</span>"
+            )
+        else:
+            simple_total_markup = f"<span class='rr-total-line'>{simple_total_descriptor.capitalize()}</span>"
         body += (
             f"<button type='button' class='{row_cls} rr-data rr-selectable{initial_class}' "
-            f"data-rr-day='{index}' aria-expanded='{expanded}' "
+            f"data-rr-day='{index}' data-rr-date='{day:%Y-%m-%d}' aria-expanded='{expanded}' "
             f"aria-controls='rr-detail-{index}' "
             f"aria-label='Toggle rainfall details for {day:%A %d %B}'>"
-            f"<div class='rr-day'><b>{day:%a}</b>"
+            f"<div class='rr-day'><span class='rr-today-tag'>TODAY</span><b>{day:%a}</b>"
             f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
-            f"<div class='rr-tot{' rr-tot-partial' if is_partial else ''}'>"
-            f"<div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
-            "<small class='rr-secondary'>mm</small></div>"
-            f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
-            f"High: {_fmt_mm(total_p90)} mm</small>"
-            f"{partial}</div></button>"
+            f"<div class='rr-tot{' rr-tot-partial' if is_partial else ''}{' rr-total-simple' if simple_mode else ''}'>"
+            + (
+                f"<div class='rr-total-plain'>{simple_total_markup}</div>"
+                if simple_mode else
+                f"<div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
+                "<small class='rr-secondary'>mm</small></div>"
+                f"<small class='rr-secondary rr-range' title='Upper-end estimate: 90th-percentile ensemble total'>"
+                f"High: {_fmt_mm(total_p90)} mm</small>"
+            )
+            + f"{partial}</div></button>"
         )
         quantile_values = [
             ("P10", total_p10), ("P25", total_p25),
             ("Median", total_med), ("P75", total_p75), ("P90", total_p90),
         ]
+        quantile_meanings = {
+            "P10": "lower-end estimate", "P25": "below typical",
+            "Median": "most likely", "P75": "above typical",
+            "P90": "higher estimate",
+        }
         quantiles = "".join(
             f"<div class='rr-quantile{' rr-qmedian' if name == 'Median' else ''}'>"
-            f"<small>{name}</small><b>{_fmt_mm(amount)} <em>mm</em></b>"
+            f"<small class='rr-quantile-name'>{name}</small>"
+            f"<small class='rr-quantile-help'><i>({quantile_meanings[name]})</i></small>"
+            f"<b>{_fmt_mm(amount)} <em>mm</em></b>"
             f"<small class='rr-quantile-desc'>{_rain_amount_descriptor(amount)}</small></div>"
             for name, amount in quantile_values
         )
         details += (
-            f"<section id='rr-detail-{index}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
+            f"<section id='rr-detail-{index}' data-rr-date='{day:%Y-%m-%d}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
             f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
-            f"<strong>{day:%A, %d %B}</strong>"
+            f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A, %d %B}</strong></div>"
             f"<div class='rr-detail-main'><small>Day total:</small>"
             f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
@@ -908,7 +967,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
     legend = (
         "<div class='rr-legend'>"
-        f"<span><i style='background:{_RAIN_MED}'></i>Typical amount</span>"
+        f"<span><i style='background:{_RAIN_MED}'></i>Most likely amount</span>"
         f"<span><i style='background:{_RAIN_P90}'></i>Higher estimate</span>"
         "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>Above chart scale</span>"
         "</div>"
@@ -987,7 +1046,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
         ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
-        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:30% minmax(0,1fr);align-items:stretch;gap:0;overflow:hidden;border-radius:6px;background:transparent;}"
+        ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:35% minmax(0,1fr);align-items:stretch;gap:0;overflow:hidden;border-radius:6px;background:transparent;}"
         ".rr-detail-chance-label{display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:6px;padding:7px 7px;text-align:left;min-width:0;}"
         ".rr-detail-chance-value{min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:12px;padding:7px 10px;}"
         ".rr-detail-chance small{font-size:.63rem;line-height:1.15;}"
@@ -1028,7 +1087,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail{padding:10px 7px;}"
         ".rr-quantiles{gap:2px;}"
         ".rr-detail-chances{gap:4px;}"
-        ".rr-detail-chance{grid-template-columns:34% minmax(0,1fr);}"
+        ".rr-detail-chance{grid-template-columns:40% minmax(0,1fr);}"
         ".rr-detail-chance-label{padding:7px 4px;gap:3px;}"
         ".rr-detail-chance-value{padding:7px 8px;gap:6px;}"
         ".rr-detail-chance-meaning{font-size:.56rem;}"
@@ -1038,6 +1097,30 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile b{font-size:.88rem;}.rr-qmedian b{font-size:.98rem;}"
         ".rr-quantile em{font-size:.58rem;}"
         ".rr-detail-chance b{font-size:.86rem;}"
+        "}"
+        ".rr-today-tag{display:none;font-size:.56rem;font-weight:400;color:#737D88;line-height:1.15;letter-spacing:.025em;}"
+        ".rr-selectable.rr-today .rr-today-tag,.rr-detail.rr-today .rr-today-tag{display:block;}"
+        ".rr-detail-date{display:flex;flex-direction:column;gap:2px;}"
+        ".rr-now-tag{display:none;color:#087DB4;font-weight:800;font-size:.57rem;letter-spacing:.02em;}"
+        ".rr-detail-bar-hours .rr-slot.rr-now .rr-now-tag{display:block;}"
+        ".rr-detail-bar-hours .rr-slot.rr-now .rr-time-range{color:#087DB4;font-weight:700;}"
+        ".rr-detail-bar-values .rr-slot.rr-now .rr-bar,.rr-selectable .rr-slot.rr-now .rr-bar{outline:1.5px solid #168ECC;outline-offset:2px;border-radius:6px;}"
+        ".rr-quantile-help{display:block;min-height:2.4em;font-size:.48rem!important;line-height:1.15;color:#87929C;font-weight:400;overflow-wrap:normal;}"
+        ".rr-quantile-help i{font-style:italic;}"
+        ".rr-chip-simple{gap:3px;padding:2px 3px;}"
+        ".rr-simple-chance,.rr-simple-threshold{display:block;white-space:nowrap;letter-spacing:-.02em;}"
+        ".rr-simple-chance{font-size:.52rem;font-weight:750;}"
+        ".rr-simple-threshold{font-size:.51rem;font-weight:400;}"
+        ".rr-total-simple{padding:3px;}"
+        ".rr-total-plain{font-weight:700;font-size:.59rem;line-height:1.2;text-align:center;white-space:normal;overflow-wrap:normal;}"
+        ".rr-total-line{display:block;white-space:nowrap;}"
+        ".rr-row.rr-c.rr-simple{grid-template-columns:2.35rem minmax(91px,1fr) minmax(0,170px) minmax(60px,.9fr);column-gap:4px;}"
+        "@container (min-width:430px){"
+        ".rr-row.rr-c.rr-simple{grid-template-columns:2.8rem minmax(105px,1fr) minmax(0,170px) minmax(86px,1fr);column-gap:7px;}"
+        ".rr-simple-chance{font-size:.73rem;}.rr-simple-threshold{font-size:.68rem;}"
+        ".rr-total-plain{font-size:.83rem;}"
+        ".rr-today-tag{font-size:.68rem;}"
+        ".rr-quantile-help{font-size:.61rem!important;}"
         "}"
         + "</style>"
     )
@@ -1051,17 +1134,21 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       const rows = Array.from(card.querySelectorAll('.rr-selectable[data-rr-day]'));
       const panels = Array.from(card.querySelectorAll('.rr-detail'));
       let selectedDay = rows.length ? 0 : -1;
+      const formatPHTDate = (at) => {
+        const parts = new Intl.DateTimeFormat('en-US', {
+          timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'
+        }).formatToParts(at);
+        const part = name => parts.find(p => p.type === name).value;
+        return `${part('year')}-${part('month')}-${part('day')}`;
+      };
 
       function updateFrameHeight() {
         window.requestAnimationFrame(() => {
-          // scrollHeight can be at least the OLD iframe viewport height.
-          // Measure visible card content directly, so collapsing details shrinks the frame.
           const bounds = card.getBoundingClientRect();
-          const height = Math.max(1, Math.ceil(bounds.top + bounds.height + 2));
           window.parent.postMessage({
             isStreamlitMessage: true,
             type: 'streamlit:setFrameHeight',
-            height: height
+            height: Math.max(1, Math.ceil(bounds.top + bounds.height + 2))
           }, '*');
         });
       }
@@ -1079,6 +1166,37 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         updateFrameHeight();
       }
 
+      function refreshTime() {
+        // The browser's system clock supplies the instant; display dates are
+        // Philippine time because the forecast windows are labelled in PHT.
+        const now = Date.now();
+        const today = formatPHTDate(new Date(now));
+        rows.forEach((row, index) => {
+          row.classList.toggle('rr-today', row.dataset.rrDate === today);
+          const panel = panels[index];
+          if (panel) panel.classList.toggle('rr-today', panel.dataset.rrDate === today);
+          for (const root of [row, panel]) {
+            if (!root) continue;
+            root.querySelectorAll('.rr-slot.rr-now').forEach(el => el.classList.remove('rr-now'));
+          }
+          const matchingSlots = Array.from(row.querySelectorAll('.rr-slots .rr-slot[data-start-ms]'));
+          matchingSlots.forEach((slot, slotIndex) => {
+            const from = Number(slot.dataset.startMs);
+            const until = Number(slot.dataset.endMs);
+            if (Number.isFinite(from) && from <= now && now < until) {
+              slot.classList.add('rr-now');
+              if (panel) {
+                const detailSlot = panel.querySelectorAll('.rr-detail-bar-values .rr-slot')[slotIndex];
+                const timeLabel = panel.querySelectorAll('.rr-detail-bar-hours .rr-slot')[slotIndex];
+                if (detailSlot) detailSlot.classList.add('rr-now');
+                if (timeLabel) timeLabel.classList.add('rr-now');
+              }
+            }
+          });
+        });
+        updateFrameHeight();
+      }
+
       rows.forEach((row, index) => {
         row.addEventListener('click', () => {
           selectDay(selectedDay === index ? -1 : index);
@@ -1087,12 +1205,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(updateFrameHeight).observe(card);
       }
-      // Fonts can change text wrapping and the card's natural height.
       if (document.fonts && document.fonts.ready) {
         document.fonts.ready.then(updateFrameHeight);
       }
-      window.addEventListener('load', updateFrameHeight);
-      updateFrameHeight();
+      document.addEventListener('visibilitychange', () => {
+        if (!document.hidden) refreshTime();
+      });
+      window.addEventListener('load', () => {refreshTime();updateFrameHeight();});
+      refreshTime();
+      window.setInterval(refreshTime, 60 * 1000);
     })();
     </script>"""
     viewport = (
@@ -1539,27 +1660,17 @@ with main:
                             "Try the shorter interval."
                         )
                     else:
-                        pct_percentiles = pct_result["percentiles"]
+                        simple_mode = st.toggle("Simple mode", value=False, key="rain_simple_mode")
                         st.caption("Tap a day to explore the forecast. Tap it again to close the details.")
-                        show_pct_graph = st.toggle("Show as graph", value=True, key="pct_show_graph")
-                        if show_pct_graph:
-                            rain_card_html = render_rain_rows_html(pct_result, card_thr, max_days=6)
-                            if hasattr(st, "iframe"):
-                                st.iframe(rain_card_html, height="content")
-                            else:
-                                # Streamlit <1.56: postMessage inside the card
-                                # resizes this legacy component after each tap.
-                                components.html(rain_card_html, height=1080, scrolling=False)
+                        rain_card_html = render_rain_rows_html(
+                            pct_result, card_thr, max_days=6, simple_mode=simple_mode
+                        )
+                        if hasattr(st, "iframe"):
+                            st.iframe(rain_card_html, height="content")
                         else:
-                            stat_rows = ["mean", "median"] + [f"p{p}" for p in pct_percentiles]
-                            stat_display_labels = {"mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in pct_percentiles}}
-                            day_col_labels = [f"{d['start_utc'].astimezone(PH_TZ):%a %d %b}, {_hour_label(d['start_utc'].astimezone(PH_TZ).hour)}" for d in pct_days]
-                            table_data = {
-                                day_col_labels[i]: [round(d["stats"][row], 1) for row in stat_rows]
-                                for i, d in enumerate(pct_days)
-                            }
-                            pct_df = pd.DataFrame(table_data, index=[stat_display_labels[r] for r in stat_rows])
-                            st.dataframe(pct_df, use_container_width=True)
+                            # Streamlit <1.56: postMessage inside the card
+                            # resizes this legacy component after each tap.
+                            components.html(rain_card_html, height=1080, scrolling=False)
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
@@ -1688,13 +1799,15 @@ if view_mode == "Rainfall Forecast":
             "(ENS) forecasts from 50 members. The bold daily amount is the ensemble median "
             "(50th percentile). The pale part of each bar extends to P90 (90th percentile). "
             "‘High’ means P90, an upper-end estimate—not a true maximum. "
-            "The expanded panel also shows P10, P25 and P75."
+            "The expanded panel also shows P10, P25 and P75. "
+            "The median is the midpoint of ensemble estimates, not necessarily the single most probable amount."
         )
         st.markdown(
             "**Timing.** The daily rainfall totals run from 2:00 AM to 2:00 AM "
             "Philippine Time (UTC+8). The 3-hourly and 6-hourly views group the same "
             "underlying forecast bins; totals don't change when switching views. "
-            "Incomplete time periods are left blank. The 24-hour threshold chances "
+            "Incomplete time periods are left blank. The device clock is used to mark TODAY "
+            "and the ongoing rainfall interval as NOW, in Philippine time. The 24-hour threshold chances "
             "run from 8:00 AM to 8:00 AM and are aligned to the date they begin."
         )
         st.markdown(
@@ -1705,7 +1818,9 @@ if view_mode == "Rainfall Forecast":
             "rainfall reaches or exceeds that amount during its 24-hour period. "
             "The main six-day card shows the highest rainfall threshold with "
             "at least a 65% chance, or the chance of at least 1 mm if none of "
-            "the higher thresholds qualify."
+            "the higher thresholds qualify. Simple mode replaces these numbers with "
+            "plain-language probability and rainfall-intensity categories; the day-total "
+            "category spans the ensemble median through P90."
         )
         st.markdown(
             "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
