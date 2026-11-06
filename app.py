@@ -1,4 +1,5 @@
 import json
+from html import escape
 import math
 import time
 from datetime import datetime, timezone
@@ -93,7 +94,8 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
                 key=f"{key_prefix}_place_search_{chosen_province}",
             )
         place = next(p for p in places_in_province if p["name"] == chosen_name)
-        st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=9)
+        if st.toggle("Show map", value=True, key=f"{key_prefix}_show_map"):
+            st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=9)
         return place["display_name"], place["lat"], place["lon"], place["lat"], place["lon"]
     coord_col1, coord_col2 = st.columns(2)
     with coord_col1:
@@ -106,7 +108,8 @@ def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
             "Longitude", min_value=PH_BBOX["lon_min"], max_value=PH_BBOX["lon_max"],
             value=121.0, step=0.01, format="%.4f", key=f"{key_prefix}_custom_lon",
         )
-    st.map(pd.DataFrame({"lat": [custom_lat], "lon": [custom_lon]}), zoom=9)
+    if st.toggle("Show map", value=True, key=f"{key_prefix}_show_map"):
+        st.map(pd.DataFrame({"lat": [custom_lat], "lon": [custom_lon]}), zoom=9)
     location_name = f"Custom ({custom_lat:.4f}°N, {custom_lon:.4f}°E)"
     return location_name, custom_lat, custom_lon, custom_lat, custom_lon
 
@@ -515,7 +518,7 @@ def _tooltip_html_for_window(w: dict, data: dict) -> str:
     rows = "".join(_tooltip_row_html(t, data[t].get(w["label"])) for t in AVAILABLE_THRESHOLDS_MM)
     return f"<div style='font-family:{FONT_STACK};'>{header}{rows}</div>"
 
-def render_14day_outlook_html(result: dict) -> str:
+def render_14day_outlook_html(result: dict, location_name: str) -> str:
     """Interactive 14-day outlook: linked probability ribbon, daily bars and rainfall fingerprints.
 
     All views use the SAME ECMWF 24-hour 08:00-to-08:00 PHT windows.
@@ -552,7 +555,13 @@ def render_14day_outlook_html(result: dict) -> str:
         return ""
     # Escape angle brackets in JSON so data cannot prematurely close <script>.
     encoded = json.dumps(records, ensure_ascii=True).replace("<", "\\u003c")
-    return _FOURTEEN_DAY_TEMPLATE.replace("__RECORDS__", encoded)
+    palette = [THRESHOLD_COLORS[mm] for mm in AVAILABLE_THRESHOLDS_MM]
+    return (
+        _FOURTEEN_DAY_TEMPLATE
+        .replace("__RECORDS__", encoded)
+        .replace("__LOCATION__", escape(location_name))
+        .replace("__THRESHOLD_PALETTE__", json.dumps(palette))
+    )
 
 _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
 <html lang="en">
@@ -633,17 +642,21 @@ main{padding:0!important;max-width:100%;margin:0}
  .bar-header,.day-bar{grid-template-columns:69px minmax(0,1fr) 82px}
  .day-bar,.fingerprint{min-height:47px}
 }
+.threshold-chip{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-height:51px;padding:5px 2px;line-height:1.12}
+.threshold-chip .chip-top{display:flex;align-items:center;justify-content:center;gap:5px;white-space:nowrap}
+.threshold-chip .chip-meaning{font-size:10px;font-weight:450;color:#697585;white-space:nowrap;letter-spacing:-.02em}
+.threshold-chip[aria-pressed="true"] .chip-meaning{color:#425265}
+@media(max-width:720px){.threshold-chip{min-height:49px;padding:4px 1px}.threshold-chip .chip-top{gap:3px}.threshold-chip .chip-meaning{font-size:9px}}
+@media(max-width:355px){.threshold-chip .chip-meaning{font-size:8px}.threshold-chip .chip-top{gap:2px}}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
 <main>
 <div class="shell">
-    <div class="shell-title"><div><h2>Rainfall outlook</h2><p>See how the chances of different rainfall amounts change over the next two weeks.</p></div>
-      <div class="rain-icon" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.4A4.4 4.4 0 0017.7 8 6.3 6.3 0 005.6 9.6 3.6 3.6 0 006.8 17H18"/><path d="m8.2 20 1-1.6M12 21l1-1.6M16 20l1-1.6"/></svg></div>
-    </div>
+    <div class="shell-title"><div><h2>14-day rainfall outlook for __LOCATION__</h2></div></div>
     <div class="top-controls">
       <div class="view-tabs" role="tablist" aria-label="14-day forecast view">
-        <button class="view-tab" id="tab-chances" role="tab" aria-controls="view-chances" aria-selected="true" data-view="chances">Rain chances</button>
+        <button class="view-tab" id="tab-chances" role="tab" aria-controls="view-chances" aria-selected="true" data-view="chances">Chance of rain</button>
         <button class="view-tab" id="tab-amounts" role="tab" aria-controls="view-amounts" aria-selected="false" data-view="amounts">Possible amounts</button>
       </div>
       <label class="simple-toggle" for="outlook-simple"><input type="checkbox" id="outlook-simple"> Simple mode</label>
@@ -652,10 +665,10 @@ main{padding:0!important;max-width:100%;margin:0}
       <div class="threshold-section">
         <div class="question">Choose the amount of rain you want to check</div>
         <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
-        <div class="context-line"><span id="threshold-explanation">Chance of moderate rain or more</span><strong>24-hour rainfall</strong></div>
+        <div class="context-line"><span id="threshold-explanation">Chance of moderate rain or more</span></div>
       </div>
-      <div class="subview-switch" role="group" aria-label="Explore rain chances">
-        <span class="subview-title">Explore rain chances</span>
+      <div class="subview-switch" role="group" aria-label="Explore chance of rain">
+        <span class="subview-title">Explore chance of rain</span>
         <div class="subview-tabs">
           <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true">Graph</button>
           <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false">Daily bars</button>
@@ -693,11 +706,16 @@ main{padding:0!important;max-width:100%;margin:0}
   const records = __RECORDS__;
   let simple = false; // Independent of the six-day card; off by default.
   const thresholds = [1,5,20,50,100];
-  const colors = ['#00BFFF','#D4B62F','#FFA500','#EF4646','#800080'];
-  const sourceColors = ['#00BFFF','#FFFF00','#FFA500','#FF0000','#800080'];
+  const sourceColors = __THRESHOLD_PALETTE__;
+  // Curves use a darker tone of the same threshold color where needed for contrast.
+  const colors = sourceColors.map(hex=>{
+    const v=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));
+    const brightness=(.299*v[0]+.587*v[1]+.114*v[2])/255;
+    return brightness>.61?'#'+v.map(x=>Math.round(x*.71).toString(16).padStart(2,'0')).join(''):hex;
+  });
   const amountWords = ['very light','light','moderate','heavy','intense'];
   const ranges = ['<1 mm','1 to <5 mm','5 to <20 mm','20 to <50 mm','50 to <100 mm','100 mm or more'];
-  const rangeColors = ['#BECBD6','#72CAE7','#E9D46A','#F1AB60','#DE7771','#966EAE'];
+  const rangeColors = ['#CAD7E1', ...sourceColors.map(c=>tint(c,.65))];
   const byId = id => document.getElementById(id);
   const fmt = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
   const fmtHour = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',hour:'numeric',hour12:true});
@@ -722,7 +740,7 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
-    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="swatch"></span>${t} mm</button>`).join('');
+    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="chip-top"><span class="swatch"></span>${t} mm</span><span class="chip-meaning">${amountWords[i]}</span></button>`).join('');
     byId('threshold-explanation').textContent=`Chance of ${amountWords[state.threshold]} rain or more`;
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
     byId('view-chances').hidden=state.view!=='chances';byId('view-amounts').hidden=state.view!=='amounts';
@@ -915,7 +933,7 @@ ROW_ANCHOR_PH_HOUR = 2
 _RAIN_BAR_GAP_PX = 6
 _RAIN_BAR_MAX_PX = {8: 16, 4: 30}
 _RAIN_SLOTS_MAX_PX = 170
-_RAIN_MED = "#00BFFF"
+_RAIN_MED = THRESHOLD_COLORS[1]
 _RAIN_P90 = "#CAD7E1"
 _RAIN_TRACK = "#DFE3E9"
 
@@ -1935,6 +1953,32 @@ with main:
     if view_mode == "Rainfall Forecast":
         st.caption("See how much rain to expect over the next six days, and your chances of rain over the next two weeks.")
         st.markdown(
+            """<style>
+            .rain-six-title{font-family:'Source Sans 3',sans-serif;font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;margin:0 0 12px;color:#1d2530}
+            @media(max-width:720px){.rain-six-title{font-size:16px}}
+            /* Visually match the 14-day card's pill tabs without altering Streamlit widget state. */
+            .st-key-pct_period_control [data-testid='stSegmentedControl'] [role='radiogroup'],
+            .st-key-pct_period_control [data-testid='stSegmentedControl'] [role='group'],
+            .st-key-pct_period_control [data-baseweb='button-group']{
+                background:#eef1f5!important;border-radius:13px!important;padding:4px!important;gap:3px!important;border:0!important;
+            }
+            .st-key-pct_period_control [data-testid='stSegmentedControl'] button,
+            .st-key-pct_period_control [data-baseweb='button-group'] button{
+                border:0!important;box-shadow:none!important;border-radius:10px!important;
+                background:transparent!important;color:#677586!important;font-size:13px!important;
+                font-weight:700!important;padding:8px 16px!important;
+            }
+            .st-key-pct_period_control button[aria-pressed='true'],
+            .st-key-pct_period_control button[aria-checked='true'],
+            .st-key-pct_period_control [data-baseweb='button-group'] button[aria-pressed='true']{
+                background:#fff!important;color:#1c3044!important;box-shadow:0 2px 8px #1e3b5020!important;
+            }
+            .st-key-rain_simple_mode [data-testid='stWidgetLabel'] label{color:#506070!important;font-size:13px!important;font-weight:650!important;}
+            .st-key-rain_simple_mode [role='switch']{width:37px!important;height:22px!important;border-radius:99px!important;}
+            </style>""",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
             "<style>"
             "@media (orientation: portrait){"
             ".st-key-rain_split [data-testid='stHorizontalBlock']{flex-direction:column !important;}"
@@ -1992,7 +2036,6 @@ with main:
             with st.container(key="rain_split"):
                 left_col, right_col = st.columns([5, 6], gap="large")
             with left_col:
-                st.subheader(f"6-day rainfall forecast for {rain_name}")
                 pct_result = None
                 if pct_raw_result is None:
                     st.warning(
@@ -2006,6 +2049,10 @@ with main:
                     # One bordered card groups both controls with the rainfall
                     # forecast, matching the tab placement inside the 14-day card.
                     with st.container(border=True, key="six_day_forecast_card"):
+                        st.markdown(
+                            f"<div class='rain-six-title'>Detailed rainfall forecast for {escape(rain_name)}</div>",
+                            unsafe_allow_html=True,
+                        )
                         selected_period_label = st.segmented_control(
                             "Rainfall timing",
                             list(period_labels.values()),
@@ -2036,6 +2083,16 @@ with main:
                                 # Streamlit <1.56: postMessage inside the card
                                 # resizes this legacy component after each tap.
                                 components.html(rain_card_html, height=510, scrolling=False)
+                            with st.expander("How to read this forecast", expanded=False):
+                                st.markdown(
+                                    "The **bright blue bars** show the most likely amount of rain "
+                                    "during each 3-hourly or 6-hourly period. The lighter part "
+                                    "shows a higher estimate. **Chance of rain** shows how likely "
+                                    "a particular rainfall amount is to be reached. "
+                                    "**Total for the day** summarizes the rainfall for that day. "
+                                    "Tap a day to see more details, including the higher estimates "
+                                    "and a breakdown of the rainfall bars."
+                                )
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
@@ -2051,9 +2108,7 @@ with main:
                             if w["start_utc"].astimezone(PH_TZ).date() >= today_ph
                         ]
                         num_days_shown = min(14, len(upcoming_windows or thr_result["windows"]))
-                        st.subheader(f"{num_days_shown}-day rain chances for {rain_name}")
-                        st.caption("Chance of getting at least each rainfall amount during a day.")
-                        outlook_html = render_14day_outlook_html(thr_result)
+                        outlook_html = render_14day_outlook_html(thr_result, rain_name)
                         if hasattr(st, "iframe"):
                             st.iframe(outlook_html, height="content")
                         else:
