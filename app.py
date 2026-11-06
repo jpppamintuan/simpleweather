@@ -648,6 +648,34 @@ main{padding:0!important;max-width:100%;margin:0}
 .threshold-chip[aria-pressed="true"] .chip-meaning{color:#425265}
 @media(max-width:720px){.threshold-chip{min-height:49px;padding:4px 1px}.threshold-chip .chip-top{gap:3px}.threshold-chip .chip-meaning{font-size:9px}}
 @media(max-width:355px){.threshold-chip .chip-meaning{font-size:8px}.threshold-chip .chip-top{gap:2px}}
+
+/* Shared six-day visual language for the 14-day interface. */
+#trend-svg:focus:not(:focus-visible){outline:none}
+.day-label{gap:1px}.day-label .day-short{font-size:12px;font-weight:700;white-space:nowrap;line-height:1.15;color:#25303a}
+.day-label .today-mini{color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em}
+.panel-head h3{font-size:16px;font-weight:700;letter-spacing:0;color:#1d2832}
+.panel-head .window{font-size:11px;color:#737d88}
+.chance-rows{gap:5px}.chance-row{border:0;border-radius:6px;min-height:0}
+.chance-left{width:35%;gap:6px;padding:7px 7px}.chance-left strong{font-size:12px}.chance-left span{font-size:10px;opacity:.8}
+.chance-right{gap:12px;padding:7px 10px}.chance-right strong{font-size:15px;font-weight:750}.chance-right span{font-size:10px;min-width:58px;opacity:.9}
+.matrix-section .table-scroll{width:100%;overflow-x:auto}.matrix-section table{width:100%;min-width:600px;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px}
+.matrix-section th{font-size:11px;color:#637285;padding:7px}.matrix-section td{padding:7px 5px;font-weight:700;border-radius:6px}
+.matrix-section th:first-child,.matrix-section td:first-child{text-align:left;white-space:nowrap}
+.threshold-chip{touch-action:manipulation}.threshold-chip .chip-meaning{white-space:normal;text-align:center;line-height:1.1}
+.outlook-simple .threshold-chip{min-height:62px}.outlook-simple .threshold-chip .chip-top{display:none}
+.outlook-simple .threshold-chip .chip-meaning{font-size:12px;font-weight:700;color:#344459;letter-spacing:-.015em}
+.legend-button{border:0;background:transparent;padding:4px 5px;border-radius:5px;cursor:pointer;font-size:11.5px}
+.legend-button[aria-pressed="true"]{background:#edf6fb}
+@media(max-width:720px){
+ .day-label .day-short{font-size:10.5px;letter-spacing:-.04em}
+ .bar-header,.day-bar{grid-template-columns:85px minmax(0,1fr) 82px;gap:5px}
+ .fingerprint{grid-template-columns:85px minmax(0,1fr) 16px;gap:5px}
+ .chance-left{width:40%;gap:3px;padding:7px 4px}
+ .chance-right{padding:7px 8px;gap:6px}
+ .outlook-simple .threshold-chip{min-height:67px}
+ .outlook-simple .threshold-chip .chip-meaning{font-size:10.5px}
+}
+@media(max-width:355px){.day-label .day-short{font-size:10px}.bar-header,.day-bar{grid-template-columns:81px minmax(0,1fr) 80px}.fingerprint{grid-template-columns:81px minmax(0,1fr) 12px}.outlook-simple .threshold-chip .chip-meaning{font-size:9.5px}}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -662,17 +690,17 @@ main{padding:0!important;max-width:100%;margin:0}
       <label class="simple-toggle" for="outlook-simple"><input type="checkbox" id="outlook-simple"> Simple mode</label>
     </div>
     <div id="view-chances" role="tabpanel" aria-labelledby="tab-chances">
-      <div class="threshold-section">
-        <div class="question">Choose the amount of rain you want to check</div>
-        <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
-        <div class="context-line"><span id="threshold-explanation">Chance of moderate rain or more</span></div>
-      </div>
       <div class="subview-switch" role="group" aria-label="Explore chance of rain">
         <span class="subview-title">Explore chance of rain</span>
         <div class="subview-tabs">
           <button type="button" class="subview-tab" data-subview="graph" aria-pressed="true">Graph</button>
-          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false">Daily bars</button>
+          <button type="button" class="subview-tab" data-subview="bars" aria-pressed="false">Bars</button>
+          <button type="button" class="subview-tab" data-subview="matrix" aria-pressed="false">Matrix</button>
         </div>
+      </div>
+      <div class="threshold-section" id="outlook-thresholds">
+        <div class="question">Choose the amount of rain you want to check</div>
+        <div class="chips" role="group" aria-label="Select rainfall threshold" id="threshold-chips"></div>
       </div>
       <div class="part graph-section" id="outlook-graph">
         <div class="part-heading"><div><div class="section-label">How rain chances change</div><div class="kicker">Five rainfall levels; the chosen one stands out</div></div><span class="kicker" id="graph-selected-label">Tap the graph to inspect a day</span></div>
@@ -684,6 +712,10 @@ main{padding:0!important;max-width:100%;margin:0}
         <div class="bar-header"><span>Day</span><span>Chance of at least the chosen amount</span><span style="text-align:right">Chance</span></div>
         <div class="bar-day-list" id="bar-list"></div>
       </div>
+      <div class="part matrix-section" id="outlook-matrix" hidden>
+        <div class="part-heading"><div class="section-label">Exact rainfall probabilities</div></div>
+        <div class="table-scroll" id="exact-table"></div>
+      </div>
     </div>
     <div id="view-amounts" role="tabpanel" aria-labelledby="tab-amounts" hidden>
       <div class="part" style="margin-top:4px">
@@ -694,7 +726,6 @@ main{padding:0!important;max-width:100%;margin:0}
       </div>
     </div>
     <div class="panel" id="day-panel" aria-live="polite"></div>
-    <div class="exact" id="outlook-exact"><details id="exact-details"><summary>See all exact probabilities</summary><div class="table-scroll" id="exact-table"></div></details></div>
     <div class="footnote"><span>The rainfall amounts here cover 8 AM to 8 AM Philippine time, not midnight to midnight.</span>
       <details><summary>How to read this forecast</summary><div style="padding-top:6px">The graph and horizontal bars show the probability of at least 1, 5, 20, 50 or 100 mm of rain during the selected 24-hour period. These are probabilities of exceeding a threshold: they must not be added together. In the "Possible amounts" view, each colored segment represents a separate rainfall-total range; the six ranges add to 100%. Some periods may have missing data; unavailable probabilities are never displayed as 0%. Forecast uncertainty grows at longer lead times. Heavy rainfall probabilities do not directly measure flooding risk.</div></details>
     </div>
@@ -717,17 +748,20 @@ main{padding:0!important;max-width:100%;margin:0}
   const ranges = ['<1 mm','1 to <5 mm','5 to <20 mm','20 to <50 mm','50 to <100 mm','100 mm or more'];
   const rangeColors = ['#CAD7E1', ...sourceColors.map(c=>tint(c,.65))];
   const byId = id => document.getElementById(id);
-  const fmt = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
+  const fmt = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short',day:'numeric',month:'short'});
+  const fmtFull = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'long',day:'numeric',month:'long'});
+  const fmtWeek = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',weekday:'short'});
+  const fmtDayMonth = new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Manila',day:'numeric',month:'short'});
   const fmtHour = new Intl.DateTimeFormat('en-PH',{timeZone:'Asia/Manila',hour:'numeric',hour12:true});
-  const state={view:'chances',subview:'graph',threshold:2,day:null};
+  const state={view:'chances',subview:'graph',threshold:null,lastThreshold:2,day:null};
   const numeric = x => x!==null && Number.isFinite(x);
   const chanceWords = p=>!numeric(p)?'unavailable':p<5?'very low':p<35?'low':p<65?'medium':p<95?'high':'very high';
   const pct = p=>numeric(p)?`${Math.round(p)}%`:'—';
   function phDateKey(now){const p=new Intl.DateTimeFormat('en-US',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now); const find=t=>p.find(x=>x.type===t).value;return `${find('year')}-${find('month')}-${find('day')}`;}
   const dates = records.map((r,i)=>({...r,i,startDate:new Date(r.start),endDate:new Date(r.end)}));
-  function dayName(d){return fmt.format(d.startDate);}
+  function dayName(d){return fmtFull.format(d.startDate);}
   function windowName(d){return `${fmtHour.format(d.startDate).replace(' ','').toLowerCase()} ${fmt.format(d.startDate)} – ${fmtHour.format(d.endDate).replace(' ','').toLowerCase()} ${fmt.format(d.endDate)} (PHT)`;}
-  function dayLabel(d){const parts=dayName(d).split(',');const weekday=parts[0];const rest=parts.slice(1).join(',').trim();const today=(d.date===phDateKey(new Date()));return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="weekday">${weekday}</span><span class="date">${rest}</span></span>`;}
+  function dayLabel(d){const today=d.date===phDateKey(new Date());return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="day-short">${fmtWeek.format(d.startDate)} / ${fmtDayMonth.format(d.startDate)}</span></span>`;}
   function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
   function tint(hex,strength){return `rgb(${rgb(hex).map(v=>Math.round(255*(1-strength)+v*strength)).join(',')})`;}
   function tier(p){return p<5?0:p<35?.05:p<65?.35:p<95?.65:1;}
@@ -740,12 +774,15 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
-    byId('threshold-chips').innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="${state.threshold===i}" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}"><span class="chip-top"><span class="swatch"></span>${t} mm</span><span class="chip-meaning">${amountWords[i]}</span></button>`).join('');
-    byId('threshold-explanation').textContent=`Chance of ${amountWords[state.threshold]} rain or more`;
+    const choices=byId('threshold-chips');
+    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span>${t} mm</span><span class="chip-meaning">${amountWords[i]} rain or more</span></button>`).join('');
+    choices.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.threshold)===state.threshold)));
+    document.body.classList.toggle('outlook-simple',simple);
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
     byId('view-chances').hidden=state.view!=='chances';byId('view-amounts').hidden=state.view!=='amounts';
-    byId('outlook-exact').hidden=state.view!=='chances';
     byId('outlook-graph').hidden=state.subview!=='graph';byId('outlook-bars').hidden=state.subview!=='bars';
+    byId('outlook-matrix').hidden=state.subview!=='matrix';
+    byId('outlook-thresholds').hidden=state.subview==='matrix';
     document.querySelectorAll('.subview-tab').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.subview===state.subview)));
     byId('bar-count').textContent=`${dates.length} days`;
     resizeFrame();
@@ -769,17 +806,20 @@ main{padding:0!important;max-width:100%;margin:0}
     dates.forEach((d,i)=>{if(i%2===0||i===dates.length-1){out+=`<text x="${X(i)}" y="239" text-anchor="middle" fill="#66788a" font-size="11">${fmt.format(d.startDate).split(',')[0]} ${d.startDate.toLocaleDateString('en-GB',{timeZone:'Asia/Manila',day:'numeric'})}</text>`;}});
     for(let t=0;t<5;t++){
       const low=t===4?dates.map(()=>0):v[t+1];
-      areaBands(v[t],low).forEach(d=>{out+=`<path d="${d}" fill="${sourceColors[t]}" fill-opacity="${state.threshold===t?'.31':'.13'}" stroke="none"/>`;});
+      const focused=state.threshold===null||state.threshold===t;
+      areaBands(v[t],low).forEach(d=>{out+=`<path d="${d}" fill="${focused?sourceColors[t]:'#a9b3be'}" fill-opacity="${state.threshold===null?'.19':focused?'.29':'.055'}" stroke="none"/>`;});
     }
-    v.forEach((serie,t)=>{out+=`<path d="${pathLine(serie)}" fill="none" stroke="${colors[t]}" stroke-width="${t===state.threshold?3.2:1.35}" stroke-opacity="${t===state.threshold?1:.58}" stroke-linecap="round" stroke-linejoin="round"/>`;});
-    if(state.day!==null){const i=state.day,p=v[state.threshold][i];out+=`<line x1="${X(i)}" x2="${X(i)}" y1="42" y2="217" stroke="#92aabb" stroke-dasharray="4 4"/>`;if(numeric(p))out+=`<circle cx="${X(i)}" cy="${Y(p)}" r="5.5" fill="#fff" stroke="${colors[state.threshold]}" stroke-width="3"/>`;}
+    v.forEach((serie,t)=>{const focused=state.threshold===null||state.threshold===t;out+=`<path d="${pathLine(serie)}" fill="none" stroke="${focused?colors[t]:'#aab4bf'}" stroke-width="${state.threshold===null?2:focused?3.2:1.2}" stroke-opacity="${focused?1:.43}" stroke-linecap="round" stroke-linejoin="round"/>`;});
+    if(state.day!==null){const i=state.day;out+=`<line x1="${X(i)}" x2="${X(i)}" y1="42" y2="217" stroke="#92aabb" stroke-dasharray="4 4"/>`;if(state.threshold!==null){const p=v[state.threshold][i];if(numeric(p))out+=`<circle cx="${X(i)}" cy="${Y(p)}" r="5.5" fill="#fff" stroke="${colors[state.threshold]}" stroke-width="3"/>`;}}
     out+='<rect x="48" y="39" width="606" height="180" fill="transparent"/>';
     byId('trend-svg').innerHTML=out;
-    byId('graph-legend').innerHTML=thresholds.map((t,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${sourceColors[i]};opacity:${state.threshold===i?1:.6}"></span>${t} mm</span>`).join('');
+    const legend=byId('graph-legend');
+    if(!legend.children.length)legend.innerHTML=thresholds.map((t,i)=>`<button type="button" class="legend-pill legend-button" data-legend-threshold="${i}" aria-pressed="false"><span class="legend-mark"></span>${t} mm</button>`).join('');
+    legend.querySelectorAll('button').forEach(b=>{const i=Number(b.dataset.legendThreshold);b.setAttribute('aria-pressed',String(state.threshold===i));b.querySelector('.legend-mark').style.background=state.threshold===null||state.threshold===i?sourceColors[i]:'#abb5bf';});
     byId('graph-selected-label').textContent=state.day===null?'Tap the graph for a day’s details':dayName(dates[state.day]);
   }
   function bars(){
-    byId('bar-list').innerHTML=dates.map((d,i)=>{const p=d.values[state.threshold];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[state.threshold]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
+    byId('bar-list').innerHTML=dates.map((d,i)=>{const active=state.threshold??state.lastThreshold;const p=d.values[active];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[active]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
   }
   function fingerprints(){
     byId('fingerprint-list').innerHTML=dates.map((d,i)=>{const b=bins(d.values);return `<button class="fingerprint ${b?'':'missing'}" type="button" data-day="${i}" aria-pressed="${state.day===i}" aria-label="${dayName(d)}. Open rainfall possibilities.">${dayLabel(d)}<span class="finger-track">${b?b.map((p,j)=>p>0?`<span class="finger-segment" style="flex:${p};background:${rangeColors[j]}" title="${ranges[j]}: ${p.toFixed(0)}%"></span>`:'').join(''):'Data unavailable'}</span><span aria-hidden="true" style="text-align:right;color:#8997a4">›</span></button>`;}).join('');
@@ -816,16 +856,20 @@ main{padding:0!important;max-width:100%;margin:0}
   }
   function redrawSelection(){graph();bars();fingerprints();details();resizeFrame();}
   function redraw(){controls();redrawSelection();}
-  byId('threshold-chips').addEventListener('click',e=>{const b=e.target.closest('button[data-threshold]');if(!b)return;state.threshold=Number(b.dataset.threshold);redraw();});
+  function focusThreshold(i){state.threshold=i;state.lastThreshold=i;redraw();}
+  function showAllThresholds(){state.threshold=null;redraw();}
+  byId('threshold-chips').addEventListener('click',e=>{const b=e.target.closest('button[data-threshold]');if(b)focusThreshold(Number(b.dataset.threshold));});
+  byId('threshold-chips').addEventListener('dblclick',e=>{if(e.target.closest('button[data-threshold]'))showAllThresholds();});
+  byId('graph-legend').addEventListener('click',e=>{const b=e.target.closest('button[data-legend-threshold]');if(b)focusThreshold(Number(b.dataset.legendThreshold));});
+  byId('graph-legend').addEventListener('dblclick',e=>{if(e.target.closest('button[data-legend-threshold]'))showAllThresholds();});
   byId('bar-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
   byId('fingerprint-list').addEventListener('click',e=>{const b=e.target.closest('button[data-day]');if(b)setDay(Number(b.dataset.day));});
   document.querySelectorAll('.view-tab').forEach(b=>b.addEventListener('click',()=>{state.view=b.dataset.view;state.day=null;redraw();}));
-  document.querySelectorAll('.subview-tab').forEach(b=>b.addEventListener('click',()=>{state.subview=b.dataset.subview;redraw();}));
+  document.querySelectorAll('.subview-tab').forEach(b=>b.addEventListener('click',()=>{state.subview=b.dataset.subview;if(state.subview==='bars'&&state.threshold===null)state.threshold=state.lastThreshold;redraw();}));
   byId('outlook-simple').addEventListener('change',e=>{simple=e.target.checked;redraw();});
   const svg=byId('trend-svg');svg.setAttribute('viewBox','0 0 700 256');
   svg.addEventListener('click',e=>{const m=svg.getScreenCTM();if(!m)return;const point=svg.createSVGPoint();point.x=e.clientX;point.y=e.clientY;const p=point.matrixTransform(m.inverse());if(p.x<44||p.x>660||p.y<35||p.y>224)return;const n=Math.max(1,dates.length-1),i=Math.max(0,Math.min(dates.length-1,Math.round((p.x-48)/606*n)));setDay(i);});
   svg.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();state.day=Math.max(0,Math.min(dates.length-1,(state.day===null?0:state.day)+(e.key==='ArrowRight'?1:-1)));redrawSelection();}else if(e.key==='Enter'||e.key===' '){e.preventDefault();state.day=state.day===null?0:null;redrawSelection();}});
-  byId('exact-details').addEventListener('toggle',resizeFrame);
   if(typeof ResizeObserver!=='undefined')new ResizeObserver(resizeFrame).observe(document.querySelector('.shell'));
   window.addEventListener('resize',resizeFrame);
   if(document.fonts?.ready)document.fonts.ready.then(resizeFrame);
@@ -1033,7 +1077,7 @@ def _chance_chip(
     )
 
 
-def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6, *, simple_mode: bool = False) -> str:
+def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None, max_days: int = 6, *, simple_mode: bool = False, parts: bool = False) -> str:
     """Selectable six-day rainfall outlook with an accessible, detailed day panel.
 
     The overview bars retain the existing median/P90 colors and absolute scale.
@@ -1235,8 +1279,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"data-rr-day='{index}' data-rr-date='{day:%Y-%m-%d}' aria-expanded='{expanded}' "
             f"aria-controls='rr-detail-{index}' "
             f"aria-label='Toggle rainfall details for {day:%A %d %B}'>"
-            f"<div class='rr-day'><span class='rr-today-tag'>TODAY</span><b>{day:%a}</b>"
-            f"<span class='rr-secondary'>{day.day} {day:%b}</span></div>"
+            f"<div class='rr-day'><span class='rr-today-tag'>TODAY</span>"
+            f"<span class='rr-day-short'>{day:%a} / {day.day} {day:%b}</span></div>"
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
             f"<div class='rr-tot{' rr-tot-partial' if is_partial else ''}{' rr-total-simple' if simple_mode else ''}'>"
             + (
@@ -1271,7 +1315,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"<section id='rr-detail-{index}' data-rr-date='{day:%Y-%m-%d}' class='rr-detail rr-detail-{index}{' is-open' if index == 0 else ''}' "
             f"aria-label='Details for {day:%A %d %B}'>"
             "<div class='rr-detail-top'>"
-            f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A, %d %B}</strong></div>"
+            f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A}, {day.day} {day:%B}</strong></div>"
             f"<div class='rr-detail-main'><small>Total for the day:</small>"
             f"<b>{_fmt_mm(total_med)}</b><small>mm</small></div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
@@ -1303,7 +1347,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         f".rr-card{{container-type:inline-size;background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-card button,.rr-card .rr-tip{{font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
-        f".rr-row.rr-c{{grid-template-columns:2.3rem 5.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.85rem;column-gap:6px;}}"
+        f".rr-row.rr-c{{grid-template-columns:3.65rem 5.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.85rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
         ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
@@ -1312,10 +1356,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-h-r{text-align:center;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
         ".rr-day b{font-size:.82rem;font-weight:700;}"
+        ".rr-day-short{font-size:.60rem;letter-spacing:-.055em;white-space:nowrap;font-weight:700;line-height:1.15;}"
         ".rr-secondary{font-size:.56rem;font-weight:400;line-height:1.2;letter-spacing:-.01em;color:#737D88;white-space:nowrap;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
-        f".rr-bar{{position:relative;width:100%;max-width:{_RAIN_BAR_MAX_PX[n_slots]}px;height:60px;outline:none;}}"
+        ".rr-bar{position:relative;width:100%;max-width:var(--rr-overview-bar-max);height:60px;outline:none;}"
         f".rr-fill{{position:absolute;inset:0;background:{_RAIN_TRACK};border-radius:7px;overflow:hidden;}}"
         ".rr-fill span{position:absolute;left:0;right:0;bottom:0;display:block;}"
         ".rr-fill .rr-over{top:0;bottom:auto;height:3px;background:#0B3FBF;}"
@@ -1378,12 +1423,12 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-bars{margin-top:14px;padding-top:0;border-top:1px solid #E0E8EE;}"
         ".rr-detail-bar-hours{margin-bottom:7px;}"
         ".rr-time-range{display:flex;justify-content:center;white-space:nowrap;font-size:.55rem;letter-spacing:-.035em;color:#6b7280;}"
-        f".rr-detail-bar-values .rr-bar{{height:70px;max-width:{detail_bar_max_px}px;}}"
+        ".rr-detail-bar-values .rr-bar{height:70px;max-width:var(--rr-detail-bar-max);}"
         ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:9px;line-height:1.35;}"
         "@container (min-width:430px){"
-        ".rr-row.rr-c{grid-template-columns:2.8rem 6.4rem minmax(0,170px) 6.4rem;column-gap:8px;}"
+        ".rr-row.rr-c{grid-template-columns:3.8rem 6.4rem minmax(0,170px) 6.4rem;column-gap:8px;}"
         ".rr-row:not(.rr-c){grid-template-columns:3.1rem minmax(0,170px) 4.4rem;}"
-        ".rr-day b{font-size:.98rem;}"
+        ".rr-day b{font-size:.98rem;}.rr-day-short{font-size:.74rem;}"
         ".rr-secondary,.rr-tot .rr-total-main small,.rr-chip .rr-secondary{font-size:.68rem;}"
         ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.69rem;}"
         ".rr-ap{font-size:.53rem;}.rr-h{font-size:.69rem;}"
@@ -1404,6 +1449,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "}"
         "@media(max-width:460px){"
         ".rr-h-chance{white-space:normal;}"
+        ".rr-row.rr-c{grid-template-columns:3.5rem 4.9rem minmax(0,170px) 4.5rem;column-gap:4px;}"
+        ".rr-day-short{font-size:.59rem;}"
         ".rr-selectable.is-selected .rr-day{padding-left:6px;}"
         ".rr-detail{padding:10px 7px;}"
         ".rr-quantiles{gap:2px;}"
@@ -1593,10 +1640,127 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "<style>html,body{margin:0;padding:0;min-height:0;height:auto;overflow-x:hidden;}"
         "body{min-width:0;}*{box-sizing:border-box;}</style>"
     )
-    return (viewport + css + f"<div class='rr-card'>"
-            f"<div class='rr-overview'>{head}{body}{legend}</div>"
-            f"<div class='rr-details'>{details}</div></div>" + javascript)
+    content = (f"<div class='rr-card' style='--rr-overview-bar-max:{_RAIN_BAR_MAX_PX[n_slots]}px;--rr-detail-bar-max:{detail_bar_max_px}px'>"
+               f"<div class='rr-overview'>{head}{body}{legend}</div>"
+               f"<div class='rr-details'>{details}</div></div>")
+    if parts:
+        return viewport, css, content, javascript
+    return viewport + css + content + javascript
 
+
+
+def render_six_day_forecast_html(period_results: dict[int, dict], threshold_result: dict | None, location_name: str) -> str:
+    """Render a single embedded six-day card with native HTML controls.
+
+    All 3/6-hourly and Standard/Simple variants share the same outer card and
+    are rendered from the existing forecast calculations. Switching views is
+    entirely client-side: it does not re-run Streamlit or request ECMWF data.
+    """
+    variant_parts = []
+    variants = []
+    for hours in (3, 6):
+        if hours not in period_results or not period_results[hours].get("days"):
+            continue
+        for simple in (False, True):
+            viewport, css, markup, script = render_rain_rows_html(
+                period_results[hours], threshold_result, max_days=6,
+                simple_mode=simple, parts=True,
+            )
+            variant_id = f"{hours}-{'simple' if simple else 'standard'}"
+            markup = markup.replace(
+                "<div class='rr-card'", f"<div class='rr-card rr-variant' data-rr-variant='{variant_id}'",
+                1,
+            )
+            if variant_id != '3-standard' and variants:
+                markup = markup.replace("data-rr-variant=", "hidden data-rr-variant=", 1)
+            # A single control panel owns the frame size; inactive views cannot
+            # override the height using their former private card bounds.
+            script = script.replace(
+                "document.querySelector('.rr-card')",
+                f"document.querySelector('.rr-variant[data-rr-variant=\"{variant_id}\"]')",
+            ).replace(
+                "const bounds = card.getBoundingClientRect();",
+                "const bounds = document.querySelector('.rr-root').getBoundingClientRect();",
+            )
+            variant_parts.append(markup)
+            variants.append((variant_id, script))
+    if not variants:
+        return "<div>No rainfall forecast is available for these timing options.</div>"
+    initial_id = variants[0][0]
+    initial_hours = initial_id.split('-')[0]
+    style = css + """<style>
+    .rr-root{border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;color:#111}
+    .rr-root .rr-variant{padding:0;border:0;border-radius:0;background:transparent}
+    .rr-variant[hidden]{display:none!important}
+    .rr-card-controls{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:14px 0 12px}
+    .rr-card-title{font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;color:#1d2530;margin:0}
+    .rr-card-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px}
+    .rr-card-tabs button{font-family:inherit;border:0;border-radius:10px;background:transparent;color:#677586;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+    .rr-card-tabs button[aria-pressed='true']{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}
+    .rr-simple-toggle{display:flex;align-items:center;gap:8px;color:#506070;font-size:13px;font-weight:650;cursor:pointer;user-select:none}
+    .rr-simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;cursor:pointer}
+    .rr-simple-toggle input:after{content:'';position:absolute;width:16px;height:16px;top:3px;left:3px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002;transition:left .16s}
+    .rr-simple-toggle input:checked{background:#25a8db}.rr-simple-toggle input:checked:after{left:18px}
+    .rr-root button:focus-visible,.rr-root input:focus-visible,.rr-root summary:focus-visible{outline:2px solid #159bd6;outline-offset:2px}
+    .rr-intro{color:#737d88;font-size:12px;margin-bottom:9px}
+    .rr-reading-guide{margin-top:12px;color:#697789;font-size:12px;line-height:1.55}
+    .rr-reading-guide summary{cursor:pointer;color:#576b80;font-weight:700}
+    .rr-reading-guide .rr-guide-body{padding-top:7px}
+    @media(max-width:720px){.rr-root{border-radius:10px;padding:12px 9px}.rr-card-title{font-size:16px}.rr-card-controls{gap:8px}.rr-card-tabs button{padding:7px 12px;font-size:12px}}
+    @media(max-width:355px){.rr-card-tabs button{padding:7px 9px}}
+    </style>"""
+    title = escape(location_name)
+    controls = (
+        f"<div class='rr-root rr-card' data-rain-period='{initial_hours}' data-rain-simple='false'>"
+        f"<h2 class='rr-card-title'>Detailed rainfall forecast for {title}</h2>"
+        "<div class='rr-card-controls'><div class='rr-card-tabs' role='group' aria-label='Rainfall timing'>"
+        + "".join(
+            f"<button type='button' data-rr-period='{hours}' aria-pressed='{str(hours==int(initial_hours)).lower()}'>{hours}-hourly</button>"
+            for hours in (3, 6) if any(key.startswith(f'{hours}-') for key, _ in variants)
+        )
+        + "</div><label class='rr-simple-toggle'><input id='rr-mode-toggle' type='checkbox'>Simple mode</label></div>"
+        "<div class='rr-intro'>Tap a day to explore the forecast. Tap it again to close the details.</div>"
+    )
+    guide = (
+        "<details class='rr-reading-guide'><summary>How to read this forecast</summary>"
+        "<div class='rr-guide-body'>The bright blue bars show the most likely amount of rain "
+        "during each 3-hourly or 6-hourly period. The lighter part shows a higher estimate. "
+        "Chance of rain shows how likely a particular rainfall amount is to be reached. "
+        "Total for the day summarizes the expected rainfall. Tap a day for more detail "
+        "about the estimates, rainfall amounts and timing.</div></details>"
+    )
+    active_content = controls + "".join(variant_parts) + guide + "</div>"
+    scripts = "".join(script for _, script in variants)
+    controller = """<script>
+    (()=>{
+      const root=document.querySelector('.rr-root');
+      const available=Array.from(root.querySelectorAll('.rr-variant'));
+      const mode=root.querySelector('#rr-mode-toggle');
+      const buttons=Array.from(root.querySelectorAll('[data-rr-period]'));
+      function resize(){requestAnimationFrame(()=>{
+        const h=Math.ceil(root.getBoundingClientRect().bottom+2);
+        try {const frame=window.frameElement;if(frame){frame.style.setProperty('height',h+'px','important');frame.style.setProperty('min-height','0px','important');}} catch(e){}
+        window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*');
+      });}
+      function show(){
+        const period=root.dataset.rainPeriod;
+        const simple=mode.checked?'simple':'standard';
+        let chosen=available.find(v=>v.dataset.rrVariant===period+'-'+simple);
+        if(!chosen)chosen=available.find(v=>v.dataset.rrVariant.endsWith('-'+simple))||available[0];
+        available.forEach(v=>{v.hidden=v!==chosen;});
+        buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.rrPeriod===chosen.dataset.rrVariant.split('-')[0])));
+        root.dataset.rainSimple=String(mode.checked);
+        resize();
+      }
+      buttons.forEach(b=>b.addEventListener('click',()=>{root.dataset.rainPeriod=b.dataset.rrPeriod;show();}));
+      mode.addEventListener('change',show);
+      if(typeof ResizeObserver!=='undefined')new ResizeObserver(resize).observe(root);
+      window.addEventListener('resize',resize);
+      if(document.fonts?.ready)document.fonts.ready.then(resize);
+      show();
+    })();
+    </script>"""
+    return viewport + style + active_content + scripts + controller
 
 
 HEAT_INDEX_CATEGORIES = [
@@ -1953,32 +2117,6 @@ with main:
     if view_mode == "Rainfall Forecast":
         st.caption("See how much rain to expect over the next six days, and your chances of rain over the next two weeks.")
         st.markdown(
-            """<style>
-            .rain-six-title{font-family:'Source Sans 3',sans-serif;font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;margin:0 0 12px;color:#1d2530}
-            @media(max-width:720px){.rain-six-title{font-size:16px}}
-            /* Visually match the 14-day card's pill tabs without altering Streamlit widget state. */
-            .st-key-pct_period_control [data-testid='stSegmentedControl'] [role='radiogroup'],
-            .st-key-pct_period_control [data-testid='stSegmentedControl'] [role='group'],
-            .st-key-pct_period_control [data-baseweb='button-group']{
-                background:#eef1f5!important;border-radius:13px!important;padding:4px!important;gap:3px!important;border:0!important;
-            }
-            .st-key-pct_period_control [data-testid='stSegmentedControl'] button,
-            .st-key-pct_period_control [data-baseweb='button-group'] button{
-                border:0!important;box-shadow:none!important;border-radius:10px!important;
-                background:transparent!important;color:#677586!important;font-size:13px!important;
-                font-weight:700!important;padding:8px 16px!important;
-            }
-            .st-key-pct_period_control button[aria-pressed='true'],
-            .st-key-pct_period_control button[aria-checked='true'],
-            .st-key-pct_period_control [data-baseweb='button-group'] button[aria-pressed='true']{
-                background:#fff!important;color:#1c3044!important;box-shadow:0 2px 8px #1e3b5020!important;
-            }
-            .st-key-rain_simple_mode [data-testid='stWidgetLabel'] label{color:#506070!important;font-size:13px!important;font-weight:650!important;}
-            .st-key-rain_simple_mode [role='switch']{width:37px!important;height:22px!important;border-radius:99px!important;}
-            </style>""",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
             "<style>"
             "@media (orientation: portrait){"
             ".st-key-rain_split [data-testid='stHorizontalBlock']{flex-direction:column !important;}"
@@ -2043,56 +2181,19 @@ with main:
                         "right now (store unreachable or not yet published) -- please try again shortly."
                     )
                 else:
-                    period_labels = {h: f"{h}-hourly" for h in AVAILABLE_PERIOD_HOURS}
-                    if st.session_state.get("pct_period_hours") not in AVAILABLE_PERIOD_HOURS:
-                        st.session_state["pct_period_hours"] = 3
-                    # One bordered card groups both controls with the rainfall
-                    # forecast, matching the tab placement inside the 14-day card.
-                    with st.container(border=True, key="six_day_forecast_card"):
-                        st.markdown(
-                            f"<div class='rain-six-title'>Detailed rainfall forecast for {escape(rain_name)}</div>",
-                            unsafe_allow_html=True,
-                        )
-                        selected_period_label = st.segmented_control(
-                            "Rainfall timing",
-                            list(period_labels.values()),
-                            default=period_labels[st.session_state["pct_period_hours"]],
-                            key="pct_period_control",
-                        )
-                        if selected_period_label is not None:
-                            st.session_state["pct_period_hours"] = next(
-                                h for h, label in period_labels.items() if label == selected_period_label
-                            )
-                        simple_mode = st.toggle("Simple mode", value=False, key="rain_simple_mode")
-                        pct_period_hours = st.session_state["pct_period_hours"]
-                        pct_result = aggregate_percentile_bins_anchored(pct_raw_result, period_hours=pct_period_hours)
-                        pct_days = pct_result["days"]
-                        if not pct_days:
-                            st.warning(
-                                f"Not enough rainfall data for the {pct_period_hours}-hourly view. "
-                                "Try the shorter interval."
-                            )
+                    period_results = {
+                        h: aggregate_percentile_bins_anchored(pct_raw_result, period_hours=h)
+                        for h in (3, 6) if h in AVAILABLE_PERIOD_HOURS
+                    }
+                    if not any(r.get("days") for r in period_results.values()):
+                        st.warning("There isn't enough rainfall data for the available timing options.")
+                    else:
+                        rain_card_html = render_six_day_forecast_html(period_results, card_thr, rain_name)
+                        if hasattr(st, "iframe"):
+                            st.iframe(rain_card_html, height="content")
                         else:
-                            st.caption("Tap a day to explore the forecast. Tap it again to close the details.")
-                            rain_card_html = render_rain_rows_html(
-                                pct_result, card_thr, max_days=6, simple_mode=simple_mode
-                            )
-                            if hasattr(st, "iframe"):
-                                st.iframe(rain_card_html, height="content")
-                            else:
-                                # Streamlit <1.56: postMessage inside the card
-                                # resizes this legacy component after each tap.
-                                components.html(rain_card_html, height=510, scrolling=False)
-                            with st.expander("How to read this forecast", expanded=False):
-                                st.markdown(
-                                    "The **bright blue bars** show the most likely amount of rain "
-                                    "during each 3-hourly or 6-hourly period. The lighter part "
-                                    "shows a higher estimate. **Chance of rain** shows how likely "
-                                    "a particular rainfall amount is to be reached. "
-                                    "**Total for the day** summarizes the rainfall for that day. "
-                                    "Tap a day to see more details, including the higher estimates "
-                                    "and a breakdown of the rainfall bars."
-                                )
+                            # The card resizes this iframe on every mode or day change.
+                            components.html(rain_card_html, height=510, scrolling=False)
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
