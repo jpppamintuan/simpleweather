@@ -902,7 +902,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         initial_class = " is-selected" if index == 0 else ""
         expanded = "true" if index == 0 else "false"
         simple_total_descriptor = _simple_rain_range(total_med, total_p90)
-        if " to " in simple_total_descriptor:
+        total_is_range = " to " in simple_total_descriptor
+        if total_is_range:
             first_amount, second_amount = simple_total_descriptor.split(" to ", 1)
             simple_total_markup = (
                 f"<span class='rr-total-line'>{first_amount.capitalize()}</span>"
@@ -920,7 +921,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"{chance_chip}<div class='rr-slots' style='{grid}'>{overview_bars}</div>"
             f"<div class='rr-tot{' rr-tot-partial' if is_partial else ''}{' rr-total-simple' if simple_mode else ''}'>"
             + (
-                f"<div class='rr-total-plain'>{simple_total_markup}</div>"
+                f"<div class='rr-total-plain{' rr-total-range' if total_is_range else ''}'>{simple_total_markup}</div>"
                 if simple_mode else
                 f"<div class='rr-total-main'><b>{_fmt_mm(total_med)}</b>"
                 "<small class='rr-secondary'>mm</small></div>"
@@ -1032,7 +1033,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-selectable:focus-visible{outline:2px solid #159BD6;outline-offset:1px;}"
         ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
         ".rr-detail.is-open{display:block;}"
-        ".rr-detail-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;}"
+        ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
         ".rr-detail-main{display:flex;align-items:baseline;gap:4px;white-space:nowrap;}"
         ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
@@ -1040,11 +1041,11 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-section-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:15px;margin-bottom:7px;font-size:.77rem;font-weight:700;color:#263746;}"
         ".rr-section-heading small{font-size:.58rem;font-weight:400;color:#74828F;text-align:right;}"
         ".rr-quantiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:0;}"
-        ".rr-quantile{min-width:0;text-align:center;padding:7px 1px;border-radius:6px;background:#EFF3F6;}"
+        ".rr-quantile{min-width:0;min-height:86px;display:flex;flex-direction:column;justify-content:center;gap:2px;text-align:center;padding:7px 1px;border-radius:6px;background:#EFF3F6;}"
         ".rr-quantile small{display:block;font-size:.59rem;color:#788491;}"
         ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:#3F4C58;white-space:nowrap;}"
         ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:#81909A;}"
-        ".rr-quantile .rr-quantile-desc{margin-top:3px;font-size:.56rem;white-space:nowrap;}"
+        ".rr-quantile .rr-quantile-desc{margin-top:0;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
         ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
         ".rr-detail-chance{min-width:0;display:grid;grid-template-columns:35% minmax(0,1fr);align-items:stretch;gap:0;overflow:hidden;border-radius:6px;background:transparent;}"
@@ -1106,21 +1107,24 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-bar-hours .rr-slot.rr-now .rr-now-tag{display:block;}"
         ".rr-detail-bar-hours .rr-slot.rr-now .rr-time-range{color:#087DB4;font-weight:700;}"
         ".rr-detail-bar-values .rr-slot.rr-now .rr-bar,.rr-selectable .rr-slot.rr-now .rr-bar{outline:1.5px solid #168ECC;outline-offset:2px;border-radius:6px;}"
-        ".rr-quantile-caption{min-height:2.5rem;display:flex;flex-direction:column;justify-content:flex-end;gap:1px;margin-bottom:3px;}"
+        ".rr-quantile-caption{min-height:2rem;display:flex;flex-direction:column;justify-content:center;gap:1px;margin-bottom:0;}"
         ".rr-quantile-help{display:block;min-height:0;font-size:.48rem!important;line-height:1.1;color:#87929C;font-weight:400;overflow-wrap:normal;}"
         ".rr-quantile-help i{font-style:italic;}"
         ".rr-chip-simple{gap:2px;padding:2px 3px;}"
         ".rr-simple-chance,.rr-simple-threshold{display:block;white-space:nowrap;letter-spacing:-.02em;}"
-        ".rr-simple-chance{font-size:.88rem;font-weight:750;}"
-        ".rr-simple-threshold{font-size:.88rem;font-weight:400;}"
+        ".rr-simple-chance{font-size:.82rem;font-weight:750;}"
+        ".rr-simple-threshold{font-size:.72rem;font-weight:400;}"
         ".rr-total-simple{padding:3px;}"
         ".rr-total-plain{font-weight:700;font-size:.88rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
         ".rr-total-line{display:block;white-space:nowrap;}"
+        ".rr-total-range{font-size:.82rem;}"
         "/* Both modes share the same .rr-row.rr-c grid; do not override it for Simple mode. */"
         "@container (min-width:430px){"
         "/* Desktop keeps the cards centered in exactly the same columns. */"
-        ".rr-simple-chance,.rr-simple-threshold{font-size:1rem;}"
+        ".rr-simple-chance{font-size:.94rem;}"
+        ".rr-simple-threshold{font-size:.82rem;}"
         ".rr-total-plain{font-size:1rem;}"
+        ".rr-total-range{font-size:.93rem;}"
         ".rr-today-tag{font-size:.68rem;}"
         ".rr-quantile-help{font-size:.61rem!important;}"
         "}"
@@ -1168,9 +1172,27 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       }
 
       function fitSimpleText() {
-        // Start from one readable font size for both card types. Only shrink
-        // an individual phrase if it exceeds the available card width.
-        card.querySelectorAll('.rr-simple-chance, .rr-simple-threshold, .rr-total-line').forEach(el => {
+        // Fit both chance lines together so the chance description always
+        // retains a slightly larger type size than the rainfall description.
+        card.querySelectorAll('.rr-chip-simple').forEach(chip => {
+          const lines = [chip.querySelector('.rr-simple-chance'), chip.querySelector('.rr-simple-threshold')].filter(Boolean);
+          if (lines.length !== 2) return;
+          lines.forEach(el => {el.style.fontSize = '';});
+          const base = lines.map(el => parseFloat(getComputedStyle(el).fontSize));
+          const computed = getComputedStyle(chip);
+          const room = chip.clientWidth - parseFloat(computed.paddingLeft) - parseFloat(computed.paddingRight) - 2;
+          // These spans size to their text; compare with the card's inner
+          // width rather than their own clientWidth (which hides overflow).
+          let scale = 1;
+          for (let attempt = 0; attempt < 10; attempt++) {
+            const widest = Math.max(...lines.map(el => el.scrollWidth));
+            if (widest <= room + 1) break;
+            scale *= (room - 1) / widest;
+            lines.forEach((el, i) => {el.style.fontSize = `${Math.max(8.5, base[i] * scale)}px`;});
+          }
+        });
+        // The total's one- or two-line label can scale on its own.
+        card.querySelectorAll('.rr-total-line').forEach(el => {
           el.style.fontSize = '';
           let px = parseFloat(getComputedStyle(el).fontSize);
           let attempts = 0;
@@ -1231,7 +1253,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         });
       });
       if (typeof ResizeObserver !== 'undefined') {
-        new ResizeObserver(() => { fitSimpleText(); updateFrameHeight(); }).observe(card);
+        new ResizeObserver(() => { updateFrameHeight(); }).observe(card);
       }
       if (document.fonts && document.fonts.ready) {
         document.fonts.ready.then(() => {fitSimpleText(); updateFrameHeight();});
@@ -1499,7 +1521,10 @@ def _cell_style(threshold_mm: int, val) -> tuple[str, str]:
     text_color = _cell_text_color(_relative_luminance(br, bg_g, bb))
     return bg, text_color
 
-def _coords_caption(location_name: str, true_lat: float, true_lon: float, result: dict) -> str:
+def _coords_caption(
+    location_name: str, true_lat: float, true_lon: float, result: dict,
+    *, include_live_metadata: bool = False,
+) -> str:
     resolution = result.get("resolution") or "0p25"
     res_label = RESOLUTION_LABELS.get(resolution, resolution)
     parts = [
@@ -1509,6 +1534,12 @@ def _coords_caption(location_name: str, true_lat: float, true_lon: float, result
     query = resolve_query_point(true_lat, true_lon, resolution)
     if query != (true_lat, true_lon):
         parts.append(f"(query point overridden to {query[0]}°N, {query[1]}°E for {res_label} data)")
+    if include_live_metadata and result.get("run_time") is not None:
+        run_time = result["run_time"]
+        if run_time.tzinfo is None:
+            run_time = run_time.replace(tzinfo=timezone.utc)
+        run_time = run_time.astimezone(timezone.utc)
+        parts.append(f"**Live ECMWF run:** {run_time:%HZ %d %b %Y} · **Resolution:** {res_label}")
     return " · ".join(parts)
 
 _PRODUCT_LABELS = {
@@ -1825,51 +1856,65 @@ with main:
 if view_mode == "Rainfall Forecast":
     with st.expander("Forecast details & sources", expanded=False):
         st.markdown(
-            "**Rainfall amounts.** The six-day card uses ECMWF Ensemble Prediction System "
-            "(ENS) forecasts from 50 members. The bold daily amount is the ensemble median "
-            "(50th percentile). The pale part of each bar extends to P90 (90th percentile). "
-            "‘High’ means P90, an upper-end estimate—not a true maximum. "
-            "The expanded panel also shows P10, P25 and P75. "
-            "The median is the midpoint of ensemble estimates, not necessarily the single most probable amount."
+            "<style>"
+            ".st-key-rain_footnote_text [data-testid='stMarkdown'] p{font-size:.82rem;line-height:1.42;}"
+            ".st-key-rain_footnote_text [data-testid='stCaptionContainer'] p{font-size:.72rem;line-height:1.35;}"
+            "details:has(.st-key-rain_footnote_text) summary{font-size:.88rem;}"
+            "</style>",
+            unsafe_allow_html=True,
         )
-        st.markdown(
-            "**Timing.** The daily rainfall totals run from 2:00 AM to 2:00 AM "
-            "Philippine Time (UTC+8). The 3-hourly and 6-hourly views group the same "
-            "underlying forecast bins; totals don't change when switching views. "
-            "Incomplete time periods are left blank. The device clock is used to mark TODAY "
-            "and the ongoing rainfall interval as NOW, in Philippine time. The 24-hour threshold chances "
-            "run from 8:00 AM to 8:00 AM and are aligned to the date they begin."
-        )
-        st.markdown(
-            "**Reading the chart.** Bright blue shows the median rainfall, pale blue-gray "
-            "shows the range up to P90, and a dark cap means the higher estimate "
-            "exceeds the chart's vertical scale (10 mm per 3-hour period or 20 mm "
-            "per 6-hour period). Each threshold chance is the probability that "
-            "rainfall reaches or exceeds that amount during its 24-hour period. "
-            "The main six-day card shows the highest rainfall threshold with "
-            "at least a 65% chance, or the chance of at least 1 mm if none of "
-            "the higher thresholds qualify. Simple mode replaces these numbers with "
-            "plain-language probability and rainfall-intensity categories; the day-total "
-            "category spans the ensemble median through P90."
-        )
-        st.markdown(
-            "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
-            "cycles; threshold probability products are issued for 00Z and 12Z only. "
-            "Published products are first available at 0.25° and typically update "
-            "to 0.1° later. Data is normally read from scheduled ingestion; "
-            "if stored threshold data is stale, the app may retrieve 0.25° chances live. "
-            "Source: ECMWF Open Data (CC BY 4.0)."
-        )
-        if "last_rain" in st.session_state:
-            _forecast = st.session_state["last_rain"]
-            _site = _forecast["location_name"]
-            _lat, _lon = _forecast["true"]
-            if _forecast.get("pct_raw") is not None:
-                st.caption("Rainfall amounts: " + _coords_caption(_site, _lat, _lon, _forecast["pct_raw"]))
-            if _forecast.get("thr") is not None:
-                st.caption("Rainfall chances: " + _coords_caption(_site, _lat, _lon, _forecast["thr"]))
-                if _forecast["thr"].get("fetch_mode") == "separate" and not _forecast["thr_cached"]:
-                    st.caption("The threshold products were retrieved individually because the combined request wasn't available.")
-        render_status_footer()
+        with st.container(key="rain_footnote_text"):
+            st.markdown(
+                "**Rainfall amounts.** The six-day card uses ECMWF Ensemble Prediction System "
+                "(ENS) forecasts from 50 members. The bold daily amount is the ensemble median "
+                "(50th percentile). The pale part of each bar extends to P90 (90th percentile). "
+                "‘High’ means P90, an upper-end estimate—not a true maximum. "
+                "The expanded panel also shows P10, P25 and P75. "
+                "The median is the midpoint of ensemble estimates, not necessarily the single most probable amount."
+            )
+            st.markdown(
+                "**Timing.** The daily rainfall totals run from 2:00 AM to 2:00 AM "
+                "Philippine Time (UTC+8). The 3-hourly and 6-hourly views group the same "
+                "underlying forecast bins; totals don't change when switching views. "
+                "Incomplete time periods are left blank. The device clock is used to mark TODAY "
+                "and the ongoing rainfall interval as NOW, in Philippine time. The 24-hour threshold chances "
+                "run from 8:00 AM to 8:00 AM and are aligned to the date they begin."
+            )
+            st.markdown(
+                "**Reading the chart.** Bright blue shows the median rainfall, pale blue-gray "
+                "shows the range up to P90, and a dark cap means the higher estimate "
+                "exceeds the chart's vertical scale (10 mm per 3-hour period or 20 mm "
+                "per 6-hour period). Each threshold chance is the probability that "
+                "rainfall reaches or exceeds that amount during its 24-hour period. "
+                "The main six-day card shows the highest rainfall threshold with "
+                "at least a 65% chance, or the chance of at least 1 mm if none of "
+                "the higher thresholds qualify. Simple mode replaces these numbers with "
+                "plain-language probability and rainfall-intensity categories; the day-total "
+                "category spans the ensemble median through P90."
+            )
+            st.markdown(
+                "**Updates and data.** ECMWF rainfall amounts use 00Z, 06Z, 12Z and 18Z "
+                "cycles; threshold probability products are issued for 00Z and 12Z only. "
+                "Published products are first available at 0.25° and typically update "
+                "to 0.1° later. Data is normally read from scheduled ingestion; "
+                "if stored threshold data is stale, the app may retrieve 0.25° chances live. "
+                "Source: ECMWF Open Data (CC BY 4.0)."
+            )
+            if "last_rain" in st.session_state:
+                _forecast = st.session_state["last_rain"]
+                _site = _forecast["location_name"]
+                _lat, _lon = _forecast["true"]
+                if _forecast.get("pct_raw") is not None:
+                    st.caption("Rainfall amounts: " + _coords_caption(_site, _lat, _lon, _forecast["pct_raw"]))
+                if _forecast.get("thr") is not None:
+                    st.caption(
+                        "Rainfall chances: " + _coords_caption(
+                            _site, _lat, _lon, _forecast["thr"],
+                            include_live_metadata=_forecast["thr"].get("fetch_mode") in ("combined", "separate"),
+                        )
+                    )
+                    if _forecast["thr"].get("fetch_mode") == "separate" and not _forecast["thr_cached"]:
+                        st.caption("The threshold products were retrieved individually because the combined request wasn't available.")
+            render_status_footer()
 else:
     render_status_footer()
