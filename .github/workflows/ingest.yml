@@ -1,7 +1,7 @@
 name: Ingest ECMWF forecast data
 
 on:
-  schedule:
+  # schedule:
     # Now check-then-fetch (see ingest.py): each run does a cheap
     # metadata-only availability check per dataset and only pays for a
     # full download if something's actually new, so running this often
@@ -24,13 +24,13 @@ on:
     #   18Z   01:04 / 03:04               (no ep product for 18Z)
     # Each window below runs from before the earliest 0.25 release to ~1h45
     # past the latest 0.1 one, so a late release doesn't fall outside it.
-    - cron: "*/15 7-11 * * *"
-    - cron: "*/15 13-17 * * *"
-    - cron: "*/15 19-23 * * *"
-    - cron: "*/15 1-5 * * *"
+    # - cron: "*/15 7-11 * * *"
+    # - cron: "*/15 13-17 * * *"
+    #- cron: "*/15 19-23 * * *"
+    # - cron: "*/15 1-5 * * *"
     # Sparse hourly fallback for the remaining hours (offset to :17 -- the
     # top of the hour is GitHub's highest-delay-risk time for scheduled jobs).
-    - cron: "17 0,6,12,18 * * *"
+    # - cron: "17 0,6,12,18 * * *"
   workflow_dispatch:
     inputs:
       force_refresh:
