@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-11-07T16:31:51.787637+00:00",
+  "run_times": {
+    "percentile": "2026-11-07T06:00:00+00:00",
+    "threshold": "2026-11-07T00:00:00+00:00",
+    "temperature": "2026-11-07T06:00:00+00:00"
+  },
+  "resolutions": {
+    "threshold": "0p1",
+    "percentile": "0p1",
+    "temperature": "0p1"
+  },
+  "published_at": {},
+  "failures": [],
+  "upgrade_failures": []
+}
