@@ -48,6 +48,31 @@ st.markdown(
           button, input, select, textarea) {
         font-family: var(--simpleweather-font) !important;
       }
+      /* Keep Streamlit's native primary button, but give it our blue palette. */
+      .st-key-forecast_button button,
+      .st-key-forecast_button [data-testid="stBaseButton-primary"] {
+        background-color: #087DB4 !important;
+        border-color: #087DB4 !important;
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+        transition: background-color .2s ease, border-color .2s ease,
+                    box-shadow .2s ease !important;
+      }
+      .st-key-forecast_button button:hover,
+      .st-key-forecast_button [data-testid="stBaseButton-primary"]:hover {
+        background-color: #056796 !important;
+        border-color: #056796 !important;
+        color: #FFFFFF !important;
+      }
+      .st-key-forecast_button button:focus-visible,
+      .st-key-forecast_button [data-testid="stBaseButton-primary"]:focus-visible {
+        outline: 3px solid #8CD9F0 !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 2px #FFFFFF !important;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .st-key-forecast_button button { transition: none !important; }
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1621,21 +1646,21 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     css = (
         "<style>"
         f"html,body{{font-family:{FONT_STACK};font-size:16px;}}"
-        f".rr-card{{container-type:inline-size;background:#fff;color:#283746;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        f".rr-card{{--ink:#283746;--muted:#687585;--muted2:#8994a1;--today:#1786B6;container-type:inline-size;background:#fff;color:var(--ink);border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-card button,.rr-card .rr-tip{{font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
         f".rr-row.rr-c{{grid-template-columns:3.65rem 5.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.85rem;column-gap:6px;}}"
         ".rr-data{padding:5px 0;border-top:1px solid #EEF0F3;}"
         ".rr-head{padding-bottom:2px;}"
-        ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.58rem;color:#6b7280;white-space:nowrap;}"
+        ".rr-head .rr-slot span,.rr-detail-bar-hours .rr-slot span{font-size:.58rem;color:var(--muted2);white-space:nowrap;}"
         ".rr-ap{font-size:.46rem;}"
-        ".rr-h{font-size:.58rem;color:#6b7280;text-align:center;line-height:1.1;white-space:nowrap;}"
+        ".rr-h{font-size:.58rem;color:#7A8796;font-weight:700;text-align:center;line-height:1.1;white-space:nowrap;}"
         ".rr-h-r{text-align:center;}"
         ".rr-day{display:flex;flex-direction:column;line-height:1.15;}"
-        ".rr-day b{font-size:.82rem;font-weight:700;}"
-        ".rr-day-weekday{font-size:.82rem;font-weight:700;line-height:1.1;}"
+        ".rr-day b{font-size:.82rem;font-weight:700;color:var(--ink);}"
+        ".rr-day-weekday{font-size:.82rem;font-weight:700;line-height:1.1;color:var(--ink);}"
         ".rr-day-calendar{font-size:.60rem;letter-spacing:-.025em;white-space:nowrap;font-weight:400;line-height:1.15;color:#737D88;}"
-        ".rr-secondary{font-size:.56rem;font-weight:400;line-height:1.2;letter-spacing:-.01em;color:#737D88;white-space:nowrap;}"
+        ".rr-secondary{font-size:.56rem;font-weight:400;line-height:1.2;letter-spacing:-.01em;color:var(--muted);white-space:nowrap;}"
         ".rr-slots{display:grid;}"
         ".rr-slot{display:flex;justify-content:center;}"
         ".rr-bar{position:relative;width:100%;max-width:var(--rr-overview-bar-max);height:60px;outline:none;}"
@@ -1646,26 +1671,26 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-tot{text-align:center;white-space:nowrap;display:flex;flex-direction:column;align-items:center;justify-content:center;line-height:1.12;min-width:0;height:2.8rem;border-radius:6px;background:#F2F5F7;box-shadow:inset 0 0 0 1px rgba(0,0,0,.035);}"
         ".rr-tot-partial{height:3.3rem;}"
         ".rr-total-main{display:flex;align-items:baseline;justify-content:center;gap:2px;}"
-        ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
-        ".rr-tot .rr-total-main small{font-size:.56rem;font-weight:400;color:#737D88;}"
-        ".rr-tot .rr-range{display:block;margin-top:3px;font-variant-numeric:tabular-nums;}"
-        ".rr-tot .rr-part{font-size:.57rem;font-style:italic;color:#6b7280;}"
+        ".rr-tot .rr-total-main b{font-size:.95rem;font-weight:750;color:var(--ink);letter-spacing:-.025em;font-variant-numeric:tabular-nums;}"
+        ".rr-tot .rr-total-main small{font-size:.56rem;font-weight:400;color:var(--muted);}"
+        ".rr-tot .rr-range{display:block;margin-top:3px;color:var(--muted);font-variant-numeric:tabular-nums;}"
+        ".rr-tot .rr-part{font-size:.57rem;font-style:italic;color:var(--muted);}"
         ".rr-chip{box-sizing:border-box;width:100%;height:2.8rem;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;line-height:1.1;box-shadow:inset 0 0 0 1px rgba(0,0,0,.08);}"
         ".rr-chip b{font-size:.98rem;font-weight:750;letter-spacing:-.015em;font-variant-numeric:tabular-nums;}"
         ".rr-prob-head{display:flex;align-items:baseline;justify-content:center;gap:2px;max-width:100%;white-space:nowrap;}"
         ".rr-chip .rr-prob-head b{font-size:.98rem;}"
         ".rr-chip .rr-percent-sign{font-size:.56rem;font-weight:400;opacity:.85;}"
         ".rr-chip .rr-chip-threshold{font-size:.56rem;font-weight:400;margin-top:3px;color:inherit;opacity:.85;}"
-        ".rr-chip-na{color:#9ca3af;font-size:.75rem;}"
+        ".rr-chip-na{color:var(--muted2);font-size:.75rem;}"
         ".rr-tip{display:none;position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);"
-        "background:#111;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
+        "background:#36495B;color:#fff;font-size:.68rem;line-height:1.4;padding:6px 9px;border-radius:7px;"
         "white-space:nowrap;z-index:50;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,.25);}"
         ".rr-tip-l{left:0;transform:none;}.rr-tip-r{left:auto;right:0;transform:none;}"
         ".rr-tip-b{bottom:auto;top:calc(100% + 6px);}"
         ".rr-detail .rr-bar{cursor:pointer;appearance:none;-webkit-appearance:none;border:0;padding:0;background:transparent;font:inherit;touch-action:manipulation;}"
         ".rr-detail .rr-bar:focus-visible{outline:2px solid #159BD6;outline-offset:2px;border-radius:7px;}"
         ".rr-detail .rr-bar:hover .rr-tip,.rr-detail .rr-bar:focus .rr-tip{display:block;}"
-        ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:#6b7280;margin-top:8px;}"
+        ".rr-legend{display:flex;flex-wrap:wrap;gap:3px 12px;font-size:.62rem;color:var(--muted);margin-top:8px;}"
         ".rr-legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px;}"
         ".rr-selectable{position:relative;display:grid;width:100%;box-sizing:border-box;appearance:none;-webkit-appearance:none;"
         "cursor:pointer;color:inherit;font:inherit;text-align:left;background:transparent;border:0;"
@@ -1683,19 +1708,19 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "border-radius:0 0 9px 9px;background:#F7FAFC;}"
         "@media(prefers-reduced-motion:reduce){.rr-detail{transition:none!important;}}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
-        ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
+        ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:var(--ink);}"
         ".rr-detail-main{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:2px;white-space:nowrap;text-align:right;}"
         ".rr-detail-total-top{display:flex;align-items:baseline;justify-content:flex-end;gap:4px;}"
-        ".rr-detail-intensity{display:block;font-size:.62rem;color:#7D8995;line-height:1.15;font-weight:400;}"
-        ".rr-detail-main b{font-size:1.22rem;letter-spacing:-.035em;color:#172532;}"
-        ".rr-detail-main small{font-size:.62rem;color:#7D8995;letter-spacing:0;}"
-        ".rr-section-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:15px;margin-bottom:7px;font-size:.77rem;font-weight:700;color:#263746;}"
-        ".rr-section-heading small{font-size:.58rem;font-weight:400;color:#74828F;text-align:right;}"
+        ".rr-detail-intensity{display:block;font-size:.62rem;color:var(--muted);line-height:1.15;font-weight:400;}"
+        ".rr-detail-main b{font-size:1.22rem;font-weight:750;letter-spacing:-.035em;color:var(--ink);}"
+        ".rr-detail-main small{font-size:.62rem;color:var(--muted);letter-spacing:0;}"
+        ".rr-section-heading{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:15px;margin-bottom:7px;font-size:.77rem;font-weight:750;color:#516678;}"
+        ".rr-section-heading small{font-size:.58rem;font-weight:400;color:var(--muted);text-align:right;}"
         ".rr-quantiles{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin-top:0;}"
         ".rr-quantile{min-width:0;min-height:86px;display:flex;flex-direction:column;justify-content:center;gap:2px;text-align:center;padding:7px 1px;border-radius:6px;background:#EFF3F6;}"
-        ".rr-quantile small{display:block;font-size:.59rem;color:#788491;}"
-        ".rr-quantile b{display:block;font-size:.77rem;font-weight:700;color:#3F4C58;white-space:nowrap;}"
-        ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:#81909A;}"
+        ".rr-quantile small{display:block;font-size:.59rem;color:#657383;font-weight:400;}"
+        ".rr-quantile b{display:block;font-size:.77rem;font-weight:750;color:var(--ink);white-space:nowrap;}"
+        ".rr-quantile em{font-style:normal;font-size:.58rem;font-weight:400;color:var(--muted2);}"
         ".rr-quantile .rr-quantile-desc{margin-top:0;font-size:.56rem;white-space:nowrap;}"
         ".rr-qmedian{background:#E2F5FD;}.rr-qmedian b{color:#126F96;font-size:.85rem;}"
         ".rr-detail-chances{display:flex;flex-direction:column;gap:5px;}"
@@ -1705,13 +1730,13 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-chance small{font-size:.63rem;line-height:1.15;}"
         ".rr-detail-chance-threshold{font-weight:700;white-space:nowrap;flex-shrink:0;}"
         ".rr-detail-chance-meaning{font-weight:400;opacity:.8;white-space:normal;min-width:0;}"
-        ".rr-detail-chance b{font-size:.92rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap;}"
-        ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;min-width:58px;text-align:right;opacity:.9;white-space:nowrap;}"
+        ".rr-detail-chance b{font-size:.92rem;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}"
+        ".rr-detail-chance .rr-detail-chance-desc{font-size:.62rem;font-weight:400;min-width:58px;text-align:right;opacity:.9;white-space:nowrap;}"
         ".rr-detail-bars{margin-top:14px;padding-top:0;border-top:1px solid #E0E8EE;}"
         ".rr-detail-bar-hours{margin-bottom:7px;}"
-        ".rr-time-range{display:flex;justify-content:center;white-space:nowrap;font-size:.55rem;letter-spacing:-.035em;color:#6b7280;}"
+        ".rr-time-range{display:flex;justify-content:center;white-space:nowrap;font-size:.55rem;letter-spacing:-.035em;color:var(--muted);}"
         ".rr-detail-bar-values .rr-bar{height:70px;max-width:var(--rr-detail-bar-max);}"
-        ".rr-detail-note{font-size:.57rem;color:#83909B;margin-top:9px;line-height:1.35;}"
+        ".rr-detail-note{font-size:.57rem;color:var(--muted2);margin-top:9px;line-height:1.35;}"
         "@container (min-width:430px){"
         ".rr-row.rr-c{grid-template-columns:3.8rem 6.4rem minmax(0,170px) 6.4rem;column-gap:8px;}"
         ".rr-row:not(.rr-c){grid-template-columns:3.1rem minmax(0,170px) 4.4rem;}"
@@ -1754,7 +1779,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile em{font-size:.58rem;}"
         ".rr-detail-chance b{font-size:.86rem;}"
         "}"
-        ".rr-today-tag{display:none;font-size:.56rem;font-weight:650;color:#1786B6;line-height:1.15;letter-spacing:.025em;}"
+        ".rr-today-tag{display:none;font-size:.56rem;font-weight:400;color:var(--today);line-height:1.15;letter-spacing:.025em;}"
         ".rr-selectable.rr-today .rr-today-tag,.rr-detail.rr-today .rr-today-tag{display:block;}"
         ".rr-detail-date{display:flex;flex-direction:column;gap:2px;}"
         ".rr-now-tag{display:none;color:#087DB4;font-weight:800;font-size:.57rem;letter-spacing:.02em;margin-inline-end:4px;}"
@@ -1762,16 +1787,16 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-detail-bar-hours .rr-slot.rr-now .rr-time-range{color:#087DB4;font-weight:700;}"
         ".rr-detail-bar-values .rr-slot.rr-now .rr-bar,.rr-selectable .rr-slot.rr-now .rr-bar{outline:1.5px solid #168ECC;outline-offset:2px;border-radius:6px;}"
         ".rr-quantile-caption{min-height:2rem;display:flex;flex-direction:column;justify-content:center;gap:1px;margin-bottom:0;}"
-        ".rr-quantile-help{display:block;min-height:0;font-size:.48rem!important;line-height:1.1;color:#87929C;font-weight:400;overflow-wrap:normal;}"
+        ".rr-quantile-help{display:block;min-height:0;font-size:.48rem!important;line-height:1.1;color:var(--muted2);font-weight:400;overflow-wrap:normal;}"
         ".rr-quantile-help i{font-style:italic;}"
         ".rr-chip-simple{gap:2px;padding:2px 3px;}"
         ".rr-simple-chance,.rr-simple-threshold{display:block;white-space:nowrap;letter-spacing:-.02em;}"
-        ".rr-simple-chance{font-size:.78rem;font-weight:750;}"
+        ".rr-simple-chance{font-size:.78rem;font-weight:680;}"
         ".rr-simple-threshold{font-size:.68rem;font-weight:400;}"
         ".rr-total-simple{padding:2px;}"
-        ".rr-total-plain{font-weight:700;font-size:.84rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
+        ".rr-total-plain{font-weight:680;color:var(--ink);font-size:.84rem;line-height:1.13;text-align:center;white-space:normal;overflow-wrap:normal;width:100%;}"
         ".rr-total-line{display:block;white-space:nowrap;}"
-        ".rr-total-range{font-size:.77rem;}"
+        ".rr-total-range{font-size:.77rem;color:var(--muted);}"
         "/* Both modes share the same .rr-row.rr-c grid; do not override it for Simple mode. */"
         "@container (min-width:430px){"
         "/* Desktop keeps the cards centered in exactly the same columns. */"
@@ -2025,7 +2050,7 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-variant.is-closing{animation:rrFadeOut .2s ease-in both!important;pointer-events:none}
     @media(prefers-reduced-motion:reduce){.rr-variant:not([hidden]),.rr-variant.is-closing{animation:none!important}}
     .rr-card-controls{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:14px 0 12px}
-    .rr-card-title{font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;color:#1d2530;margin:0}
+    .rr-card-title{font-size:18px;font-weight:720;line-height:1.3;letter-spacing:-.025em;color:#283746;margin:0}
     .rr-card-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px}
     .rr-card-tabs button{font-family:inherit;border:0;border-radius:10px;background:transparent;color:#677586;padding:8px 16px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
     .rr-card-tabs button[aria-pressed='true']{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}
@@ -2034,7 +2059,7 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-simple-toggle input:after{content:'';position:absolute;width:16px;height:16px;top:3px;left:3px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002;transition:left .16s}
     .rr-simple-toggle input:checked{background:#25a8db}.rr-simple-toggle input:checked:after{left:18px}
     .rr-root button:focus-visible,.rr-root input:focus-visible,.rr-root summary:focus-visible{outline:2px solid #159bd6;outline-offset:2px}
-    .rr-intro{color:#737d88;font-size:12px;margin-bottom:9px}
+    .rr-intro{color:#687585;font-size:12px;margin-bottom:9px}
     .rr-reading-guide{margin-top:12px;color:#697789;font-size:12px;line-height:1.55}
     .rr-reading-guide summary{cursor:pointer;color:#576b80;font-weight:700}
     .rr-reading-guide .rr-guide-body{padding-top:7px}
@@ -2526,7 +2551,8 @@ if forecast_clicked:
     )
     st.session_state["last_forecast_location"] = location_name
 
-st.divider()
+if st.session_state.get("last_forecast_location"):
+    st.divider()
 if "view_mode" not in st.session_state:
     st.session_state["view_mode"] = "Rainfall Forecast"
 # There is nothing to switch between before the first Get forecast request.
@@ -2543,7 +2569,8 @@ view_mode = st.session_state["view_mode"]
 main = st.container()
 with main:
     if view_mode == "Rainfall Forecast":
-        st.caption("See how much rain to expect over the next six days, and your chances of rain over the next two weeks.")
+        if st.session_state.get("last_forecast_location"):
+            st.caption("See how much rain to expect over the next six days, and your chances of rain over the next two weeks.")
         st.markdown(
             "<style>"
             "@media (orientation: portrait){"
@@ -2606,8 +2633,7 @@ with main:
                             # The embedded outlook reports its height after each
                             # tab switch, day selection and details expansion.
                             components.html(outlook_html, height=980, scrolling=False)
-        else:
-            st.info("Choose a location and click **Get forecast**.")
+
 
     elif view_mode == "Temperature Forecast":
         st.caption(
@@ -2679,11 +2705,7 @@ with main:
                     use_container_width=True,
                 )
             st.caption(_coords_caption(temp_location_name, *st.session_state.get("last_temp_true", (true_lat, true_lon)), temp_result))
-        else:
-            st.info(
-                "Choose a location and click **Get forecast** to see temperature "
-                "and heat index percentiles."
-            )
+
 
 
 # Keep load timing beneath the displayed forecasts, not near the fetch button.
