@@ -70,8 +70,9 @@ st.markdown(
         outline-offset: 2px !important;
         box-shadow: 0 0 0 2px #FFFFFF !important;
       }
-      /* Forecast-view segmented control: selected = blue outline, NEVER a fill.
-         Use the key scope so these selectors do not recolor other buttons. */
+      /* Forecast-view selector: outlined options, no fill in either theme.
+         Streamlit's --text-color is light in dark mode (near white) and dark
+         in light mode, so the selected label remains legible in both. */
       .st-key-forecast_view_selector [data-testid="stSegmentedControl"],
       .st-key-forecast_view_selector [data-testid="stButtonGroup"],
       .st-key-forecast_view_selector [role="group"] {
@@ -81,22 +82,35 @@ st.markdown(
       .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"],
       .st-key-forecast_view_selector button[aria-pressed="true"],
       .st-key-forecast_view_selector button[aria-checked="true"] {
-        color: #086C9B !important;
+        color: var(--text-color, #283746) !important;
         background: transparent !important;
         background-color: transparent !important;
         border: 2px solid #087DB4 !important;
+        opacity: 1 !important;
         box-shadow: none !important;
       }
       .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"],
       .st-key-forecast_view_selector button[aria-pressed="false"],
       .st-key-forecast_view_selector button[aria-checked="false"] {
-        color: #586B7D !important;
+        color: var(--text-color, #687585) !important;
         background: transparent !important;
-        border-color: transparent !important;
+        background-color: transparent !important;
+        border: 1.5px solid color-mix(in srgb, var(--text-color, #687585) 55%, transparent) !important;
+        opacity: .72 !important;
         box-shadow: none !important;
       }
+      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"]:hover,
+      .st-key-forecast_view_selector button[aria-pressed="true"]:hover,
+      .st-key-forecast_view_selector button[aria-checked="true"]:hover {
+        color: var(--text-color, #283746) !important;
+      }
+      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"]:hover,
+      .st-key-forecast_view_selector button[aria-pressed="false"]:hover,
+      .st-key-forecast_view_selector button[aria-checked="false"]:hover {
+        color: var(--text-color, #687585) !important;
+        opacity: .92 !important;
+      }
       .st-key-forecast_view_selector button:hover {
-        color: #086C9B !important;
         background: transparent !important;
         background-color: transparent !important;
       }
