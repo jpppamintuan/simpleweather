@@ -490,7 +490,7 @@ def _hex_to_rgb(hex_color: str):
 def _relative_luminance(r: int, g: int, b: int) -> float:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
-BASE_TEXT = "#111111"
+BASE_TEXT = "#283746"
 CARD_BG = "#ffffff"
 BORDER = "rgba(0,0,0,0.12)"
 FONT_STACK = "'Source Sans 3', 'Source Sans Pro', sans-serif"
@@ -536,7 +536,7 @@ def _fmt_window(w: dict) -> str:
     return f"{_fmt_ph(w['start_utc'])}<br>to<br>{_fmt_ph(w['end_utc'])}"
 
 def _cell_text_color(blended_luminance: float) -> str:
-    return "#111111" if blended_luminance > 0.5 else "#ffffff"
+    return "#283746" if blended_luminance > 0.5 else "#ffffff"
 
 def _estimate_col_width_px(windows: list[dict]) -> int:
     candidates = ["Threshold", "≥100 mm", "100%"]
@@ -629,7 +629,7 @@ _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
 <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
-:root{--ink:#1d2530;--muted:#687585;--muted2:#8994a1;--line:#e7ebf0;--surface:#fff;--bg:#f5f7fa;--blue:#00bfff;--shadow:0 10px 34px rgba(23,40,63,.035);--radius:20px}
+:root{--ink:#283746;--muted:#687585;--muted2:#8994a1;--line:#e7ebf0;--surface:#fff;--bg:#f5f7fa;--blue:#00bfff;--shadow:0 10px 34px rgba(23,40,63,.035);--radius:20px}
 *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Source Sans 3','Source Sans Pro',sans-serif;font-size:15px;-webkit-font-smoothing:antialiased}button,input{font:inherit}button{cursor:pointer}button:focus-visible,summary:focus-visible,svg:focus-visible{outline:3px solid rgba(0,156,220,.46);outline-offset:2px}button[aria-pressed="true"]{outline-offset:0}main{max-width:1150px;margin:auto;padding:30px 26px 70px}.eyebrow{font-size:12px;letter-spacing:.11em;color:#657991;font-weight:800;text-transform:uppercase}.page-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:15px;margin-bottom:22px}.page-heading h1{font-weight:740;line-height:1.08;font-size:clamp(27px,3.5vw,38px);letter-spacing:-.04em;margin:6px 0 8px}.subtle{color:var(--muted);margin:0}.demo-pill{font-size:12px;letter-spacing:.012em;color:#5b6776;background:#e8edf3;border:1px solid #dde3ea;border-radius:50px;padding:7px 12px;white-space:nowrap}.shell{background:var(--surface);border:1px solid #e9edf2;border-radius:14px;padding:24px;box-shadow:var(--shadow)}.shell-title{display:flex;align-items:start;justify-content:space-between;gap:16px;margin-bottom:16px}.shell-title h2{font-size:22px;margin:2px 0 3px;font-weight:750;letter-spacing:-.03em}.shell-title p{margin:0;color:var(--muted);font-size:14px}.rain-icon{width:40px;height:40px;background:#e9f6fb;color:#149fce;border-radius:14px;display:grid;place-items:center;flex:none}.top-controls{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:17px 0 18px}.view-tabs{display:flex;align-items:center;padding:4px;border-radius:13px;background:#eef1f5;gap:3px;width:max-content;max-width:100%}.view-tab{background:transparent;color:#677586;border:none;border-radius:10px;padding:8px 16px;font-size:13px;font-weight:700;white-space:nowrap;transition:background .15s}.view-tab[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}.simple-toggle{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;color:#506070;font-size:13px;font-weight:650}.simple-toggle input{appearance:none;position:relative;width:37px;height:22px;border-radius:99px;background:#d5dbe3;margin:0;transition:background .15s}.simple-toggle input:after{content:"";position:absolute;width:16px;height:16px;top:3px;left:3px;border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}.simple-toggle input:checked{background:#25a8db}.simple-toggle input:checked:after{left:18px}.simple-toggle input:focus-visible{outline:3px solid #7bd2ed;outline-offset:3px}.section-label{font-weight:750;font-size:14px;letter-spacing:-.01em}.kicker{font-size:12px;color:var(--muted);line-height:1.45}.part{border:1px solid var(--line);border-radius:17px;padding:17px 18px;margin-top:16px}.part-heading{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 12px}.threshold-section{background:#fbfcfe;border:1px solid #eef1f6;padding:15px 16px;border-radius:15px;margin-bottom:16px}.question{font-size:13px;color:#596a7b;font-weight:680;margin-bottom:11px}.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.threshold-chip{border:1px solid #e2e6eb;color:#526375;background:#fff;border-radius:10px;min-height:40px;display:flex;justify-content:center;align-items:center;gap:6px;padding:4px 5px;font-size:13px;font-weight:750;white-space:nowrap;transition:background .15s,border .15s}.threshold-chip .swatch{height:8px;width:8px;border-radius:50%;background:var(--chip);flex:none}.threshold-chip[aria-pressed="true"]{border:1.5px solid var(--chip-stroke);background:var(--chip-bg);color:#27394b;box-shadow:0 2px 5px #5263750b}.context-line{font-size:13px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:var(--muted);margin-top:11px}.context-line strong{color:#36495b}.graph-wrap{padding:4px 0 0}.graph-wrap svg{display:block;max-width:100%;width:100%;height:auto;touch-action:pan-y;cursor:crosshair}.legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:8px 18px;margin-top:8px}.legend-pill{font-size:11.5px;color:#586679;display:flex;align-items:center;gap:5px}.legend-mark{height:9px;width:17px;border-radius:3px;display:inline-block}.selected-point-caption{display:none;color:#4b5968;margin-top:5px}.bars-section .part-heading{margin-bottom:10px}.bar-header{display:grid;grid-template-columns:102px minmax(0,1fr) 95px;align-items:end;gap:14px;color:#7a8796;font-size:11px;font-weight:700;margin:6px 8px}.bar-day-list{display:flex;flex-direction:column;gap:1px}.day-bar{width:100%;border:0;background:transparent;display:grid;grid-template-columns:102px minmax(0,1fr) 95px;gap:14px;text-align:left;align-items:center;min-height:40px;border-radius:10px;padding:5px 8px;color:var(--ink);transition:background .15s}.day-bar:hover{background:#f6f8fb}.day-bar[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.day-label{display:flex;align-items:baseline;gap:5px;min-width:0}.day-label .weekday{font-size:13px;font-weight:650}.day-label .date{font-size:12px;color:var(--muted)}.day-label .today-mini{font-size:9px;letter-spacing:.045em;color:#228db9;font-weight:800}.track{width:100%;height:12px;border-radius:99px;overflow:hidden;background:#e9edf2;position:relative}.progress{display:block;height:100%;width:0;background:var(--bar);border-radius:99px;transition:width .24s ease,background .22s ease}.probability{font-size:14px;font-weight:750;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.probability.simple{font-size:11.5px;font-weight:680;white-space:normal;line-height:1.1}.panel{border:1px solid #e1e9f0;border-radius:16px;background:#f9fbfd;padding:16px 17px;margin-top:16px}.panel[hidden]{display:none}.panel-head{display:flex;gap:20px;justify-content:space-between;align-items:start;margin-bottom:9px}.panel-head h3{font-size:17px;margin:0;letter-spacing:-.02em}.panel-head .window{font-size:12px;color:var(--muted);margin-top:3px}.panel-head .tap-hint{font-size:11px;white-space:nowrap;color:#7c8995}.smallheading{font-size:12px;color:#516678;margin:14px 0 9px;font-weight:750}.five-chances{display:grid;grid-template-columns:repeat(5,1fr);gap:7px}.chance-tile{border-radius:10px;overflow:hidden;border:1px solid #e7eaf0;min-width:0;background:white}.chance-tile .amount{background:var(--soft);padding:6px 8px;font-size:11px;font-weight:750;color:#384657}.chance-tile .value{background:var(--tier);min-height:45px;display:flex;flex-direction:column;align-items:start;justify-content:center;padding:6px 8px;color:var(--tier-ink);font-size:16px;font-weight:780}.chance-tile .descriptor{font-size:10px;font-weight:500;color:inherit;opacity:.77}.amount-distribution{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.amount-small{background:#fff;border:1px solid #e7eaf0;border-radius:10px;padding:9px 10px}.amount-small .amount-swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.amount-small .low{font-size:11px;color:#657383}.amount-small .big{font-size:17px;font-weight:750;margin-top:2px}.footnote{padding:4px 1px 0;font-size:12px;color:#697789;line-height:1.6}.footnote details{margin-top:9px}.footnote summary{cursor:pointer;font-weight:700;color:#576b80}.exact{margin-top:16px;border-top:1px solid var(--line);padding-top:12px}.exact details>summary{cursor:pointer;font-size:13px;color:#50667c;font-weight:750}.exact .table-scroll{overflow:auto;margin-top:12px}.exact table{width:100%;border-collapse:separate;border-spacing:3px;text-align:center;font-size:12px;min-width:630px}.exact th{font-size:11px;text-align:center;color:#637285;white-space:nowrap;padding:6px}.exact th:first-child,.exact td:first-child{text-align:left;white-space:nowrap}.exact td{border-radius:6px;padding:7px 5px;font-weight:700}.fingerprint-list{display:flex;flex-direction:column;gap:2px}.fingerprint{display:grid;grid-template-columns:102px minmax(0,1fr) 28px;gap:14px;border:none;border-radius:10px;padding:9px 8px;background:transparent;align-items:center;text-align:left;color:var(--ink);min-height:41px}.fingerprint:hover{background:#f6f8fb}.fingerprint[aria-pressed="true"]{background:#edf6fb;box-shadow:inset 3px 0 0 #31ace0}.finger-track{height:18px;border-radius:7px;overflow:hidden;display:flex;background:#e9edf2}.finger-segment{height:100%;transition:flex .22s}.legend-grid{display:flex;flex-wrap:wrap;gap:10px 13px;margin-top:15px}.finger-tip{font-size:12px;color:#718194}.card-divider{border-top:1px solid var(--line);margin:20px 0 14px}.empty{font-size:12px;color:#718194;font-style:italic}.hidden{display:none!important}
 @media (max-width:720px){main{padding:17px 10px 45px}.page-heading{align-items:flex-start}.page-heading h1{font-size:29px}.shell{padding:17px 12px;border-radius:18px}.part{padding:13px 10px;border-radius:13px}.top-controls{align-items:stretch}.view-tabs{width:100%}.view-tab{flex:1;font-size:12px;padding:9px 8px}.simple-toggle{margin-left:auto}.threshold-section{padding:12px 10px}.chips{gap:5px}.threshold-chip{font-size:12px;gap:4px;padding:4px 2px;min-height:37px}.threshold-chip .swatch{width:6px;height:6px}.context-line{font-size:11.5px}.bar-header{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;margin:5px 4px}.day-bar{grid-template-columns:70px minmax(0,1fr) 72px;gap:8px;padding:5px 4px;min-height:39px}.day-label{flex-wrap:wrap;column-gap:4px;row-gap:0}.day-label .weekday{font-size:12px}.day-label .date{font-size:11px}.probability{font-size:13px}.probability.simple{font-size:10px}.track{height:11px}.fingerprint{grid-template-columns:70px minmax(0,1fr) 14px;gap:8px;padding:6px 4px}.finger-track{height:17px}.five-chances{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.chance-tile .amount{font-size:10px;padding:5px}.chance-tile .value{font-size:13px;padding:7px 5px}.chance-tile .descriptor{font-size:9px}.amount-distribution{grid-template-columns:repeat(2,minmax(0,1fr))}.panel{padding:12px 10px}.panel-head h3{font-size:15px}.panel-head .tap-hint{display:none}.demo-pill{display:none}.shell-title h2{font-size:20px}.graph-wrap svg{min-height:0}}
 @media (prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;scroll-behavior:auto!important}}
@@ -675,14 +675,14 @@ main{padding:0!important;max-width:100%;margin:0}
 .day-label{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:1px}
 .day-label .weekday{line-height:1.13;font-weight:700}
 .day-label .date{font-size:11px;color:#737d88;line-height:1.13}
-.day-label .today-mini{display:none;color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em;line-height:1.15}
+.day-label .today-mini{display:none;color:#1786b6;font-size:10px;font-weight:400;letter-spacing:.025em;line-height:1.15}
 .day-label.is-today .today-mini{display:block}
-.panel-day .today-mini{display:none;color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em}
+.panel-day .today-mini{display:none;color:#1786b6;font-size:10px;font-weight:400;letter-spacing:.025em}
 .panel-day .today-mini.show-today{display:block}
 .panel-day h3{line-height:1.23}
 .panel-head{align-items:center}
 .day-bar,.fingerprint{border-radius:7px}
-.day-bar[aria-pressed="true"],.fingerprint[aria-pressed="true"]{background:#f3f8fb;box-shadow:inset 2px 0 #00bfff}
+.day-bar[aria-pressed="true"],.fingerprint[aria-pressed="true"],.day-bar.is-collapsing,.fingerprint.is-collapsing{background:#f3f8fb;box-shadow:inset 2px 0 #00bfff;border-radius:7px 7px 0 0}
 .subview-switch{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:13px 0 3px;padding:0 2px}
 .subview-title{font-size:12px;color:#6d7b89;font-weight:600}
 .subview-tabs{display:flex;gap:3px;background:#eef1f5;padding:3px;border-radius:9px}
@@ -707,7 +707,7 @@ main{padding:0!important;max-width:100%;margin:0}
 /* Shared six-day visual language for the 14-day interface. */
 #trend-svg:focus:not(:focus-visible){outline:none}
 .day-label{gap:1px}.day-label .day-short{font-size:12px;font-weight:400;white-space:nowrap;line-height:1.15;color:#25303a}.day-label .day-short strong{font-weight:700}
-.day-label .today-mini{color:#737d88;font-size:10px;font-weight:400;letter-spacing:.025em}
+.day-label .today-mini{color:#1786b6;font-size:10px;font-weight:400;letter-spacing:.025em}
 .panel-head h3{font-size:16px;font-weight:700;letter-spacing:0;color:#1d2832}
 .panel-head .window{font-size:11px;color:#737d88}
 .chance-rows{gap:5px}.chance-row{border:0;border-radius:6px;min-height:0}
@@ -756,11 +756,20 @@ main{padding:0!important;max-width:100%;margin:0}
 /* All forecast appearance changes fade in AND out over 200 ms. */
 @keyframes forecastFadeIn{from{opacity:0}to{opacity:1}}
 @keyframes forecastFadeOut{from{opacity:1}to{opacity:0}}
-.panel:not([hidden]),.part:not([hidden]),[role="tabpanel"]:not([hidden]),.threshold-section:not([hidden]){animation:forecastFadeIn .2s ease-out both}
+.part:not([hidden]),[role="tabpanel"]:not([hidden]),.threshold-section:not([hidden]){animation:forecastFadeIn .2s ease-out both}
 .is-fading-out{animation:forecastFadeOut .2s ease-in both!important;pointer-events:none}
 @media(prefers-reduced-motion:reduce){.panel,.part,[role="tabpanel"],.threshold-section,.is-fading-out{animation:none!important}}
-/* Inline day details use the same panel without leaving an empty slot below. */
-.inline-day-panel{width:100%;margin:5px 0 10px;border-radius:10px}
+/* Day details open directly from the selected day row; animate height, not opacity. */
+.panel{display:grid;grid-template-rows:0fr;border:0;border-radius:0;
+  background:#f7fafd;padding:0;margin:0;overflow:hidden;
+  transition:grid-template-rows .26s ease}
+.panel.is-expanded{grid-template-rows:1fr}
+.panel-slide-wrap{min-height:0;overflow:hidden}
+.panel-slide-content{padding:16px 17px;border:1px solid #e1e9f0;border-radius:12px;background:#f7fafd}
+.inline-day-panel{width:100%;margin:0;border-radius:0 0 10px 10px}
+.inline-day-panel .panel-slide-content{border-radius:0 0 10px 10px;border-top:0}
+@media(max-width:720px){.panel-slide-content{padding:12px 10px}}
+@media(prefers-reduced-motion:reduce){.panel{transition:none!important}}
 /* Final consistency adjustments with the six-day card. */
 .chips{grid-template-columns:repeat(5,minmax(0,1fr))}
 .threshold-chip{min-width:0;position:relative}
@@ -836,7 +845,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       </div>
     </div>
     <div id="day-panel-anchor"></div>
-    <div class="panel" id="day-panel" aria-live="polite" hidden></div>
+    <div class="panel" id="day-panel" aria-live="polite" hidden aria-hidden="true" inert></div>
     <div class="footnote"><span>Each day covers 8 AM–8 AM Philippine time.</span>
       <details><summary>How to read this forecast</summary><div style="padding-top:6px">Graph and Bars show the chance of reaching at least the chosen rainfall amount. Possible totals shows the chance of each separate rainfall range. Tap a day to see the full breakdown. Missing data is not the same as 0%. Rainfall chances do not directly measure flood risk.</div></details>
     </div>
@@ -864,6 +873,35 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   const dayPanel = byId('day-panel');
   const fadeMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
   const fadeTimers = new WeakMap();
+  const panelCloseMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+  let panelCloseTimer = null;
+  let closingRow = null;
+  function clearClosingRow(){if(closingRow){closingRow.classList.remove('is-collapsing');closingRow=null;}}
+  function slideDayPanel(show, reanimate=false){
+    if(panelCloseTimer!==null){clearTimeout(panelCloseTimer);panelCloseTimer=null;}
+    clearClosingRow();
+    if(show){
+      if(reanimate)dayPanel.classList.remove('is-expanded');
+      dayPanel.hidden=false;
+      dayPanel.inert=false;
+      dayPanel.setAttribute('aria-hidden','false');
+      if(reanimate && panelCloseMs){void dayPanel.offsetHeight;requestAnimationFrame(()=>dayPanel.classList.add('is-expanded'));}
+      else dayPanel.classList.add('is-expanded');
+    } else if(!dayPanel.hidden){
+      dayPanel.inert=true;
+      dayPanel.setAttribute('aria-hidden','true');
+      const preceding=dayPanel.previousElementSibling;
+      if(preceding?.matches('.day-bar,.fingerprint')){
+        closingRow=preceding;closingRow.classList.add('is-collapsing');
+      }
+      dayPanel.classList.remove('is-expanded');
+      if(!panelCloseMs){dayPanel.hidden=true;clearClosingRow();}
+      else panelCloseTimer=setTimeout(()=>{
+        dayPanel.hidden=true;panelCloseTimer=null;clearClosingRow();resizeFrame();
+      },panelCloseMs);
+    }
+    resizeFrame();
+  }
   function setVisible(el, visible){
     const pending = fadeTimers.get(el);
     if(pending !== undefined){window.clearTimeout(pending);fadeTimers.delete(el);}
@@ -1007,22 +1045,33 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     byId('graph-selected-label').textContent=state.day===null?'Tap a day for details':dayName(dates[state.day]);
   }
   function bars(){
-    byId('bar-list').innerHTML=dates.map((d,i)=>{const active=state.threshold??state.barThreshold;const p=d.values[active];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="${state.day===i}">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[active]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
+    const list=byId('bar-list'),active=state.threshold??state.barThreshold;
+    const signature=active+'|'+simple;
+    if(list.dataset.renderSignature!==signature){
+      if(dayPanel.parentElement===list)dayPanel.remove();
+      list.innerHTML=dates.map((d,i)=>{const p=d.values[active];const w=numeric(p)?`width:${p}%`:'width:0';return `<button class="day-bar" type="button" data-day="${i}" aria-pressed="false">${dayLabel(d)}<span class="track"><span class="progress" style="${w};--bar:${sourceColors[active]}"></span></span><span class="probability ${simple?'simple':''}">${numeric(p)?(simple?chanceWords(p)+' chance':pct(p)):'No data'}</span></button>`;}).join('');
+      list.dataset.renderSignature=signature;
+    }
+    list.querySelectorAll('button[data-day]').forEach(b=>b.setAttribute('aria-pressed',String(state.day===Number(b.dataset.day))));
   }
   function fingerprints(){
-    byId('fingerprint-list').innerHTML=dates.map((d,i)=>{const b=bins(d.values);return `<button class="fingerprint ${b?'':'missing'}" type="button" data-day="${i}" aria-pressed="${state.day===i}" aria-label="${dayName(d)}. Open rainfall possibilities.">${dayLabel(d)}<span class="finger-track">${b?b.map((p,j)=>p>0?`<span class="finger-segment" style="flex:${p};background:${rangeColors[j]}" title="${ranges[j]}: ${p.toFixed(0)}%"></span>`:'').join(''):'Data unavailable'}</span><span aria-hidden="true" style="text-align:right;color:#8997a4">›</span></button>`;}).join('');
+    const list=byId('fingerprint-list');
+    if(list.dataset.rendered!=='true'){
+      if(dayPanel.parentElement===list)dayPanel.remove();
+      list.innerHTML=dates.map((d,i)=>{const b=bins(d.values);return `<button class="fingerprint ${b?'':'missing'}" type="button" data-day="${i}" aria-pressed="false" aria-label="${dayName(d)}. Open rainfall possibilities.">${dayLabel(d)}<span class="finger-track">${b?b.map((p,j)=>p>0?`<span class="finger-segment" style="flex:${p};background:${rangeColors[j]}" title="${ranges[j]}: ${p.toFixed(0)}%"></span>`:'').join(''):'Data unavailable'}</span><span aria-hidden="true" style="text-align:right;color:#8997a4">›</span></button>`;}).join('');
+      list.dataset.rendered='true';
+    }
+    list.querySelectorAll('button[data-day]').forEach(b=>b.setAttribute('aria-pressed',String(state.day===Number(b.dataset.day))));
     byId('fingerprint-legend').innerHTML=ranges.map((r,i)=>`<span class="legend-pill"><span class="legend-mark" style="background:${rangeColors[i]}"></span>${r}</span>`).join('');
   }
   function details(){
     const panel=dayPanel;
     // Graph details stay at the bottom; Bars and Possible totals expand
     // directly below the selected day, preserving the same detail content.
-    byId('day-panel-anchor').after(panel);
     if(state.day===null){
-      setVisible(panel,false);
-      resizeFrame();return;
+      slideDayPanel(false);
+      return;
     }
-    setVisible(panel,true);
     const d=dates[state.day];const today=d.date===phDateKey(new Date());
     let h=`<div class="panel-head"><div><div class="panel-day"><span class="today-mini ${today?'show-today':''}">TODAY</span><h3>${dayName(d)}</h3></div><div class="window">${windowName(d)}</div></div><div class="tap-hint">Tap the day again to close</div></div>`;
     if(state.view==='amounts'){
@@ -1035,7 +1084,9 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
       thresholds.forEach((t,i)=>{const p=d.values[i];const s=shade(sourceColors[i],p),lc=tint(sourceColors[i],.20),tc=ink(sourceColors[i],p);h+=`<div class="chance-row"><div class="chance-left" style="background:${lc}"><strong>≥${t} mm</strong><span>${amountWords[i]} or more</span></div><div class="chance-right" style="background:${s};color:${tc}"><strong>${pct(p)}</strong><span>${numeric(p)?chanceWords(p):'no data'}</span></div></div>`;});
       h+='</div>';
     }
-    panel.innerHTML=h;
+    const wasExpanded=panel.classList.contains('is-expanded') && !panel.hidden;
+    const previousSibling=panel.previousElementSibling;
+    panel.innerHTML=`<div class="panel-slide-wrap"><div class="panel-slide-content">${h}</div></div>`;
     let target=null;
     if(state.view==='amounts'){
       target=byId('fingerprint-list').querySelector(`.fingerprint[data-day="${state.day}"]`);
@@ -1044,7 +1095,8 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
     }
     panel.classList.toggle('inline-day-panel',Boolean(target));
     if(target)target.after(panel);
-    resizeFrame();
+    else byId('day-panel-anchor').after(panel);
+    slideDayPanel(true, !wasExpanded || (target && previousSibling!==target));
   }
   function exact(){
     const th=thresholds.map((t,i)=>`<th style="background:${tint(sourceColors[i],.20)}">≥${t} mm</th>`).join('');
@@ -1363,7 +1415,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             stats["median"], stats["p75"], stats["p90"], stats["p25"], stats["p10"]
         )
         pct_of_cap = lambda v: min(max(v / cap, 0.0), 1.0) * 100
-        cap_mark = "<span class='rr-over'></span>" if p90 > cap else ""
+        cap_mark = "<span class='rr-over'></span>" if med > cap else ""
         # Intentionally identical bar colors, heights, and scale to the previous card.
         bars = (
             "<div class='rr-fill'>"
@@ -1383,7 +1435,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             f"Median {_fmt_mm(med)} mm", f"P25 {_fmt_mm(p25)} mm",
             f"P10 {_fmt_mm(p10)} mm",
         ]
-        over_note = f" (P90 above the {cap} mm scale)" if p90 > cap else ""
+        over_note = f" (median above the {cap} mm scale)" if med > cap else ""
         tip_cls = "rr-tip" + tip_side(slot) + (" rr-tip-b" if below else "")
         return (
             f"<div class='rr-slot' {slot_attrs}><button type='button' class='rr-bar' aria-label='Rainfall {when}; tap for percentiles'>"
@@ -1412,6 +1464,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
 
     body = ""
     details = ""
+    median_above_scale = False
     rendered_days = 0
     for index, day in enumerate(days):
         row = rows.get(day, {})
@@ -1433,6 +1486,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             bar(row[i], i, tooltip=True, below=False) if i in row else empty_bar
             for i in range(n_slots)
         )
+        median_above_scale |= any(float(p["stats"]["median"]) > cap for p in row.values())
 
         chance_chip = ""
         chance_detail = ""
@@ -1483,7 +1537,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         # Keep all day details closed on the initial render.
         initial_class = ""
         expanded = "false"
-        simple_total_descriptor = _simple_rain_range(total_med, total_p90)
+        simple_total_descriptor = _rain_amount_descriptor(total_med)
         total_is_range = " to " in simple_total_descriptor
         if total_is_range:
             first_amount, second_amount = simple_total_descriptor.split(" to ", 1)
@@ -1533,12 +1587,13 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         )
         details += (
             f"<section id='rr-detail-{index}' data-rr-date='{day:%Y-%m-%d}' class='rr-detail rr-detail-{index}' "
-            f"aria-label='Details for {day:%A %d %B}'>"
+            f"aria-label='Details for {day:%A %d %B}' aria-hidden='true' inert>"
+            "<div class='rr-detail-collapse'><div class='rr-detail-content'>"
             "<div class='rr-detail-top'>"
             f"<div class='rr-detail-date'><span class='rr-today-tag'>TODAY</span><strong>{day:%A}, {day.day} {day:%B}</strong></div>"
             "<div class='rr-detail-main'><div class='rr-detail-total-top'>"
             f"<small>Total for the day:</small><b>{_fmt_mm(total_med)}</b><small>mm</small></div>"
-            f"<small class='rr-detail-intensity'>{_rain_range_descriptor(total_med, total_p90)}</small>"
+            f"<small class='rr-detail-intensity'>{_rain_amount_descriptor(total_med)}</small>"
             "</div></div>"
             "<div class='rr-section-heading'>Daily rainfall range"
             "<small>From lower to higher estimates</small></div>"
@@ -1549,15 +1604,15 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
             "<small>Tap a bar to see more details</small></div>"
             f"<div class='rr-detail-bar-hours rr-slots' style='{detail_grid}'>{detail_slot_headers}</div>"
             f"<div class='rr-detail-bar-values rr-slots' style='{detail_grid}'>{detailed_bars}</div>"
-            "</div></section>"
+            "</div></div></div></section>"
         )
 
     legend = (
         "<div class='rr-legend'>"
         f"<span><i style='background:{_RAIN_MED}'></i>Most likely amount</span>"
         f"<span><i style='background:{_RAIN_P90}'></i>Higher estimate</span>"
-        "<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>Above chart scale</span>"
-        "</div>"
+        + ("<span><i style='background:#0B3FBF;height:3px;vertical-align:3px'></i>Above chart scale</span>" if median_above_scale else "")
+        + "</div>"
     )
 
     # Compact baseline sizes match the previous phone view. Enlarged desktop
@@ -1566,7 +1621,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
     css = (
         "<style>"
         f"html,body{{font-family:{FONT_STACK};font-size:16px;}}"
-        f".rr-card{{container-type:inline-size;background:#fff;color:#111;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
+        f".rr-card{{container-type:inline-size;background:#fff;color:#283746;border-radius:10px;padding:10px 12px;font-family:{FONT_STACK};}}"
         f".rr-card button,.rr-card .rr-tip{{font-family:{FONT_STACK};}}"
         f".rr-row{{display:grid;grid-template-columns:2.7rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 3.6rem;column-gap:10px;justify-content:space-evenly;align-items:center;}}"
         f".rr-row.rr-c{{grid-template-columns:3.65rem 5.3rem minmax(0,{_RAIN_SLOTS_MAX_PX}px) 4.85rem;column-gap:6px;}}"
@@ -1616,14 +1671,17 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         "cursor:pointer;color:inherit;font:inherit;text-align:left;background:transparent;border:0;"
         "border-top:1px solid #EEF0F3;border-radius:6px;transition:background-color .12s ease;}"
         ".rr-selectable:hover{background-color:#F8FAFC;}"
-        ".rr-selectable.is-selected{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;}"
+        ".rr-selectable.is-selected,.rr-selectable.is-collapsing{background-color:#F3F8FB;box-shadow:inset 2px 0 #00BFFF;border-radius:8px 8px 0 0;}"
         ".rr-selectable:focus-visible{outline:2px solid #159BD6;outline-offset:1px;}"
-        ".rr-detail{display:none;margin-top:10px;padding:12px 13px;border-radius:9px;background:#F7FAFC;border:1px solid #E7EDF2;}"
-        ".rr-detail.is-open{display:block;animation:rrFadeIn .2s ease-out both;}"
-        ".rr-detail.is-closing{display:block;animation:rrFadeOut .2s ease-in both!important;pointer-events:none;}"
-        "@keyframes rrFadeIn{from{opacity:0}to{opacity:1}}"
-        "@keyframes rrFadeOut{from{opacity:1}to{opacity:0}}"
-        "@media(prefers-reduced-motion:reduce){.rr-detail.is-open,.rr-detail.is-closing{animation:none!important;}}"
+        ".rr-detail{display:grid;grid-template-rows:0fr;min-height:0;margin:0;padding:0;"
+        "border:0;border-radius:0 0 9px 9px;background:#F7FAFC;"
+        "transition:grid-template-rows .26s ease;pointer-events:none;}"
+        ".rr-detail.is-open{grid-template-rows:1fr;pointer-events:auto;}"
+        ".rr-detail-collapse{min-height:0;overflow:hidden;}"
+        ".rr-detail-content{padding:12px 13px;border-left:1px solid #E7EDF2;"
+        "border-right:1px solid #E7EDF2;border-bottom:1px solid #E7EDF2;"
+        "border-radius:0 0 9px 9px;background:#F7FAFC;}"
+        "@media(prefers-reduced-motion:reduce){.rr-detail{transition:none!important;}}"
         ".rr-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px;}"
         ".rr-detail-top strong{font-size:.84rem;font-weight:700;color:#1D2832;}"
         ".rr-detail-main{display:flex;flex-direction:column;align-items:flex-end;justify-content:center;gap:2px;white-space:nowrap;text-align:right;}"
@@ -1682,7 +1740,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-row.rr-c{grid-template-columns:3.5rem 4.9rem minmax(0,170px) 4.5rem;column-gap:4px;}"
         ".rr-day-weekday{font-size:.78rem;}.rr-day-calendar{font-size:.59rem;}"
         ".rr-selectable.is-selected .rr-day{padding-left:6px;}"
-        ".rr-detail{padding:10px 7px;}"
+        ".rr-detail-content{padding:10px 7px;}"
         ".rr-quantiles{gap:2px;}"
         ".rr-detail-chances{gap:4px;}"
         ".rr-detail-chance{grid-template-columns:40% minmax(0,1fr);}"
@@ -1696,7 +1754,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         ".rr-quantile em{font-size:.58rem;}"
         ".rr-detail-chance b{font-size:.86rem;}"
         "}"
-        ".rr-today-tag{display:none;font-size:.56rem;font-weight:400;color:#737D88;line-height:1.15;letter-spacing:.025em;}"
+        ".rr-today-tag{display:none;font-size:.56rem;font-weight:650;color:#1786B6;line-height:1.15;letter-spacing:.025em;}"
         ".rr-selectable.rr-today .rr-today-tag,.rr-detail.rr-today .rr-today-tag{display:block;}"
         ".rr-detail-date{display:flex;flex-direction:column;gap:2px;}"
         ".rr-now-tag{display:none;color:#087DB4;font-weight:800;font-size:.57rem;letter-spacing:.02em;margin-inline-end:4px;}"
@@ -1736,8 +1794,8 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
       const rows = Array.from(card.querySelectorAll('.rr-selectable[data-rr-day]'));
       const panels = Array.from(card.querySelectorAll('.rr-detail'));
       let selectedDay = -1;
-      const fadeMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200;
-      const exitTimers = new WeakMap();
+      const slideMs = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260;
+      const closeTimers = new WeakMap();
       const formatPHTDate = (at) => {
         const parts = new Intl.DateTimeFormat('en-US', {
           timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'
@@ -1813,32 +1871,37 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         selectedDay = nextIndex;
         rows.forEach((row, index) => {
           const active = index === selectedDay;
+          const pending = closeTimers.get(row);
+          if (pending !== undefined) {clearTimeout(pending); closeTimers.delete(row);}
+          row.classList.remove('is-collapsing');
+          if (!active && row.classList.contains('is-selected') && slideMs) {
+            row.classList.add('is-collapsing');
+            const timer = setTimeout(() => {
+              row.classList.remove('is-collapsing');closeTimers.delete(row);
+            }, slideMs);
+            closeTimers.set(row, timer);
+          }
           row.classList.toggle('is-selected', active);
           row.setAttribute('aria-expanded', String(active));
         });
         panels.forEach((panel, index) => {
           const active = index === selectedDay;
-          const pending = exitTimers.get(panel);
-          if (pending !== undefined) {
-            window.clearTimeout(pending);
-            exitTimers.delete(panel);
-          }
-          panel.classList.remove('is-closing');
-          if (active) {
-            panel.classList.add('is-open');
-            if (rows[index]) rows[index].insertAdjacentElement('afterend', panel);
-          } else if (panel.classList.contains('is-open')) {
-            if (fadeMs === 0) {
+          const wasOpen = panel.classList.contains('is-open');
+          panel.inert = !active;
+          panel.setAttribute('aria-hidden', String(!active));
+          if (active && rows[index]) {
+            // Reparent first, establish the collapsed grid, then animate open.
+            // Otherwise the first expansion would appear instantly.
+            rows[index].insertAdjacentElement('afterend', panel);
+            if (!wasOpen) {
               panel.classList.remove('is-open');
-            } else {
-              panel.classList.add('is-closing');
-              const timer = window.setTimeout(() => {
-                panel.classList.remove('is-open', 'is-closing');
-                exitTimers.delete(panel);
-                updateFrameHeight();
-              }, fadeMs);
-              exitTimers.set(panel, timer);
+              void panel.offsetHeight;
+              requestAnimationFrame(() => {
+                if (selectedDay === index) panel.classList.add('is-open');
+              });
             }
+          } else {
+            panel.classList.remove('is-open');
           }
         });
         updateFrameHeight();
@@ -1955,7 +2018,7 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     initial_id = variants[0][0]
     initial_hours = initial_id.split('-')[0]
     style = css + """<style>
-    .rr-root{border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;color:#111}
+    .rr-root{border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;color:#283746}
     .rr-root .rr-variant{padding:0;border:0;border-radius:0;background:transparent}
     .rr-variant[hidden]{display:none!important}
     .rr-variant:not([hidden]){animation:rrFadeIn .2s ease-out both}
@@ -2466,13 +2529,16 @@ if forecast_clicked:
 st.divider()
 if "view_mode" not in st.session_state:
     st.session_state["view_mode"] = "Rainfall Forecast"
-_selected_mode = st.segmented_control(
-    "View",
-    ["Rainfall Forecast", "Temperature Forecast"],
-    default=st.session_state["view_mode"],
-)
-if _selected_mode is not None:
-    st.session_state["view_mode"] = _selected_mode
+# There is nothing to switch between before the first Get forecast request.
+# Once forecasts have been requested, show the selector as usual.
+if st.session_state.get("last_forecast_location"):
+    _selected_mode = st.segmented_control(
+        "View",
+        ["Rainfall Forecast", "Temperature Forecast"],
+        default=st.session_state["view_mode"],
+    )
+    if _selected_mode is not None:
+        st.session_state["view_mode"] = _selected_mode
 view_mode = st.session_state["view_mode"]
 main = st.container()
 with main:
