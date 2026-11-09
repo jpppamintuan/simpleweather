@@ -48,89 +48,13 @@ st.markdown(
           button, input, select, textarea) {
         font-family: var(--simpleweather-font) !important;
       }
-      /* Keep Streamlit's native primary button, but give it our blue palette. */
-      .st-key-forecast_button button,
-      .st-key-forecast_button [data-testid="stBaseButton-primary"] {
-        background-color: #087DB4 !important;
-        border-color: #087DB4 !important;
-        color: #FFFFFF !important;
-        font-weight: 700 !important;
-        transition: background-color .2s ease, border-color .2s ease,
-                    box-shadow .2s ease !important;
-      }
-      .st-key-forecast_button button:hover,
-      .st-key-forecast_button [data-testid="stBaseButton-primary"]:hover {
-        background-color: #056796 !important;
-        border-color: #056796 !important;
-        color: #FFFFFF !important;
-      }
-      .st-key-forecast_button button:focus-visible,
-      .st-key-forecast_button [data-testid="stBaseButton-primary"]:focus-visible {
-        outline: 3px solid #8CD9F0 !important;
-        outline-offset: 2px !important;
-        box-shadow: 0 0 0 2px #FFFFFF !important;
-      }
-      /* Forecast-view selector: outlined options, no fill in either theme.
-         Streamlit's --text-color is light in dark mode (near white) and dark
-         in light mode, so the selected label remains legible in both. */
-      .st-key-forecast_view_selector [data-testid="stSegmentedControl"],
-      .st-key-forecast_view_selector [data-testid="stButtonGroup"],
-      .st-key-forecast_view_selector [role="group"] {
-        background: transparent !important;
-        background-color: transparent !important;
-      }
-      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"],
-      .st-key-forecast_view_selector button[aria-pressed="true"],
-      .st-key-forecast_view_selector button[aria-checked="true"] {
-        color: var(--text-color, #283746) !important;
-        background: transparent !important;
-        background-color: transparent !important;
-        border: 2px solid #087DB4 !important;
-        opacity: 1 !important;
-        box-shadow: none !important;
-      }
-      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"],
-      .st-key-forecast_view_selector button[aria-pressed="false"],
-      .st-key-forecast_view_selector button[aria-checked="false"] {
-        color: var(--text-color, #687585) !important;
-        background: transparent !important;
-        background-color: transparent !important;
-        border: 1.5px solid color-mix(in srgb, var(--text-color, #687585) 55%, transparent) !important;
-        opacity: .72 !important;
-        box-shadow: none !important;
-      }
-      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"]:hover,
-      .st-key-forecast_view_selector button[aria-pressed="true"]:hover,
-      .st-key-forecast_view_selector button[aria-checked="true"]:hover {
-        color: var(--text-color, #283746) !important;
-      }
-      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"]:hover,
-      .st-key-forecast_view_selector button[aria-pressed="false"]:hover,
-      .st-key-forecast_view_selector button[aria-checked="false"]:hover {
-        color: var(--text-color, #687585) !important;
-        opacity: .92 !important;
-      }
-      .st-key-forecast_view_selector button:hover {
-        background: transparent !important;
-        background-color: transparent !important;
-      }
-      .st-key-forecast_view_selector button:focus-visible {
-        outline: 2px solid #4CB0D9 !important;
-        outline-offset: 2px !important;
-        background: transparent !important;
-        box-shadow: none !important;
-      }
-      @media (prefers-reduced-motion: reduce) {
-        .st-key-forecast_button button { transition: none !important; }
-      }
     </style>
     """,
     unsafe_allow_html=True,
 )
 st.title("Simpleweather")
 st.caption(
-    "Rainfall, temperature and heat index forecasts for locations across the Philippines."
-    + (" Temporary northern Taiwan coverage is also available." if taiwan_enabled() else "")
+    "Probabilistic rainfall and heat index forecasts across the Philippines, with Simple mode."
 )
 LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
@@ -2368,176 +2292,405 @@ HEAT_INDEX_CATEGORIES = [
     ("extreme_danger", "Extreme Danger", "Extreme Danger (52°C+)", 52, "#C0122F"),
 ]
 
-def render_temperature_chart_html(
-    temp_result: dict,
-    show_temp: bool = True,
-    show_heat_index: bool = True,
-    show_ranges: bool = True,
-    show_categories: dict | None = None,
-) -> str:
-    steps = temp_result["steps"]
-    if not steps or not (show_temp or show_heat_index):
-        return ""
-    show_categories = show_categories or {}
-    time_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d, %I%p") for s in steps]
-    labels_json = json.dumps(time_labels)
-    temp_fill = "rgba(0,123,255,0.15)"
-    hi_fill = "rgba(220,53,69,0.15)"
-    datasets = []
-    data_values = []
-    if show_temp:
-        if show_ranges:
-            temp_p90 = [s["temperature_stats"].get("p90", s["temperature_stats"]["median"]) for s in steps]
-            temp_p10 = [s["temperature_stats"].get("p10", s["temperature_stats"]["median"]) for s in steps]
-            data_values.extend(temp_p90)
-            data_values.extend(temp_p10)
-            datasets.append({
-                "label": "Temp P90", "data": temp_p90, "borderWidth": 0,
-                "backgroundColor": temp_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
-            })
-            datasets.append({
-                "label": "Temp P10", "data": temp_p10, "borderWidth": 0,
-                "backgroundColor": temp_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
-            })
-        temp_median = [s["temperature_stats"]["median"] for s in steps]
-        data_values.extend(temp_median)
-        datasets.append({
-            "label": "Temperature (median)", "data": temp_median,
-            "borderColor": "#0056b3", "backgroundColor": "#0056b3", "fill": False,
-            "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
-        })
-    if show_heat_index:
-        if show_ranges:
-            hi_p90 = [s["heat_index_stats"].get("p90", s["heat_index_stats"]["median"]) for s in steps]
-            hi_p10 = [s["heat_index_stats"].get("p10", s["heat_index_stats"]["median"]) for s in steps]
-            data_values.extend(hi_p90)
-            data_values.extend(hi_p10)
-            datasets.append({
-                "label": "Heat Index P90", "data": hi_p90, "borderWidth": 0,
-                "backgroundColor": hi_fill, "fill": "+1", "pointRadius": 0, "tension": 0.3,
-            })
-            datasets.append({
-                "label": "Heat Index P10", "data": hi_p10, "borderWidth": 0,
-                "backgroundColor": hi_fill, "fill": False, "pointRadius": 0, "tension": 0.3,
-            })
-        hi_median = [s["heat_index_stats"]["median"] for s in steps]
-        data_values.extend(hi_median)
-        datasets.append({
-            "label": "Heat Index (median)", "data": hi_median,
-            "borderColor": "#c82333", "backgroundColor": "#c82333", "fill": False,
-            "pointRadius": 0, "tension": 0.3, "borderWidth": 3,
-            "borderDash": [6, 4],
-        })
-    data_min, data_max = min(data_values), max(data_values)
-    span = data_max - data_min
-    if span <= 10:
-        y_step = 2
-    elif span <= 25:
-        y_step = 5
-    else:
-        y_step = 10
-    y_min = math.floor(data_min / y_step) * y_step
-    y_max = math.ceil(data_max / y_step) * y_step
-    if y_max == y_min:
-        y_max += y_step
-    category_datasets = []
-    category_lines_for_labels = []
-    category_full_labels = []
-    for key, short_name, full_label, threshold_c, color in HEAT_INDEX_CATEGORIES:
-        if show_categories.get(key):
-            category_datasets.append({
-                "label": full_label, "data": [threshold_c] * len(steps),
-                "borderColor": color, "backgroundColor": color, "fill": False,
-                "pointRadius": 0, "tension": 0, "borderWidth": 1.5, "borderDash": [3, 3],
-            })
-            category_lines_for_labels.append({"name": short_name, "value": threshold_c, "color": color})
-            category_full_labels.append(full_label)
-    datasets = category_datasets + datasets
-    datasets_json = json.dumps(datasets)
-    category_lines_json = json.dumps(category_lines_for_labels)
-    category_full_labels_json = json.dumps(category_full_labels)
-    return f"""
+def _temperature_stat_number(value):
+    """Return a finite Celsius estimate or None (missing forecast)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(number, 2) if math.isfinite(number) else None
 
-    <style>body {{ font-family: {FONT_STACK}; margin: 0; }}</style>
-    <div style="background-color:#ffffff;padding:8px;">
-      <div style="position:relative;width:100%;height:320px;">
-        <canvas id="tempChart"></canvas>
-      </div>
-    </div>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
-    <script>
-    (function() {{
-      const labels = {labels_json};
-      const datasets = {datasets_json};
-      const categoryLines = {category_lines_json};
-      const categoryFullLabels = new Set({category_full_labels_json});
-      const categoryLabelPlugin = {{
-        id: "categoryLabelPlugin",
-        afterDatasetsDraw(chart) {{
-          const {{ ctx, chartArea, scales }} = chart;
-          const yScale = scales.y;
-          ctx.save();
-          ctx.font = "600 10px {FONT_STACK}";
-          ctx.textAlign = "left";
-          ctx.textBaseline = "bottom";
-          categoryLines.forEach((cat) => {{
-            if (cat.value < yScale.min || cat.value > yScale.max) return;
-            const y = yScale.getPixelForValue(cat.value);
-            ctx.fillStyle = cat.color;
-            ctx.fillText(cat.name, chartArea.left + 4, y - 2);
-          }});
-          ctx.restore();
-        }},
-      }};
-      new Chart(document.getElementById("tempChart"), {{
-        type: "line",
-        data: {{ labels: labels, datasets: datasets }},
-        plugins: [categoryLabelPlugin],
-        options: {{
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: {{ mode: "index", intersect: false }},
-          plugins: {{
-            colors: {{ enabled: false, forceOverride: false }},
-            legend: {{
-              display: true, position: "bottom",
-              labels: {{
-                boxWidth: 12, font: {{ size: 10 }}, color: "#333333",
-                filter: (item) => !item.text.includes("P10") && !item.text.includes("P90")
-                  && !categoryFullLabels.has(item.text),
-              }},
-            }},
-            tooltip: {{
-              filter: (item) => !categoryFullLabels.has(item.dataset.label),
-              itemSort: (a, b) => {{
-                const seriesRank = (label) => label.toLowerCase().includes("heat index") ? 1 : 0;
-                const statRank = (label) => {{
-                  if (label.includes("P90")) return 0;
-                  if (label.includes("median")) return 1;
-                  if (label.includes("P10")) return 2;
-                  return 3;
-                }};
-                const sr = seriesRank(a.dataset.label) - seriesRank(b.dataset.label);
-                if (sr !== 0) return sr;
-                return statRank(a.dataset.label) - statRank(b.dataset.label);
-              }},
-              callbacks: {{ label: (ctx) => ctx.dataset.label + ": " + ctx.parsed.y.toFixed(1) + "\\u00b0C" }},
-            }},
-          }},
-          scales: {{
-            y: {{
-              min: {y_min},
-              max: {y_max},
-              ticks: {{ stepSize: {y_step}, callback: (v) => v + "\\u00b0C", color: "#666666" }},
-              grid: {{ color: "#e5e5e5" }},
-            }},
-            x: {{ ticks: {{ color: "#666666", font: {{ size: 10 }}, maxTicksLimit: 10 }}, grid: {{ display: false }} }},
-          }},
-        }},
-      }});
-    }})();
-    </script>
+
+def _temperature_severity(heat_index):
+    if heat_index is None:
+        return {"label": "Unavailable", "key": "unknown", "color": "#8994A1"}
+    for key, short, _long, start, color in reversed(HEAT_INDEX_CATEGORIES):
+        if heat_index >= start:
+            return {"label": short, "key": key, "color": color}
+    return {"label": "Below caution", "key": "below_caution", "color": "#7B9BA4"}
+
+
+def _air_temperature_descriptor(value):
+    """Informal reading aid for peak air temperature, not a hazard scale."""
+    if value is None:
+        return "Unavailable"
+    if value < 24:
+        return "Cool"
+    if value < 30:
+        return "Warm"
+    if value < 35:
+        return "Hot"
+    return "Very hot"
+
+
+def render_temperature_forecast_html(temp_result: dict, location_name: str) -> str:
+    """Interactive six-day Heat Index-first card based on stored 3-hourly ENS data.
+
+    Peaks are the maximum of available *3-hourly median* values in a local day.
+    P10 and P90 at the selected peak time are not percentiles of daily maxima.
     """
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for step in temp_result.get("steps", []):
+        utc_time = step.get("time_utc")
+        if not isinstance(utc_time, datetime):
+            continue
+        local_time = utc_time.astimezone(PH_TZ)
+        values = {}
+        for kind, source in (("hi", "heat_index_stats"), ("temp", "temperature_stats")):
+            stats = step.get(source) or {}
+            values[kind] = {
+                key: _temperature_stat_number(stats.get(key))
+                for key in ("p10", "median", "p90")
+            }
+        grouped[local_time.date()].append({
+            "time": local_time.isoformat(),
+            "label": f"{local_time:%I %p}".lstrip("0"),
+            "hour": local_time.hour,
+            **values,
+        })
+    if not grouped:
+        return "<div>Heat Index data isn't available for this location.</div>"
+
+    today = datetime.now(PH_TZ).date()
+    upcoming = sorted(date for date in grouped if date >= today)
+    # If the stored run is stale, retain a useful (clearly dated) sample.
+    days_to_show = (upcoming if upcoming else sorted(grouped))[:6]
+    records = []
+    for day in days_to_show:
+        steps = sorted(grouped[day], key=lambda item: item["time"])
+        def peak(kind):
+            candidates = [(i, entry[kind]["median"]) for i, entry in enumerate(steps)
+                          if entry[kind]["median"] is not None]
+            if not candidates:
+                return None
+            ix, value = max(candidates, key=lambda item: item[1])
+            return {"index": ix, "value": value, "time": steps[ix]["label"],
+                    "p10": steps[ix][kind]["p10"], "p90": steps[ix][kind]["p90"]}
+
+        hi_peak, air_peak = peak("hi"), peak("temp")
+        air_low_entries = [entry["temp"]["median"] for entry in steps
+                           if entry["temp"]["median"] is not None]
+        air_low = min(air_low_entries) if air_low_entries else None
+        records.append({
+            "date": day.isoformat(),
+            "weekday": day.strftime("%A"),
+            "day": f"{day.day} {day:%b}",
+            "full": f"{day:%A}, {day.day} {day:%B}",
+            "today": day == today,
+            "steps": steps,
+            "hiPeak": hi_peak,
+            "airPeak": air_peak,
+            "airLow": air_low,
+            "severity": _temperature_severity(hi_peak["value"] if hi_peak else None),
+            "airDescriptor": _air_temperature_descriptor(air_peak["value"] if air_peak else None),
+        })
+    serialized = json.dumps(records, ensure_ascii=True, allow_nan=False).replace("<", "\\u003c")
+    return (_TEMPERATURE_CARD_TEMPLATE
+            .replace("__TEMPERATURE_DATA__", serialized)
+            .replace("__LOCATION__", escape(location_name))
+            .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS))
+
+
+_TEMPERATURE_CARD_TEMPLATE = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Simpleweather | Heat Index</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700;800&display=swap');
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:transparent;overflow-x:hidden}
+body,button,summary{font-family:'Source Sans 3','Source Sans Pro',sans-serif}
+body{color:#283746;font-size:13px}
+button{cursor:pointer}
+[hidden]{display:none!important}
+.temp-root{width:100%;max-width:1050px;margin:0 auto;border:1px solid #e9edf2;border-radius:14px;padding:15px;background:#fff;--temp-ink:#283746;--temp-muted:#687585;--temp-accent:#238FC2;--temp-hi:#DD8B47}
+.temp-root button:focus-visible,.temp-root input:focus-visible,.temp-root summary:focus-visible{outline:2px solid #159bd6;outline-offset:3px}
+.rr-card-title{font-size:var(--rain-title-size);font-weight:720;line-height:1.3;margin:0;color:var(--rain-ink);letter-spacing:-.025em}
+.temp-top-subtitle{margin:3px 0 0;color:var(--rain-muted);font-size:var(--rain-secondary-size);font-weight:400}
+.temp-card-controls{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:15px 0 11px;flex-wrap:nowrap}
+.rr-card-tabs{display:flex;align-items:center;gap:3px;border-radius:13px;padding:4px;background:#eef1f5;min-width:0;flex:0 1 auto}
+.rr-card-tabs button{color:#677586;border:0;border-radius:10px;background:transparent;padding:8px 14px;white-space:nowrap;line-height:1.2;font-size:var(--rain-tabs-size);font-weight:700}
+.rr-card-tabs button[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}
+.rr-simple-toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:#506070;font-weight:650;cursor:pointer;white-space:nowrap;flex:0 0 auto;user-select:none}
+.rr-simple-toggle input{appearance:none;margin:0;width:37px;height:22px;position:relative;border-radius:50px;background:#d5dbe3;cursor:pointer}
+.rr-simple-toggle input:after{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002;transition:left .16s}
+.rr-simple-toggle input:checked{background:#25a8db}.rr-simple-toggle input:checked:after{left:18px}
+.temp-guide{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);margin:0 0 10px}
+.temp-chart-shell{border:1px solid #edf0f4;border-radius:12px;padding:12px 11px 6px;background:#fdfefe;min-width:0}
+.temp-chart-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px}
+.rr-section-heading{font-size:var(--rain-section-size);font-weight:750;color:var(--rain-section)}
+.temp-chart-meta{font-size:var(--rain-micro-size);font-weight:400;color:var(--rain-muted)}
+#temp-graph{width:100%;height:245px;display:block;overflow:visible;touch-action:pan-y}
+.temp-plot-hit{fill:transparent;cursor:pointer}
+.temp-plot-hit:focus-visible{stroke:#159bd6;stroke-width:2;stroke-dasharray:3 4;outline:none}
+.temp-legend{display:flex;align-items:center;justify-content:center;gap:15px;flex-wrap:wrap;margin:0 0 3px;color:var(--rain-muted);font-size:var(--rain-secondary-size)}
+.temp-legend-entry{display:inline-flex;gap:5px;align-items:center}
+.temp-legend-line{width:17px;height:3px;border-radius:5px;background:var(--temp-accent)}
+.temp-legend-range{width:16px;height:9px;border-radius:3px;background:#B5DCEB88;border:1px solid #B5DCEB}
+.temp-chart-selected{font-size:var(--rain-secondary-size);color:var(--rain-muted);text-align:center;min-height:16px;margin:1px 0 0}
+.temp-graph-options{color:var(--rain-muted);font-size:var(--rain-secondary-size);margin:9px 4px 2px}
+.temp-graph-options summary{cursor:pointer;color:#576b80;font-weight:700}
+.temp-graph-options-inner{display:flex;flex-wrap:wrap;align-items:center;gap:9px 18px;padding-top:8px}
+.temp-graph-options label{display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.temp-graph-options input{accent-color:#238FC2}
+
+.temp-section{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:17px 3px 7px}
+.temp-section small{font-size:var(--rain-secondary-size);color:var(--rain-muted);font-weight:400}
+.temp-days{display:flex;flex-direction:column;gap:2px}
+.temp-day-wrap{border-radius:10px;min-width:0}
+.temp-day-button{border:0;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto 15px;gap:12px;align-items:center;padding:9px 10px;background:transparent;color:var(--rain-ink);text-align:left;border-radius:10px;min-height:66px;transition:background-color .16s ease}
+.temp-day-button:hover{background:#f6f8fb}
+.temp-day-button[aria-expanded="true"]{background:#eef6fa;border-radius:10px 10px 0 0;box-shadow:inset 3px 0 0 #31ace0}
+.temp-day-date{display:flex;flex-direction:column;gap:4px;min-width:0}
+.temp-day-heading{display:flex;align-items:center;gap:6px;flex-wrap:wrap;line-height:1.1}
+.rr-day-weekday{font-size:var(--rain-day-size);font-weight:700;color:var(--rain-ink)}
+.rr-day-calendar{font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date)}
+.rr-today-tag{font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);letter-spacing:.025em}
+.temp-day-numbers{display:flex;gap:14px;align-items:center;justify-content:flex-end;min-width:0;text-align:right}
+.temp-day-metric{min-width:0;display:flex;align-items:flex-end;flex-direction:column;gap:2px}
+.temp-day-metric b{font-size:var(--rain-value-size);font-weight:750;color:var(--rain-ink);line-height:1.05;white-space:nowrap}
+.temp-day-metric small{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);line-height:1.2;white-space:nowrap}
+.temp-day-metric.secondary b{font-size:var(--rain-secondary-size);font-weight:700;color:#516678}
+.temp-day-metric.secondary small{font-size:var(--rain-micro-size)}
+.temp-risk-dot{width:6px;height:6px;display:inline-block;border-radius:50%;background:var(--severity,#8894a1);vertical-align:middle;margin-right:5px}
+.temp-day-metric b.temp-descriptor{font-size:var(--rain-descriptor-size);font-weight:680;line-height:1.13;white-space:normal;max-width:143px;overflow-wrap:normal;text-align:right}
+.temp-chevron{width:14px;height:14px;stroke:#8593A2;stroke-width:2;fill:none;transition:transform .26s ease}
+.temp-day-button[aria-expanded="true"] .temp-chevron{transform:rotate(180deg)}
+.temp-detail{display:grid;grid-template-rows:0fr;min-height:0;pointer-events:none;transition:grid-template-rows .26s ease}
+.temp-detail.is-open{grid-template-rows:1fr;pointer-events:auto}
+.temp-detail-collapse{min-height:0;overflow:hidden}
+.temp-detail-body{background:#f9fbfd;border:1px solid #dfe9f0;border-top:0;border-radius:0 0 10px 10px;padding:13px 12px}
+
+.temp-detail-top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.temp-detail-top strong{font-size:var(--rain-detail-title-size);font-weight:700;color:var(--rain-ink)}
+.temp-detail-top .temp-detail-value{font-size:var(--rain-total-detail-size);font-weight:750;line-height:1.05;color:var(--rain-ink)}
+.temp-detail-top .temp-detail-caption{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted)}
+.temp-detail-time{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);margin-top:3px}
+.temp-details-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:13px}
+.temp-summary-tile{padding:9px 8px;border:1px solid #e7eaf0;border-radius:9px;background:#fff;min-width:0}
+.temp-summary-tile small{display:block;color:var(--rain-muted);font-size:var(--rain-secondary-size);line-height:1.2}
+.temp-summary-tile b{display:block;margin-top:4px;font-weight:750;color:var(--rain-ink);font-size:var(--rain-value-size)}
+.temp-risk-inline{display:inline-flex;align-items:center;gap:5px;font-size:var(--rain-secondary-size);font-weight:650;color:var(--rain-section);margin:4px 0 0}
+.temp-hour-title{margin:13px 0 6px}
+.temp-hour-scroll{overflow-x:auto;overscroll-behavior-inline:contain;padding-bottom:4px}
+.temp-hours{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(57px,1fr);gap:5px;min-width:max-content}
+.temp-hour{min-width:57px;border-radius:8px;background:#fff;border:1px solid #e7eaf0;padding:7px 5px;text-align:center;color:var(--rain-ink)}
+.temp-hour.is-peak{background:#edf6fb;border-color:#b5dfee}
+.temp-hour-time{font-size:var(--rain-micro-size);color:var(--rain-muted);display:block}
+.temp-hour-main{font-size:var(--rain-value-size);font-weight:750;display:block;line-height:1.1;margin:5px 0 3px}
+.temp-hour-secondary{font-size:var(--rain-micro-size);color:var(--rain-muted);display:block}
+.temp-hour-labels{color:var(--rain-muted);font-size:var(--rain-micro-size);margin-top:4px}
+.temp-note{color:var(--rain-muted);font-size:var(--rain-secondary-size);line-height:1.5;margin-top:12px}
+.temp-note summary{cursor:pointer;font-weight:700;color:#576b80}
+.temp-note p{margin:7px 0 0}
+@media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{padding:9px 7px;gap:6px;min-height:62px}.temp-day-numbers{gap:10px}}
+@media(max-width:355px){.rr-card-tabs button{padding:7px 8px;font-size:10.5px}.rr-simple-toggle{font-size:11px;gap:4px}.rr-simple-toggle input{width:33px;height:20px}.rr-simple-toggle input:after{width:14px;height:14px}.rr-simple-toggle input:checked:after{left:16px}.temp-day-numbers{gap:7px}.temp-day-metric b.temp-descriptor{max-width:101px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+__SHARED_RAIN_TYPOGRAPHY__
+</style>
+</head>
+<body>
+<main class="temp-root" id="temp-root">
+  <h2 class="rr-card-title">Heat Index forecast for __LOCATION__</h2>
+  <div class="temp-top-subtitle">ECMWF ENS · 3-hourly probabilistic estimates</div>
+  <div class="temp-card-controls">
+    <div class="rr-card-tabs" role="tablist" aria-label="Forecast variable">
+      <button type="button" role="tab" data-variable="hi" aria-selected="true" aria-controls="temp-graph">Heat Index</button>
+      <button type="button" role="tab" data-variable="temp" aria-selected="false" aria-controls="temp-graph">Air temperature</button>
+    </div>
+    <label class="rr-simple-toggle"><input type="checkbox" id="temp-simple">Simple mode</label>
+  </div>
+  <div class="temp-guide">Tap a peak on the graph or a day below for details.</div>
+  <section class="temp-chart-shell" aria-label="Heat index and air temperature graph">
+    <div class="temp-chart-top"><span class="rr-section-heading" id="temp-chart-title">Heat Index over time</span><span class="temp-chart-meta">3-hourly median</span></div>
+    <svg id="temp-graph" role="img" aria-label="Interactive forecast graph with a marker for each daily peak. Tap a day marker to expand the corresponding daily forecast."></svg>
+    <div class="temp-legend"><span class="temp-legend-entry"><span class="temp-legend-line" id="temp-legend-line"></span><span>Median</span></span><span class="temp-legend-entry"><span class="temp-legend-range" id="temp-legend-range"></span><span>P10–P90 range</span></span></div>
+    <div class="temp-chart-selected" id="temp-graph-caption">Dots mark daily peaks.</div>
+    <details class="temp-graph-options"><summary>Graph options</summary>
+      <div class="temp-graph-options-inner">
+        <label><input type="checkbox" id="temp-show-range" checked> P10–P90 range</label>
+        <label id="temp-reference-label"><input type="checkbox" id="temp-show-reference"> Heat Index category lines</label>
+        <label><input type="checkbox" id="temp-show-compare"> Compare both variables</label>
+      </div>
+    </details>
+  </section>
+  <div class="temp-section"><span class="rr-section-heading">Day-by-day outlook</span><small>Peak of the 3-hourly median</small></div>
+  <div class="temp-days" id="temp-days"></div>
+  <details class="temp-note"><summary>How to read this forecast</summary>
+    <p>The highlighted Heat Index is the default. Daily peaks are the highest available 3-hourly median estimates, not exact daily maxima. The shaded band shows P10–P90 estimates at individual times; it is not the probability range for daily maxima.</p>
+    <p>Simple mode uses Heat Index caution categories and informal air-temperature descriptions in the daily overview. Detailed figures and graph values remain available. Daily periods use Philippine local time (UTC+8); partial days use only available forecast steps.</p>
+  </details>
+</main>
+<script>
+(() => {
+'use strict';
+const days=__TEMPERATURE_DATA__;
+const root=document.getElementById('temp-root');
+const svg=document.getElementById('temp-graph');
+const list=document.getElementById('temp-days');
+const tabs=Array.from(root.querySelectorAll('[data-variable]'));
+const simple=document.getElementById('temp-simple');
+const showRange=document.getElementById('temp-show-range');
+const showReference=document.getElementById('temp-show-reference');
+const showCompare=document.getElementById('temp-show-compare');
+const categories=[
+ {value:27,name:'Caution',color:'#F4C430'},
+ {value:33,name:'Extreme caution',color:'#FF9F1C'},
+ {value:42,name:'Danger',color:'#E8450C'},
+ {value:52,name:'Extreme danger',color:'#C0122F'}
+];
+const NS='http://www.w3.org/2000/svg';
+let variable='hi',selected=-1;
+const ink='#283746', muted='#687585';
+const palette={hi:{stroke:'#DF8744',shade:'#F6D6B4'},temp:{stroke:'#238FC2',shade:'#C8E6F1'}};
+function fmt(value,unit='°C'){return Number.isFinite(value)?`${Math.round(value)}${unit}`:'—'}
+function dec(value){return Number.isFinite(value)?`${value.toFixed(1)}°C`:'—'}
+function safe(text){return String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function height(){
+  const h=Math.ceil(document.documentElement.scrollHeight+3);
+  try{if(window.frameElement){window.frameElement.style.setProperty('height',h+'px','important');window.frameElement.style.setProperty('min-height','0px','important')}}catch(e){}
+  try{window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*')}catch(e){}
+}
+function animateHeight(){const start=performance.now();function tick(){height();if(performance.now()-start<350)requestAnimationFrame(tick)}requestAnimationFrame(tick)}
+function dayHTML(day,i){
+  const selectedNow=selected===i;
+  const todayTag=day.today?'<span class="rr-today-tag">TODAY</span>':'';
+  const hiVal=day.hiPeak?.value??null,airVal=day.airPeak?.value??null;
+  const p=day.hiPeak;
+  const headline=p?`<div class="temp-detail-value">${fmt(p.value)}</div>`:'<div class="temp-detail-value">—</div>';
+  const stats=[['P10 · lower estimate',p?.p10??null],['P90 · higher estimate',p?.p90??null],['Peak air temperature',airVal]];
+  let hours=day.steps.map((step,j)=>`<div class="temp-hour ${p&&p.index===j?'is-peak':''}"><span class="temp-hour-time">${safe(step.label)}</span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span><span class="temp-hour-secondary">Air ${fmt(step.temp.median,'°')}</span></div>`).join('');
+  return `<div class="temp-day-wrap" data-day-wrap="${i}">
+    <button type="button" class="temp-day-button" data-day="${i}" aria-expanded="${selectedNow}" aria-controls="temp-detail-${i}">
+      <span class="temp-day-date"><span class="temp-day-heading"><span class="rr-day-weekday">${safe(day.weekday)}</span>${todayTag}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
+      <span class="temp-day-numbers">
+        <span class="temp-day-metric"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(hiVal,'°')}</b><b class="temp-descriptor" style="--severity:${day.severity.color}" ${simple.checked?'':'hidden'}><i class="temp-risk-dot" aria-hidden="true"></i>${safe(day.severity.label)}</b><small>Heat Index</small></span>
+        <span class="temp-day-metric secondary"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(airVal,'°')}</b><b class="temp-descriptor" ${simple.checked?'':'hidden'}>${safe(day.airDescriptor)}</b><small>Air temp</small></span>
+      </span><svg class="temp-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>
+    </button>
+    <section class="temp-detail ${selectedNow?'is-open':''}" id="temp-detail-${i}" aria-label="Detailed Heat Index forecast for ${safe(day.full)}"><div class="temp-detail-collapse"><div class="temp-detail-body">
+      <div class="temp-detail-top"><div><strong>${todayTag?'<span class="rr-today-tag">TODAY </span>':''}${safe(day.full)}</strong><div class="temp-detail-time">Peak at ${safe(p?.time??'an unavailable time')}</div><span class="temp-risk-inline"><span class="temp-risk-dot" style="--severity:${day.severity.color}"></span>${safe(day.severity.label)}</span></div><div style="text-align:right"><div class="temp-detail-caption">Peak Heat Index</div>${headline}</div></div>
+      <div class="temp-details-grid">${stats.map(([name,value])=>`<div class="temp-summary-tile"><small>${safe(name)}</small><b>${fmt(value)}</b></div>`).join('')}</div>
+      <div class="rr-section-heading temp-hour-title">3-hourly forecast</div><div class="temp-hour-scroll"><div class="temp-hours">${hours}</div></div>
+      <div class="temp-hour-labels">Heat Index is emphasized; air temperature appears below each value.</div>
+    </div></div></section>
+  </div>`;
+}
+function updateRows(){list.innerHTML=days.map(dayHTML).join('');list.querySelectorAll('[data-day]').forEach(button=>button.addEventListener('click',()=>selectDay(Number(button.dataset.day))));height()}
+function selectDay(i){selected=selected===i?-1:i;updateRows();drawGraph();animateHeight()}
+function s(tag,attrs={},text=null){const el=document.createElementNS(NS,tag);for(const [k,v]of Object.entries(attrs))el.setAttribute(k,String(v));if(text!==null)el.textContent=text;return el}
+function add(tag,attrs={},text=null,parent=svg){const el=s(tag,attrs,text);parent.appendChild(el);return el}
+function curve(points){
+ if(!points.length)return '';
+ if(points.length===1)return `M${points[0].x} ${points[0].y}`;
+ let d=`M${points[0].x.toFixed(2)} ${points[0].y.toFixed(2)}`;
+ const slopes=[];
+ for(let i=0;i<points.length;i++){
+   const before=i>0?(points[i].y-points[i-1].y)/(points[i].x-points[i-1].x):null;
+   const after=i<points.length-1?(points[i+1].y-points[i].y)/(points[i+1].x-points[i].x):null;
+   slopes.push(before===null?after:after===null?before:before*after<=0?0:2*before*after/(before+after));
+ }
+ for(let i=0;i<points.length-1;i++){
+   const a=points[i],b=points[i+1],dx=(b.x-a.x)/3;
+   d+=` C${(a.x+dx).toFixed(2)} ${(a.y+slopes[i]*dx).toFixed(2)} ${(b.x-dx).toFixed(2)} ${(b.y-slopes[i+1]*dx).toFixed(2)} ${b.x.toFixed(2)} ${b.y.toFixed(2)}`;
+ }
+ return d;
+}
+function drawGraph(){
+ svg.replaceChildren();
+ const w=Math.max(260,Math.floor(svg.getBoundingClientRect().width)||320),h=245,l=39,r=w-13,t=20,b=205;
+ svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
+ const flat=[];days.forEach((day,i)=>day.steps.forEach(step=>flat.push({day:i,step,ms:Date.parse(step.time)})));
+ if(!flat.length)return;
+ const secondaryVariable=variable==='hi'?'temp':'hi';
+ const values=flat.flatMap(point=>[
+   ...Object.values(point.step[variable]).filter(Number.isFinite),
+   ...(showCompare.checked&&Number.isFinite(point.step[secondaryVariable].median)?[point.step[secondaryVariable].median]:[])
+ ]);
+ if(!values.length){add('text',{x:w/2,y:100,'text-anchor':'middle',fill:muted,'font-size':12},'No data for this forecast');return}
+ let low=Math.floor((Math.min(...values)-1)/5)*5, high=Math.ceil((Math.max(...values)+1)/5)*5;
+ if(high-low<5)high=low+5;
+ const x0=flat[0].ms,x1=flat[flat.length-1].ms;
+ const x=ms=>l+(x1===x0 ? .5 : (ms-x0)/(x1-x0))*(r-l);
+ const y=val=>b-(val-low)/(high-low)*(b-t);
+ for(let i=0;i<=4;i++){
+   const v=low+(high-low)*i/4, yy=y(v);
+   add('line',{x1:l,y1:yy,x2:r,y2:yy,stroke:'#E7EDF2','stroke-width':1,'stroke-dasharray':'3 4'});
+   add('text',{x:l-6,y:yy+3,'text-anchor':'end',fill:muted,'font-size':10},`${Math.round(v)}°`);
+ }
+ const cfg=palette[variable];
+ if(showReference.checked&&variable==='hi')categories.forEach(cat=>{
+    if(cat.value<low||cat.value>high)return;
+    const yy=y(cat.value);
+    add('line',{x1:l,y1:yy,x2:r,y2:yy,stroke:cat.color,'stroke-width':1,'stroke-dasharray':'4 4','stroke-opacity':'.7'});
+    add('text',{x:r-2,y:yy-4,'text-anchor':'end',fill:cat.color,'font-size':9,'font-weight':600},cat.name);
+ });
+ if(showCompare.checked){
+    const secondaryGroups=[];let secondary=[];
+    flat.forEach(point=>{
+      const value=point.step[secondaryVariable].median;
+      if(Number.isFinite(value))secondary.push({x:x(point.ms),y:y(value)});
+      else{if(secondary.length)secondaryGroups.push(secondary);secondary=[]}
+    });if(secondary.length)secondaryGroups.push(secondary);
+    secondaryGroups.forEach(g=>add('path',{d:curve(g),fill:'none',stroke:palette[secondaryVariable].stroke,'stroke-width':1.65,'stroke-dasharray':'4 4','stroke-opacity':'.85'}));
+ }
+ const groups=[];let segment=[];
+ flat.forEach((point)=>{
+   const {median,p10,p90}=point.step[variable];
+   if([median,p10,p90].every(Number.isFinite)){segment.push({x:x(point.ms),lo:y(p10),hi:y(p90),mid:y(median)});}
+   else{if(segment.length)groups.push(segment);segment=[]}
+ });if(segment.length)groups.push(segment);
+ if(showRange.checked)groups.forEach(group=>{if(group.length<2)return;const upper=group.map(p=>({x:p.x,y:p.hi})),lower=group.map(p=>({x:p.x,y:p.lo}));const fill=curve(upper)+' '+curve(lower.reverse()).replace(/^M/,'L')+' Z';add('path',{d:fill,fill:cfg.shade,'fill-opacity':'.5',stroke:'none'});});
+ let midSeg=[];const midGroups=[];flat.forEach(point=>{const value=point.step[variable].median;if(Number.isFinite(value))midSeg.push({x:x(point.ms),y:y(value)});else{if(midSeg.length)midGroups.push(midSeg);midSeg=[]}});if(midSeg.length)midGroups.push(midSeg);
+ midGroups.forEach(g=>add('path',{d:curve(g),fill:'none',stroke:cfg.stroke,'stroke-width':2.65,'stroke-linecap':'round','stroke-linejoin':'round'}));
+ days.forEach((day,i)=>{
+   const these=flat.filter(p=>p.day===i);if(!these.length)return;
+   const first=x(these[0].ms),last=x(these[these.length-1].ms),middle=(first+last)/2;
+   if(selected===i)add('rect',{x:Math.max(l,first-3),y:t,width:Math.max(4,last-first+6),height:b-t,rx:4,fill:cfg.stroke,'fill-opacity':'.045'});
+   add('text',{x:middle,y:230,'text-anchor':'middle',fill:selected===i?ink:muted,'font-size':10,'font-weight':selected===i?700:400},`${day.weekday.slice(0,3)} ${day.day.split(' ')[0]}`);
+   const peak=variable==='hi'?day.hiPeak:day.airPeak;
+   if(peak){
+     const matching=these[peak.index];if(matching){
+       const xx=x(matching.ms),yy=y(peak.value),active=selected===i;
+       if(active)add('circle',{cx:xx,cy:yy,r:8,fill:cfg.stroke,'fill-opacity':'.15'});
+       add('circle',{cx:xx,cy:yy,r:active?4.6:3.3,fill:cfg.stroke,stroke:'#fff','stroke-width':1.5});
+       if(active){const label=add('text',{x:xx,y:Math.max(12,yy-11),'text-anchor':'middle',fill:cfg.stroke,'font-size':12,'font-weight':750},fmt(peak.value,'°'));}
+     }
+   }
+ });
+ // Place hit targets last so any part of the graph's daily strip is tappable.
+ days.forEach((day,i)=>{
+   const these=flat.filter(p=>p.day===i);if(!these.length)return;
+   let start=x(these[0].ms),end=x(these[these.length-1].ms);
+   const previous=flat.findLast(p=>p.day===i-1),next=flat.find(p=>p.day===i+1);
+   if(previous)start=(start+x(previous.ms))/2;else start=l;
+   if(next)end=(end+x(next.ms))/2;else end=r;
+   const rect=add('rect',{x:start,y:t,width:Math.max(2,end-start),height:h-t-6,role:'button',tabindex:'0','data-chart-day':i,'aria-label':`Select ${day.full} forecast`,class:'temp-plot-hit'});
+   rect.appendChild(s('title',{},`${day.full}: ${fmt((variable==='hi'?day.hiPeak:day.airPeak)?.value??null)} peak`));
+   rect.addEventListener('click',()=>selectDay(i));rect.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();selectDay(i)}});
+ });
+ root.querySelector('#temp-chart-title').textContent=(variable==='hi'?'Heat Index':'Air temperature')+' over time';
+ root.querySelector('#temp-legend-line').style.background=cfg.stroke;
+ root.querySelector('#temp-legend-range').style.background=cfg.shade+'88';
+ root.querySelector('#temp-legend-range').parentElement.hidden=!showRange.checked;
+ root.querySelector('#temp-reference-label').hidden=variable!=='hi';
+ root.querySelector('#temp-graph-caption').textContent=selected<0?'Dots mark daily peaks.':`${days[selected].full} · ${fmt((variable==='hi'?days[selected].hiPeak:days[selected].airPeak)?.value??null)} peak`;
+}
+function refresh(){tabs.forEach(b=>b.setAttribute('aria-selected',String(b.dataset.variable===variable)));updateRows();drawGraph();animateHeight()}
+tabs.forEach(b=>b.addEventListener('click',()=>{variable=b.dataset.variable;refresh()}));
+simple.addEventListener('change',()=>{updateRows();animateHeight()});
+[showRange,showReference,showCompare].forEach(input=>input.addEventListener('change',()=>{drawGraph();animateHeight()}));
+if(typeof ResizeObserver!=='undefined')new ResizeObserver(()=>{drawGraph();height()}).observe(root);
+window.addEventListener('resize',()=>{drawGraph();height()});
+if(document.fonts?.ready)document.fonts.ready.then(()=>{drawGraph();height()});
+refresh();
+})();
+</script>
+</body></html>'''
 
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
@@ -2736,8 +2889,8 @@ if forecast_clicked:
     try:
         temp_out = get_temperature_percentiles_with_progress(lat, lon, PERCENTILE_MAX_LEAD_HOURS)
     except Exception as exc:
-        st.error(f"Temperature forecast is unavailable: {type(exc).__name__}: {exc}")
-        with st.expander("Temperature forecast: error details"):
+        st.error(f"Heat Index forecast is unavailable: {type(exc).__name__}: {exc}")
+        with st.expander("Heat Index forecast: error details"):
             st.exception(exc)
 
     pct_raw_new, pct_cached_new = pct_out if pct_out else (None, False)
@@ -2762,7 +2915,7 @@ if forecast_clicked:
         st.session_state["last_temp_true"] = (true_lat, true_lon)
         st.session_state["last_temp_was_cached"] = temp_was_cached
     else:
-        st.warning("Temperature forecast data isn't available for this location right now.")
+        st.warning("Heat Index forecast data isn't available for this location right now.")
 
     st.session_state["last_forecast_elapsed"] = time.perf_counter() - request_started
     # Only label the complete unified request "from cache" when all three
@@ -2859,76 +3012,25 @@ with main:
 
 
     elif view_mode == "Temperature Forecast":
-        st.caption(
-            'Temperature and heat index ("feels like") percentiles across all 50 ECMWF ensemble '
-            'members, at native 3-hourly resolution. Always reads pre-computed data from the '
-            'scheduled ingestion job, same as the views above -- no live fetch.'
-        )
-        temp_location_name, temp_lat, temp_lon = location_name, lat, lon
-        temp_lead_hours = PERCENTILE_MAX_LEAD_HOURS
         if "last_temp_result" in st.session_state:
             temp_result = st.session_state["last_temp_result"]
             temp_location_name = st.session_state["last_temp_location_name"]
-            temp_steps = temp_result["steps"]
-            if not temp_steps:
-                st.warning("No data available for this forecast range.")
-                st.stop()
-            temp_percentiles = temp_result["percentiles"]
-            st.subheader(f"Temperature & heat index for {temp_location_name}")
-            temp_show_graph = st.toggle("Show as graph", value=True, key="temp_show_graph")
-            if temp_show_graph:
-                cb1, cb2, cb3 = st.columns(3)
-                with cb1:
-                    show_temp_series = st.checkbox("Temperature", value=False, key="temp_show_temp_series")
-                with cb2:
-                    show_hi_series = st.checkbox("Heat Index", value=True, key="temp_show_hi_series")
-                with cb3:
-                    show_ranges = st.checkbox("Show ranges", value=True, key="temp_show_ranges")
-                show_all_categories = st.checkbox(
-                    "Show Heat Index reference lines", value=True, key="temp_show_categories"
-                )
-                show_categories = {
-                    key: show_all_categories for key, _short, _label, _threshold_c, _color in HEAT_INDEX_CATEGORIES
-                }
-                if not show_temp_series and not show_hi_series:
-                    st.info("Select at least one of Temperature or Heat Index to show the graph.")
-                else:
-                    components.html(
-                        render_temperature_chart_html(
-                            temp_result,
-                            show_temp=show_temp_series,
-                            show_heat_index=show_hi_series,
-                            show_ranges=show_ranges,
-                            show_categories=show_categories,
-                        ),
-                        height=380,
-                    )
+            if not temp_result.get("steps"):
+                st.warning("No Heat Index forecast is available for the selected period.")
             else:
-                temp_stat_rows = ["mean", "median"] + [f"p{p}" for p in temp_percentiles]
-                temp_stat_display_labels = {
-                    "mean": "Mean", "median": "Median", **{f"p{p}": f"P{p}" for p in temp_percentiles}
-                }
-                temp_col_labels = [s["time_utc"].astimezone(PH_TZ).strftime("%a %d %b, %I%p") for s in temp_steps]
-                temp_table_data = {
-                    temp_col_labels[i]: [round(s["temperature_stats"][row], 1) for row in temp_stat_rows]
-                    for i, s in enumerate(temp_steps)
-                }
-                hi_table_data = {
-                    temp_col_labels[i]: [round(s["heat_index_stats"][row], 1) for row in temp_stat_rows]
-                    for i, s in enumerate(temp_steps)
-                }
-                st.caption("Temperature (°C)")
-                st.dataframe(
-                    pd.DataFrame(temp_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
-                    use_container_width=True,
+                heat_card_html = render_temperature_forecast_html(temp_result, temp_location_name)
+                if hasattr(st, "iframe"):
+                    st.iframe(heat_card_html, height="content")
+                else:
+                    # The card reports its height as daily details slide down/up.
+                    components.html(heat_card_html, height=900, scrolling=False)
+                st.caption(
+                    _coords_caption(
+                        temp_location_name,
+                        *st.session_state.get("last_temp_true", (true_lat, true_lon)),
+                        temp_result,
+                    )
                 )
-                st.caption('Heat Index / "feels like" (°C)')
-                st.dataframe(
-                    pd.DataFrame(hi_table_data, index=[temp_stat_display_labels[r] for r in temp_stat_rows]),
-                    use_container_width=True,
-                )
-            st.caption(_coords_caption(temp_location_name, *st.session_state.get("last_temp_true", (true_lat, true_lon)), temp_result))
-
 
 
 # Keep load timing beneath the displayed forecasts, not near the fetch button.
