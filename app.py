@@ -29,6 +29,8 @@ from ecmwf_client import (
     PH_BBOX,
 )
 import github_data_source
+from taiwan_support import taiwan_enabled, region_for_point
+from regions import TAIWAN_BBOX
 st.set_page_config(page_title="Simpleweather", page_icon="🌧️", layout="wide")
 st.markdown(
     """
@@ -51,7 +53,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.title("Simpleweather")
-st.caption("Rainfall, temperature and heat index forecasts for locations across the Philippines.")
+st.caption(
+    "Rainfall, temperature and heat index forecasts for locations across the Philippines."
+    + (" Temporary northern Taiwan coverage is also available." if taiwan_enabled() else "")
+)
 LOCATIONS = {
     "Mandaluyong City, Metro Manila": {"lat": 14.576975, "lon": 121.052521},
     "Guiguinto, Bulacan": {"lat": 14.842279, "lon": 120.859681},
@@ -78,6 +83,9 @@ def get_true_point(location_name: str) -> tuple[float, float]:
 
 _CUSTOM_COORDS_OPTION = "Custom coordinates"
 _SEARCH_PLACE_OPTION = "Search Philippine city/municipality"
+_TAIWAN_PLACE_OPTION = "Taiwan trip locations"
+_TAIWAN_COORDS_OPTION = "Custom coordinates (Taiwan)"
+_TW_LOCATIONS_FILE = Path(__file__).parent / "tw_locations.json"
 _PH_LOCATIONS_FILE = Path(__file__).parent / "ph_locations.json"
 _ph_locations_cache: list[dict] | None = None
 
@@ -90,7 +98,38 @@ def _load_ph_locations() -> list[dict]:
 
 def location_picker(key_prefix: str) -> tuple[str, float, float, float, float]:
     options = list(LOCATIONS.keys()) + [_SEARCH_PLACE_OPTION, _CUSTOM_COORDS_OPTION]
+    if taiwan_enabled():
+        options += [_TAIWAN_PLACE_OPTION, _TAIWAN_COORDS_OPTION]
     selected = st.selectbox("Location", options, key=f"{key_prefix}_location")
+    if selected == _TAIWAN_PLACE_OPTION and taiwan_enabled():
+        with _TW_LOCATIONS_FILE.open(encoding="utf-8") as f:
+            places = json.load(f)
+        selected_place = st.selectbox(
+            "Taiwan location", [p["name"] for p in places],
+            key=f"{key_prefix}_taiwan_place",
+        )
+        place = next(p for p in places if p["name"] == selected_place)
+        if st.toggle("Show map", value=False, key=f"{key_prefix}_taiwan_map"):
+            st.map(pd.DataFrame({"lat": [place["lat"]], "lon": [place["lon"]]}), zoom=10)
+        return place["name"] + ", Taiwan", place["lat"], place["lon"], place["lat"], place["lon"]
+    if selected == _TAIWAN_COORDS_OPTION and taiwan_enabled():
+        col1, col2 = st.columns(2)
+        with col1:
+            custom_lat = st.number_input(
+                "Latitude", min_value=float(TAIWAN_BBOX["lat_min"]),
+                max_value=float(TAIWAN_BBOX["lat_max"]), value=25.03,
+                step=0.01, format="%.4f", key=f"{key_prefix}_taiwan_lat",
+            )
+        with col2:
+            custom_lon = st.number_input(
+                "Longitude", min_value=float(TAIWAN_BBOX["lon_min"]),
+                max_value=float(TAIWAN_BBOX["lon_max"]), value=121.56,
+                step=0.01, format="%.4f", key=f"{key_prefix}_taiwan_lon",
+            )
+        if st.toggle("Show map", value=False, key=f"{key_prefix}_taiwan_custom_map"):
+            st.map(pd.DataFrame({"lat": [custom_lat], "lon": [custom_lon]}), zoom=10)
+        display = f"Taiwan custom ({custom_lat:.4f}°N, {custom_lon:.4f}°E)"
+        return display, custom_lat, custom_lon, custom_lat, custom_lon
     if selected not in (_SEARCH_PLACE_OPTION, _CUSTOM_COORDS_OPTION):
         true_lat, true_lon = get_true_point(selected)
         return selected, true_lat, true_lon, true_lat, true_lon
@@ -310,17 +349,18 @@ def _truncate_pct_result(result: dict, lead_hours: int) -> dict:
 
 _STORE_DS_CACHE_TTL_SECONDS = 60
 _store_ds_cache: dict = {
-    "precip": {"ts": 0.0, "ds": None},
-    "temperature": {"ts": 0.0, "ds": None},
+    (region, kind): {"ts": 0.0, "ds": None}
+    for region in ("ph", "taiwan")
+    for kind in ("precip", "temperature")
 }
 
-def _load_store_cached(kind: str):
-    entry = _store_ds_cache[kind]
+def _load_store_cached(kind: str, region: str = "ph"):
+    entry = _store_ds_cache[(region, kind)]
     now = time.time()
     if entry["ds"] is not None and (now - entry["ts"] < _STORE_DS_CACHE_TTL_SECONDS):
         return entry["ds"]
     loader = github_data_source.load_percentile_grid if kind == "precip" else github_data_source.load_temperature_grid
-    entry["ds"] = loader()
+    entry["ds"] = loader(region=region)
     entry["ts"] = now
     return entry["ds"]
 
@@ -345,7 +385,7 @@ def get_percentile_raw_with_progress(lat: float, lon: float, lead_hours: int):
         session_cache[key] = entry
         _PCT_GLOBAL_CACHE[key] = entry
         return trimmed, True
-    store_ds = _load_store_cached("precip")
+    store_ds = _load_store_cached("precip", region_for_point(lat, lon))
     q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
     store_result = read_percentile_raw_from_store(store_ds, q_lat, q_lon, lead_hours)
     if store_result is None:
@@ -369,7 +409,7 @@ def get_temperature_percentiles_with_progress(lat: float, lon: float, lead_hours
     if global_entry and (now - global_entry["ts"] < CACHE_TTL_SECONDS):
         session_cache[key] = global_entry
         return global_entry["result"], True
-    store_ds = _load_store_cached("temperature")
+    store_ds = _load_store_cached("temperature", region_for_point(lat, lon))
     q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
     result = read_temperature_percentiles_from_store(store_ds, q_lat, q_lon, lead_hours)
     entry = {"ts": now, "result": result}
@@ -425,7 +465,7 @@ def get_forecast_with_progress(lat: float, lon: float, lead_days: int):
     cached = _cache_lookup(key)
     if cached is not None:
         return cached, True
-    store_ds = github_data_source.load_threshold_grid()
+    store_ds = github_data_source.load_threshold_grid(region=region_for_point(lat, lon))
     if store_ds is not None:
         q_lat, q_lon = resolve_query_point(lat, lon, str(store_ds.attrs.get("resolution", "0p25")))
         store_result = read_threshold_result_from_store(store_ds, q_lat, q_lon, lead_days)
@@ -2348,6 +2388,13 @@ def render_status_footer() -> None:
         unsafe_allow_html=True,
     )
 
+if not taiwan_enabled():
+    if st.session_state.get("last_rain", {}).get("region") == "taiwan":
+        st.session_state.pop("last_rain", None)
+    if st.session_state.get("last_temp_region") == "taiwan":
+        for _key in ("last_temp_result", "last_temp_location_name", "last_temp_true", "last_temp_region"):
+            st.session_state.pop(_key, None)
+
 location_name, lat, lon, true_lat, true_lon = location_picker("shared")
 
 # One request obtains both forecast types for the chosen location. Changing
@@ -2387,6 +2434,7 @@ if forecast_clicked:
     if thr_out is not None or pct_raw_new is not None:
         st.session_state["last_rain"] = {
             "location_name": location_name,
+            "region": region_for_point(lat, lon),
             "true": (true_lat, true_lon),
             "thr": thr_out[0] if thr_out else None,
             "thr_cached": thr_out[1] if thr_out else True,
@@ -2400,6 +2448,7 @@ if forecast_clicked:
         temp_result, temp_was_cached = temp_out
         st.session_state["last_temp_result"] = temp_result
         st.session_state["last_temp_location_name"] = location_name
+        st.session_state["last_temp_region"] = region_for_point(lat, lon)
         st.session_state["last_temp_true"] = (true_lat, true_lon)
         st.session_state["last_temp_was_cached"] = temp_was_cached
     else:
