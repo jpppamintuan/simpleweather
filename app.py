@@ -70,6 +70,30 @@ st.markdown(
         outline-offset: 2px !important;
         box-shadow: 0 0 0 2px #FFFFFF !important;
       }
+      /* Recolor the native Rainfall / Temperature segmented selector separately
+         from the Get forecast button. Streamlit assigns the key as a CSS class. */
+      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"],
+      .st-key-forecast_view_selector button[aria-pressed="true"],
+      .st-key-forecast_view_selector button[aria-checked="true"] {
+        color: #086C9B !important;
+        background-color: #E9F6FC !important;
+        border-color: #4CB0D9 !important;
+        box-shadow: inset 0 0 0 1px #4CB0D9 !important;
+      }
+      .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"],
+      .st-key-forecast_view_selector button[aria-pressed="false"] {
+        color: #586B7D !important;
+      }
+      .st-key-forecast_view_selector button:hover {
+        color: #086C9B !important;
+        border-color: #67BEDF !important;
+        background-color: #F0F9FD !important;
+      }
+      .st-key-forecast_view_selector button:focus-visible {
+        outline: 2px solid #4CB0D9 !important;
+        outline-offset: 2px !important;
+        box-shadow: 0 0 0 2px #E9F6FC !important;
+      }
       @media (prefers-reduced-motion: reduce) {
         .st-key-forecast_button button { transition: none !important; }
       }
@@ -820,6 +844,22 @@ html,body{margin:0!important;padding:0!important;overflow-x:hidden}
 main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:0}
 .shell{margin:0;padding-top:13px}
 @media(max-width:720px){.shell{padding-top:10px}}
+/* Keep view selection compact and side-by-side with Simple mode on phones. */
+@media(max-width:720px){
+ .top-controls{align-items:center;flex-wrap:nowrap;gap:6px}
+ .view-tabs{width:max-content;max-width:calc(100% - 104px);flex:0 1 auto;padding:3px;gap:2px}
+ .view-tab{flex:0 0 auto;padding:7px 7px;font-size:12px;line-height:1.2}
+ .simple-toggle{flex:0 0 auto;margin-left:auto;gap:5px;font-size:13px;white-space:nowrap}
+}
+@media(max-width:355px){
+ .top-controls{gap:4px}
+ .view-tabs{max-width:calc(100% - 98px)}
+ .view-tab{padding:7px 5px;font-size:10.5px}
+ .simple-toggle{gap:4px;font-size:10.5px}
+ .simple-toggle input{width:33px;height:20px}
+ .simple-toggle input:after{width:14px;height:14px}
+ .simple-toggle input:checked:after{left:16px}
+}
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -2093,39 +2133,45 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
       const mode=root.querySelector('#rr-mode-toggle');
       const buttons=Array.from(root.querySelectorAll('[data-rr-period]'));
       const fadeMs=window.matchMedia('(prefers-reduced-motion: reduce)').matches?0:200;
-      const exitTimers=new WeakMap();
+      let transitionTimer=null;
+      let transitionGeneration=0;
       function resize(){requestAnimationFrame(()=>{
         const h=Math.ceil(root.getBoundingClientRect().bottom+2);
         try {const frame=window.frameElement;if(frame){frame.style.setProperty('height',h+'px','important');frame.style.setProperty('min-height','0px','important');}} catch(e){}
         window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*');
       });}
       function show(){
+        const generation=++transitionGeneration;
+        if(transitionTimer!==null){window.clearTimeout(transitionTimer);transitionTimer=null;}
         const period=root.dataset.rainPeriod;
         const simple=mode.checked?'simple':'standard';
         let chosen=available.find(v=>v.dataset.rrVariant===period+'-'+simple);
         if(!chosen)chosen=available.find(v=>v.dataset.rrVariant.endsWith('-'+simple))||available[0];
-        available.forEach(v=>{
-          const pending=exitTimers.get(v);
-          if(pending!==undefined){window.clearTimeout(pending);exitTimers.delete(v);}
-          v.classList.remove('is-closing');
-          if(v===chosen){
-            v.hidden=false;
-            requestAnimationFrame(()=>v.dispatchEvent(new Event('rr:activated')));
-          }
-          else if(!v.hidden){
-            if(fadeMs===0){v.hidden=true;}
-            else{
-              v.classList.add('is-closing');
-              const timer=window.setTimeout(()=>{
-                v.hidden=true;v.classList.remove('is-closing');
-                exitTimers.delete(v);resize();
-              },fadeMs);
-              exitTimers.set(v,timer);
-            }
-          }
-        });
+        // Only one variant can participate in normal document flow. Previously
+        // the outgoing and incoming variants were both rendered for 200 ms,
+        // making the outgoing mode flash *below* the new card.
+        const visible=available.find(v=>!v.hidden);
+        available.forEach(v=>v.classList.remove('is-closing'));
         buttons.forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.rrPeriod===chosen.dataset.rrVariant.split('-')[0])));
         root.dataset.rainSimple=String(mode.checked);
+        function activate(){
+          if(generation!==transitionGeneration)return;
+          available.forEach(v=>{
+            v.hidden=v!==chosen;
+            v.classList.remove('is-closing');
+          });
+          transitionTimer=null;
+          requestAnimationFrame(()=>chosen.dispatchEvent(new Event('rr:activated')));
+          resize();
+        }
+        if(visible&&visible!==chosen&&fadeMs){
+          // Sequential 200-ms fade out / fade in; never show two full-height
+          // variants at once. Rapid toggles cancel the pending activation.
+          available.forEach(v=>{if(v!==visible)v.hidden=true;});
+          void visible.offsetWidth;
+          visible.classList.add('is-closing');
+          transitionTimer=window.setTimeout(activate,fadeMs);
+        }else activate();
         resize();
       }
       buttons.forEach(b=>b.addEventListener('click',()=>{root.dataset.rainPeriod=b.dataset.rrPeriod;show();}));
@@ -2562,6 +2608,7 @@ if st.session_state.get("last_forecast_location"):
         "View",
         ["Rainfall Forecast", "Temperature Forecast"],
         default=st.session_state["view_mode"],
+        key="forecast_view_selector",
     )
     if _selected_mode is not None:
         st.session_state["view_mode"] = _selected_mode
