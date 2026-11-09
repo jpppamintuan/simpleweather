@@ -70,29 +70,41 @@ st.markdown(
         outline-offset: 2px !important;
         box-shadow: 0 0 0 2px #FFFFFF !important;
       }
-      /* Recolor the native Rainfall / Temperature segmented selector separately
-         from the Get forecast button. Streamlit assigns the key as a CSS class. */
+      /* Forecast-view segmented control: selected = blue outline, NEVER a fill.
+         Use the key scope so these selectors do not recolor other buttons. */
+      .st-key-forecast_view_selector [data-testid="stSegmentedControl"],
+      .st-key-forecast_view_selector [data-testid="stButtonGroup"],
+      .st-key-forecast_view_selector [role="group"] {
+        background: transparent !important;
+        background-color: transparent !important;
+      }
       .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_controlActive"],
       .st-key-forecast_view_selector button[aria-pressed="true"],
       .st-key-forecast_view_selector button[aria-checked="true"] {
         color: #086C9B !important;
-        background-color: #E9F6FC !important;
-        border-color: #4CB0D9 !important;
-        box-shadow: inset 0 0 0 1px #4CB0D9 !important;
+        background: transparent !important;
+        background-color: transparent !important;
+        border: 2px solid #087DB4 !important;
+        box-shadow: none !important;
       }
       .st-key-forecast_view_selector [data-testid="stBaseButton-segmented_control"],
-      .st-key-forecast_view_selector button[aria-pressed="false"] {
+      .st-key-forecast_view_selector button[aria-pressed="false"],
+      .st-key-forecast_view_selector button[aria-checked="false"] {
         color: #586B7D !important;
+        background: transparent !important;
+        border-color: transparent !important;
+        box-shadow: none !important;
       }
       .st-key-forecast_view_selector button:hover {
         color: #086C9B !important;
-        border-color: #67BEDF !important;
-        background-color: #F0F9FD !important;
+        background: transparent !important;
+        background-color: transparent !important;
       }
       .st-key-forecast_view_selector button:focus-visible {
         outline: 2px solid #4CB0D9 !important;
         outline-offset: 2px !important;
-        box-shadow: 0 0 0 2px #E9F6FC !important;
+        background: transparent !important;
+        box-shadow: none !important;
       }
       @media (prefers-reduced-motion: reduce) {
         .st-key-forecast_button button { transition: none !important; }
@@ -542,6 +554,154 @@ def _relative_luminance(r: int, g: int, b: int) -> float:
 BASE_TEXT = "#283746"
 CARD_BG = "#ffffff"
 BORDER = "rgba(0,0,0,0.12)"
+SHARED_RAIN_TYPOGRAPHY_CSS = r'''
+/* Shared Simpleweather rainfall typography system (both independent cards).
+   Sizes respond to the embedded card's own iframe viewport, not the outer app.
+   Roles are matched between cards; special dense graph/chip labels remain small. */
+:root {
+  --rain-ink: #283746;
+  --rain-muted: #687585;
+  --rain-subtle: #8994A1;
+  --rain-date: #737D88;
+  --rain-section: #516678;
+  --rain-selected: #1C3044;
+  --rain-today: #1786B6;
+  --rain-title-size: 16px;
+  --rain-tabs-size: 12px;
+  --rain-day-size: 12px;
+  --rain-date-size: 11px;
+  --rain-today-size: 10px;
+  --rain-header-size: 11px;
+  --rain-value-size: 14px;
+  --rain-detail-title-size: 16px;
+  --rain-section-size: 13px;
+  --rain-detail-value-size: 15px;
+  --rain-secondary-size: 11px;
+  --rain-micro-size: 10px;
+  --rain-descriptor-size: 12px;
+  --rain-total-detail-size: 20px;
+  --rain-quantile-size: 14px;
+}
+@media(min-width:430px){
+  :root{
+    --rain-title-size:18px;
+    --rain-tabs-size:13px;
+    --rain-day-size:14px;
+    --rain-value-size:16px;
+    --rain-descriptor-size:13px;
+    --rain-quantile-size:15px;
+    --rain-total-detail-size:22px;
+  }
+}
+/* Card headings: identical weight, color, responsive sizing. */
+.rr-card-title,.shell-title h2{
+  font-size:var(--rain-title-size);font-weight:720;color:var(--rain-ink);
+  line-height:1.3;letter-spacing:-.025em;
+}
+/* Tab buttons and the Simple mode control. */
+.rr-card-tabs button,.view-tab{
+  font-size:var(--rain-tabs-size);font-weight:700;color:#677586;
+  line-height:1.2;
+}
+.rr-card-tabs button[aria-pressed="true"],.view-tab[aria-selected="true"]{
+  color:var(--rain-selected);font-weight:700;
+}
+.rr-simple-toggle,.simple-toggle{font-size:13px;font-weight:650;color:#506070}
+/* Daily date, TODAY label, column headers, and forecast values. */
+.rr-day-weekday,.day-label .day-short strong{
+  font-size:var(--rain-day-size);font-weight:700;color:var(--rain-ink);
+  line-height:1.12;
+}
+.day-label .day-short{font-size:var(--rain-day-size);font-weight:400;color:var(--rain-ink);line-height:1.12}
+.rr-day-calendar,.day-label .date,.day-label .date-inline{
+  font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date);line-height:1.15;
+}
+.rr-today-tag,.day-label .today-mini,.panel-day .today-mini{
+  font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);
+  letter-spacing:.025em;line-height:1.15;
+}
+.rr-h,.bar-header{
+  font-size:var(--rain-header-size);font-weight:700;color:#7A8796;
+}
+.rr-h-r,.rr-h-chance{white-space:normal;overflow-wrap:normal;line-height:1.12}
+.rr-chip b,.rr-chip .rr-prob-head b,.rr-tot .rr-total-main b,.probability{
+  font-size:var(--rain-value-size);font-weight:750;
+}
+.rr-tot .rr-total-main b,.probability{color:var(--rain-ink)}
+.rr-chip .rr-percent-sign,.rr-chip .rr-chip-threshold,
+.rr-tot .rr-total-main small,.rr-secondary{
+  font-size:var(--rain-secondary-size);font-weight:400;
+}
+.rr-tot .rr-total-main small,.rr-secondary{color:var(--rain-muted)}
+/* Simple mode values (the six-day JS may shrink the WHOLE label together). */
+.rr-simple-chance,.rr-total-plain,.probability.simple{
+  font-size:var(--rain-descriptor-size);font-weight:680;line-height:1.13;
+}
+.rr-simple-threshold{font-size:var(--rain-secondary-size);font-weight:400}
+.rr-total-range{font-size:var(--rain-descriptor-size)}
+/* Expanded day headings, section headings, and headline details. */
+.rr-detail-top strong,.panel-head h3{
+  font-size:var(--rain-detail-title-size);font-weight:700;color:var(--rain-ink);
+  line-height:1.24;
+}
+.rr-section-heading,.smallheading{
+  font-size:var(--rain-section-size);font-weight:750;color:var(--rain-section);
+}
+.rr-detail-main b{font-size:var(--rain-total-detail-size);font-weight:750;color:var(--rain-ink)}
+.rr-detail-main small,.rr-detail-main small.rr-detail-intensity,.panel-head .window{
+  font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);
+}
+.rr-quantile small,.amount-small .low{
+  font-size:var(--rain-secondary-size);font-weight:400;color:#657383;
+}
+.rr-quantile b,.amount-small .big{
+  font-size:var(--rain-quantile-size);font-weight:750;color:var(--rain-ink);
+}
+.rr-qmedian b{font-size:calc(var(--rain-quantile-size) + 1px);color:#126F96}
+.rr-detail-chance small.rr-detail-chance-threshold,.chance-left strong{
+  font-size:var(--rain-secondary-size);font-weight:700;
+}
+.rr-detail-chance small.rr-detail-chance-meaning,.chance-left span{
+  font-size:var(--rain-micro-size);font-weight:400;
+}
+.rr-detail-chance b,.chance-right strong{
+  font-size:var(--rain-detail-value-size);font-weight:750;
+}
+.rr-detail-chance .rr-detail-chance-desc,.chance-right span{
+  font-size:var(--rain-micro-size);font-weight:400;
+}
+/* Explanations, legends, supporting notes, matrices, and chart labels. */
+.rr-intro,.rr-reading-guide,.footnote{
+  font-size:12px;font-weight:400;color:#697789;line-height:1.55;
+}
+.rr-reading-guide summary,.footnote summary{font-size:12px;font-weight:700;color:#576b80}
+.rr-legend,.legend-pill,.context-line,.kicker,.rr-detail-note{
+  font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);
+}
+.rr-section-heading small,.rr-time-range,.rr-detail-bar-hours .rr-slot span,
+.rr-head .rr-slot span,.rr-quantile em,.rr-quantile .rr-quantile-desc,
+.panel-head .tap-hint,.finger-tip{
+  font-size:var(--rain-micro-size);font-weight:400;color:var(--rain-muted);
+}
+.rr-quantile-help{font-size:9px!important;font-weight:400;color:var(--rain-subtle)}
+.section-label{font-size:var(--rain-section-size);font-weight:750;color:var(--rain-section)}
+.question{font-size:var(--rain-secondary-size);font-weight:650;color:var(--rain-muted)}
+.threshold-chip{font-size:var(--rain-descriptor-size);font-weight:700}
+.threshold-chip .chip-meaning{font-size:var(--rain-micro-size);font-weight:450}
+.matrix-section th{font-size:var(--rain-secondary-size);font-weight:700;color:var(--rain-muted)}
+.matrix-section td{font-size:12px}
+.subview-title{font-size:12px;font-weight:600;color:var(--rain-muted)}
+.subview-tab{font-size:12px;font-weight:650;color:var(--rain-muted)}
+/* The 14-day threshold chips display 5 long phrases in narrow columns. */
+.outlook-simple .threshold-chip .chip-meaning{font-size:var(--rain-micro-size);font-weight:700}
+@media(max-width:355px){
+  /* Compact controls still need to fit on one line next to Simple mode. */
+  .view-tab{font-size:10.5px;padding:7px 5px}
+  .rr-card-tabs button{font-size:10.5px;padding:7px 9px}
+  .outlook-simple .threshold-chip .chip-meaning{font-size:9px}
+}
+'''
+
 FONT_STACK = "'Source Sans 3', 'Source Sans Pro', sans-serif"
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
@@ -664,6 +824,7 @@ def render_14day_outlook_html(result: dict, location_name: str) -> str:
         .replace("__RECORDS__", encoded)
         .replace("__LOCATION__", escape(location_name))
         .replace("__THRESHOLD_PALETTE__", json.dumps(palette))
+        .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS)
     )
 
 _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
@@ -860,6 +1021,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
  .simple-toggle input:after{width:14px;height:14px}
  .simple-toggle input:checked:after{left:16px}
 }
+__SHARED_RAIN_TYPOGRAPHY__
 </style>
 <meta name="color-scheme" content="light"></head>
 <body>
@@ -1000,7 +1162,7 @@ main{max-width:none;margin:0;padding:0!important;overflow:visible;border-radius:
   const dates = records.map((r,i)=>({...r,i,startDate:new Date(r.start),endDate:new Date(r.end)}));
   function dayName(d){return `${fmtWeekFull.format(d.startDate)}, ${fmtDayMonthFull.format(d.startDate)}`;}
   function windowName(d){return `${fmtHour.format(d.startDate).replace(' ','').toLowerCase()} ${fmt.format(d.startDate)} – ${fmtHour.format(d.endDate).replace(' ','').toLowerCase()} ${fmt.format(d.endDate)} (PHT)`;}
-  function dayLabel(d){const today=d.date===phDateKey(new Date());return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="day-short"><strong>${fmtWeek.format(d.startDate)}</strong> ${fmtDayMonth.format(d.startDate)}</span></span>`;}
+  function dayLabel(d){const today=d.date===phDateKey(new Date());return `<span class="day-label ${today?'is-today':''}"><span class="today-mini">TODAY</span><span class="day-short"><strong>${fmtWeek.format(d.startDate)}</strong> <span class="date-inline">${fmtDayMonth.format(d.startDate)}</span></span></span>`;}
   function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));}
   function tint(hex,strength){return `rgb(${rgb(hex).map(v=>Math.round(255*(1-strength)+v*strength)).join(',')})`;}
   function tier(p){return p<5?0:p<35?.05:p<65?.35:p<95?.65:1;}
@@ -2105,7 +2267,7 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-reading-guide .rr-guide-body{padding-top:7px}
     @media(max-width:720px){.rr-root{border-radius:10px;padding:12px 9px}.rr-card-title{font-size:16px}.rr-card-controls{gap:8px}.rr-card-tabs button{padding:7px 12px;font-size:12px}}
     @media(max-width:355px){.rr-card-tabs button{padding:7px 9px}}
-    </style>"""
+    </style>""" + "<style>" + SHARED_RAIN_TYPOGRAPHY_CSS + "</style>"
     title = escape(location_name)
     controls = (
         f"<div class='rr-root rr-card' data-rain-period='{initial_hours}' data-rain-simple='false'>"
