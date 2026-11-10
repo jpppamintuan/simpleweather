@@ -634,6 +634,8 @@ SHARED_RAIN_TYPOGRAPHY_CSS = r'''
 .matrix-section td{font-size:12px}
 .subview-title{font-size:12px;font-weight:600;color:var(--rain-muted)}
 .subview-tab{font-size:12px;font-weight:650;color:var(--rain-muted)}
+/* Use full threshold names on wider screens, concise names only on narrow phones. */
+.chip-meaning-short{display:none}
 /* The 14-day threshold chips display 5 long phrases in narrow columns. */
 .outlook-simple .threshold-chip .chip-meaning{font-size:var(--rain-micro-size);font-weight:700}
 @media(max-width:355px){
@@ -815,24 +817,28 @@ button,input,summary{font-family:inherit}
   .rr-card-tabs button{padding:7px 10px}
   .view-tab{padding:7px 7px}
 }
-/* Five full rainfall-intensity names cannot fit on 320-390px in one
-   row at the standard readable font size. Keep numerical mode's 5-chip
-   row, but let Simple mode show three + two chips instead of shrinking. */
+/* The Simple threshold selector uses the same five columns and dot colors
+   as numerical mode at every viewport width. Stack the dot above text on
+   very narrow screens so its column width is not lost to the dot itself. */
 @media(max-width:430px){
-  .outlook-simple .chips{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
-  .outlook-simple .threshold-chip{
-    height:60px;min-height:60px;max-height:none;
+  .outlook-simple .chips{grid-template-columns:repeat(5,minmax(0,1fr));gap:3px}
+  .outlook-simple .threshold-chip{height:88px;min-height:88px;max-height:88px}
+  .outlook-simple .threshold-chip .chip-meaning{
+    flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  }
+  .outlook-simple .threshold-chip .simple-swatch{
+    display:inline-block;align-self:center;flex:none;width:7px;height:7px;
   }
   .outlook-simple .threshold-chip .chip-meaning,
   .outlook-simple .threshold-chip .chip-meaning-level,
   .outlook-simple .threshold-chip .chip-meaning-rest{
-    font-size:var(--rain-descriptor-size);
-    line-height:1.16;letter-spacing:normal;
+    font-size:clamp(9px,2.85vw,12px);
+    line-height:1.12;letter-spacing:-.015em;
     white-space:normal;overflow-wrap:normal;
   }
-  .outlook-simple .threshold-chip .chip-meaning-text>span{
-    white-space:normal;
-  }
+  .outlook-simple .threshold-chip .chip-meaning-text>span{white-space:normal}
+  .outlook-simple .chip-meaning-full{display:none}
+  .outlook-simple .chip-meaning-short{display:flex}
 }
 @media(max-width:355px){
   .rr-card-tabs button{font-size:11px;padding:7px 7px}
@@ -1188,7 +1194,7 @@ __SHARED_RAIN_TYPOGRAPHY__
     font-size:12px;
     letter-spacing:-.02em;
   }
-  .outlook-simple .threshold-chip .simple-swatch{display:none}
+  .outlook-simple .threshold-chip .simple-swatch{display:inline-block}
 }
 @media(max-width:355px){
   .outlook-simple .threshold-chip .chip-meaning,
@@ -1264,6 +1270,7 @@ __SHARED_RAIN_TYPOGRAPHY__
   // Identical base colors in the options, graph lines, legend and bars.
   const colors = sourceColors;
   const amountWords = ['very light','light','moderate','heavy','intense'];
+  const shortAmountWords = ['v. light','light','mod.','heavy','intense'];
   const amountButtonLines = [
     ['very light','rain or more'], ['light rain','or more'],
     ['moderate','rain or more'], ['heavy rain','or more'],
@@ -1352,7 +1359,7 @@ __SHARED_RAIN_TYPOGRAPHY__
   function setDay(i){state.day=state.day===i?null:i;redrawSelection();}
   function controls(){
     const choices=byId('threshold-chips');
-    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span class="chip-meaning-text"><span class="chip-meaning-level">${amountButtonLines[i][0]}</span><span class="chip-meaning-rest">${amountButtonLines[i][1]}</span></span></span></button>`).join('');
+    if(!choices.children.length)choices.innerHTML=thresholds.map((t,i)=>`<button type="button" class="threshold-chip" aria-pressed="false" data-threshold="${i}" style="--chip:${sourceColors[i]};--chip-stroke:${colors[i]};--chip-bg:${tint(sourceColors[i],.16)}" title="${amountWords[i]} rain or more" aria-label="Select chance of at least ${t} mm (${amountWords[i]} rain or more)"><span class="chip-top"><span class="swatch"></span><span class="chip-mm">${t} mm</span></span><span class="chip-meaning"><span class="swatch simple-swatch" aria-hidden="true"></span><span class="chip-meaning-text chip-meaning-full"><span class="chip-meaning-level">${amountButtonLines[i][0]}</span><span class="chip-meaning-rest">${amountButtonLines[i][1]}</span></span><span class="chip-meaning-text chip-meaning-short" aria-hidden="true"><span class="chip-meaning-level">${shortAmountWords[i]}</span><span class="chip-meaning-rest">or more</span></span></span></button>`).join('');
     choices.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed',String(Number(b.dataset.threshold)===state.threshold)));
     document.body.classList.toggle('outlook-simple',simple);
     document.querySelectorAll('.view-tab').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.view===state.view)));
@@ -1718,10 +1725,12 @@ def _simple_chance_chip(
         return "<div class='rr-chip rr-chip-na' aria-label='Rain chance unavailable'>—</div>"
     bg, text_color = _cell_style(threshold, probability)
     chance_phrase = _chance_descriptor(float(probability)).capitalize() + " chance"
-    amount_phrase = _rain_amount_descriptor(float(threshold)).capitalize() + " rain"
+    amount_level = _rain_amount_descriptor(float(threshold))
+    amount_short = {"very light": "v. light", "moderate": "mod."}.get(amount_level, amount_level)
+    amount_phrase = amount_short.capitalize() + " or more"
     return (
         f"<div class='rr-chip rr-chip-simple' style='{bg}color:{text_color};' "
-        f"aria-label='{probability:.0f}% chance of at least {threshold} mm: {chance_phrase}, {amount_phrase}'>"
+        f"aria-label='{probability:.0f}% chance of at least {threshold} mm: {chance_phrase}, {amount_level} rain or more'>"
         f"<span class='rr-simple-chance'>{chance_phrase}</span>"
         f"<span class='rr-simple-threshold'>{amount_phrase}</span>"
         "</div>"
@@ -1941,7 +1950,7 @@ def render_rain_rows_html(pct_result: dict, threshold_result: dict | None = None
         # Keep all day details closed on the initial render.
         initial_class = ""
         expanded = "false"
-        simple_total_descriptor = _rain_amount_descriptor(total_med)
+        simple_total_descriptor = _simple_rain_range(total_med, total_p90)
         total_is_range = " to " in simple_total_descriptor
         if total_is_range:
             first_amount, second_amount = simple_total_descriptor.split(" to ", 1)
@@ -2727,6 +2736,8 @@ button{cursor:pointer}
 .temp-hour-scroll{overflow-x:auto;overscroll-behavior-inline:contain;padding-bottom:4px}
 .temp-hours{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(57px,1fr);gap:5px;min-width:max-content}
 .temp-hour{min-width:57px;border-radius:8px;background:var(--severity-bg,#fff);border:1px solid var(--severity-border,#e7eaf0);padding:7px 5px;text-align:center;color:var(--rain-ink)}
+.temp-hour.is-current-period{outline:2px solid var(--sw-accent,#1786B6);outline-offset:-2px}
+.temp-hour-now{font-weight:700;color:var(--sw-accent,#1786B6);margin-left:3px}
 .temp-hour-peak{font-weight:700;color:var(--rain-section)}
 .temp-hour-time{font-size:var(--rain-micro-size);color:var(--rain-muted);display:block}
 .temp-hour-main{font-size:var(--rain-value-size);font-weight:750;display:block;line-height:1.1;margin:5px 0 3px}
@@ -2819,15 +2830,30 @@ function height(){
   frameHeightPending=true;
   requestAnimationFrame(()=>{
     frameHeightPending=false;
-    // Do not read document.scrollHeight or directly change frameElement.style.
-    // Both can feed the iframe's assigned height back into its own next height.
-    const h=Math.max(1,Math.ceil(root.getBoundingClientRect().bottom - document.body.getBoundingClientRect().top + 2));
+    // Measure the card itself: document scrollHeight can retain a previously
+    // expanded iframe's viewport height and leave a blank area on collapse.
+    const h=Math.max(1,Math.ceil(root.getBoundingClientRect().height+2));
     if(Math.abs(h-lastFrameHeight)<2)return;
     lastFrameHeight=h;
+    // Modern inline iframes can be adjusted directly when same-origin.
+    // Never measure their current height to calculate h (feedback loop).
+    try{
+      const frame=window.frameElement;
+      if(frame&&Math.abs(frame.getBoundingClientRect().height-h)>3){
+        frame.style.setProperty('height',h+'px','important');
+        frame.style.setProperty('min-height','0px','important');
+      }
+    }catch(e){} // Cross-origin embedding: the Streamlit message below handles it.
     try{window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*')}catch(e){}
   });
 }
-function animateHeight(){height()}
+function animateHeight(){
+  height();
+  // Follow up after the DOM and any entrance animation have settled so the
+  // embedding frame always receives the collapsed size as well as expanded.
+  window.setTimeout(height,80);
+  window.setTimeout(height,300);
+}
 function dayHTML(day,i){
   const selectedNow=selected===i;
   const todayTag=day.today?'<span class="rr-today-tag">TODAY</span>':'';
@@ -2839,8 +2865,8 @@ function dayHTML(day,i){
     {name:'P90 · higher estimate',value:p?.p90??null,classify:true},
     {name:'Peak air temperature',value:airVal,classify:false}
   ];
-  const hours=day.steps.map((step,j)=>`<div class="temp-hour" style="${classColors(step.hi.median)}">
-    <span class="temp-hour-time">${safe(step.label.toLowerCase())}${p&&p.index===j?' <span class="temp-hour-peak">(peak)</span>':''}</span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span>
+  const hours=day.steps.map((step,j)=>`<div class="temp-hour" data-valid-time="${safe(step.time)}" style="${classColors(step.hi.median)}">
+    <span class="temp-hour-time">${safe(step.label.toLowerCase())}${p&&p.index===j?' <span class="temp-hour-peak">(peak)</span>':''}<span class="temp-hour-now" hidden>NOW</span></span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span>
     <span class="temp-hour-secondary">Air ${fmt(step.temp.median,'°')}</span></div>`).join('');
   const peakTime=p?.time?` (${safe(p.time.toLowerCase())})`:'';
   return `<div class="temp-day-wrap" data-day-wrap="${i}">
@@ -2865,7 +2891,17 @@ function dayHTML(day,i){
     </div></div></section>
   </div>`;
 }
-function updateRows(){list.innerHTML=days.map(dayHTML).join('');height()}
+function highlightCurrentPeriod(){
+  const now=Date.now(),period=3*60*60*1000;
+  list.querySelectorAll('.temp-hour[data-valid-time]').forEach(tile=>{
+    const start=Date.parse(tile.dataset.validTime);
+    const current=Number.isFinite(start)&&start<=now&&now<start+period;
+    tile.classList.toggle('is-current-period',current);
+    const marker=tile.querySelector('.temp-hour-now');
+    if(marker)marker.hidden=!current;
+  });
+}
+function updateRows(){list.innerHTML=days.map(dayHTML).join('');highlightCurrentPeriod();height()}
 function selectDay(i){if(i<0||i>=days.length)return;selected=selected===i?-1:i;updateRows();drawGraph();animateHeight()}
 // One stable listener survives every re-render and works when tapping child spans/SVGs.
 list.addEventListener('click',event=>{
@@ -3051,6 +3087,8 @@ if(typeof ResizeObserver!=='undefined'){
 }
 window.addEventListener('resize',()=>{drawGraph();height()});
 if(document.fonts?.ready)document.fonts.ready.then(()=>{drawGraph();height()});
+// Update the highlighted period as the local clock crosses a 3-hour boundary.
+window.setInterval(highlightCurrentPeriod,60*1000);
 refresh();
 })();
 </script>
