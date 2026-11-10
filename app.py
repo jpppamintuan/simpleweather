@@ -554,10 +554,14 @@ SHARED_RAIN_TYPOGRAPHY_CSS = r'''
 .rr-day-calendar,.day-label .date,.day-label .date-inline{
   font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date);line-height:1.15;
 }
-.rr-today-tag,.day-label .today-mini,.panel-day .today-mini{
+.rr-today-tag,.day-label .today-mini,.panel-day .today-mini,.matrix-today{
   font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);
   letter-spacing:.025em;line-height:1.15;
 }
+/* A small unboxed TODAY marker above each day's date in all cards. */
+.rr-day .rr-today-tag,.temp-day-date .rr-today-tag,
+.day-label .today-mini{margin:0 0 2px;white-space:nowrap;}
+.matrix-today{display:inline-block;margin-left:6px;vertical-align:baseline;white-space:nowrap;}
 .rr-h,.bar-header{
   font-size:var(--rain-header-size);font-weight:700;color:#7A8796;
 }
@@ -1294,7 +1298,8 @@ __SHARED_RAIN_TYPOGRAPHY__
   }
   function exact(){
     const th=thresholds.map((t,i)=>`<th style="background:${tint(sourceColors[i],.20)}">≥${t} mm</th>`).join('');
-    const rows=dates.map(d=>`<tr><td><strong>${fmtWeekFull.format(d.startDate)}</strong> ${fmtDayMonthFull.format(d.startDate)}</td>${d.values.map((p,i)=>`<td style="background:${shade(sourceColors[i],p)};color:${ink(sourceColors[i],p)}">${pct(p)}</td>`).join('')}</tr>`).join('');
+    const todayKey=phDateKey(new Date());
+    const rows=dates.map(d=>`<tr><td><strong>${fmtWeekFull.format(d.startDate)}</strong> ${fmtDayMonthFull.format(d.startDate)}${d.date===todayKey?' <span class="matrix-today">TODAY</span>':''}</td>${d.values.map((p,i)=>`<td style="background:${shade(sourceColors[i],p)};color:${ink(sourceColors[i],p)}">${pct(p)}</td>`).join('')}</tr>`).join('');
     byId('exact-table').innerHTML=`<table><thead><tr><th>Day</th>${th}</tr></thead><tbody>${rows}</tbody></table>`;
   }
   function resizeFrame(){
@@ -2405,6 +2410,7 @@ def render_temperature_forecast_html(temp_result: dict, location_name: str) -> s
         records.append({
             "date": day.isoformat(),
             "weekday": day.strftime("%A"),
+            "shortWeekday": day.strftime("%a"),
             "day": f"{day.day} {day:%b}",
             "full": f"{day:%A}, {day.day} {day:%B}",
             "today": day == today,
@@ -2440,12 +2446,14 @@ button{cursor:pointer}
 .temp-root button:focus-visible,.temp-root input:focus-visible,.temp-root summary:focus-visible{outline:2px solid #159bd6;outline-offset:3px}
 .rr-card-title{font-size:var(--rain-title-size);font-weight:720;line-height:1.3;margin:0;color:var(--rain-ink);letter-spacing:-.025em}
 .temp-top-subtitle{margin:3px 0 0;color:var(--rain-muted);font-size:var(--rain-secondary-size);font-weight:400}
-.temp-card-controls{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:15px 0 11px;flex-wrap:nowrap}
+.temp-card-controls{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:15px 0 11px;flex-wrap:wrap;position:relative;z-index:2;touch-action:manipulation}
+.temp-card-controls .rr-card-tabs{max-width:100%}
+.temp-card-controls .rr-simple-toggle{margin-left:auto}
 .rr-card-tabs{display:flex;align-items:center;gap:3px;border-radius:13px;padding:4px;background:#eef1f5;min-width:0;flex:0 1 auto}
-.rr-card-tabs button{color:#677586;border:0;border-radius:10px;background:transparent;padding:8px 14px;white-space:nowrap;line-height:1.2;font-size:var(--rain-tabs-size);font-weight:700}
+.rr-card-tabs button{color:#677586;border:0;border-radius:10px;background:transparent;padding:8px 14px;white-space:nowrap;line-height:1.2;font-size:var(--rain-tabs-size);font-weight:700;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .rr-card-tabs button[aria-selected="true"]{background:#fff;color:#1c3044;box-shadow:0 2px 8px #1e3b5020}
 .rr-simple-toggle{display:flex;align-items:center;gap:8px;font-size:13px;color:#506070;font-weight:650;cursor:pointer;white-space:nowrap;flex:0 0 auto;user-select:none}
-.rr-simple-toggle input{appearance:none;margin:0;width:37px;height:22px;position:relative;border-radius:50px;background:#d5dbe3;cursor:pointer}
+.rr-simple-toggle input{appearance:none;margin:0;width:37px;height:22px;position:relative;border-radius:50px;background:#d5dbe3;cursor:pointer;touch-action:manipulation}
 .rr-simple-toggle input:after{content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;background:#fff;border-radius:50%;box-shadow:0 1px 3px #0002;transition:left .16s}
 .rr-simple-toggle input:checked{background:#25a8db}.rr-simple-toggle input:checked:after{left:18px}
 .temp-guide{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);margin:0 0 10px}
@@ -2477,6 +2485,8 @@ button{cursor:pointer}
 .temp-day-button[aria-expanded="true"]{background:#eef6fa;border-radius:10px 10px 0 0;box-shadow:inset 3px 0 0 #31ace0}
 .temp-day-date{display:flex;flex-direction:column;gap:4px;min-width:0}
 .temp-day-heading{display:flex;align-items:center;gap:6px;flex-wrap:wrap;line-height:1.1}
+.temp-day-date .rr-today-tag{margin-bottom:2px}
+.temp-expanded-date{display:flex;flex-direction:column;align-items:flex-start;gap:3px}
 .rr-day-weekday{font-size:var(--rain-day-size);font-weight:700;color:var(--rain-ink)}
 .rr-day-calendar{font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date)}
 .rr-today-tag{font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);letter-spacing:.025em}
@@ -2506,13 +2516,13 @@ button{cursor:pointer}
 .temp-summary-tile{padding:9px 8px;border:1px solid #e7eaf0;border-radius:9px;background:#fff;min-width:0}
 .temp-summary-tile small{display:block;color:var(--rain-muted);font-size:var(--rain-secondary-size);line-height:1.2}
 .temp-summary-tile b{display:block;margin-top:4px;font-weight:750;color:var(--rain-ink);font-size:var(--rain-value-size)}
-.temp-summary-tile.is-hi-classified{background:var(--severity-bg,#fff);border-color:var(--severity-border,#e7eaf0);box-shadow:inset 3px 0 0 var(--severity,#8994a1)}
+.temp-summary-tile.is-hi-classified{background:var(--severity-bg,#fff);border-color:var(--severity-border,#e7eaf0)}
 .temp-risk-inline{display:inline-flex;align-items:center;gap:5px;font-size:var(--rain-secondary-size);font-weight:650;color:var(--rain-section);margin:4px 0 0}
 .temp-hour-title{margin:13px 0 6px}
 .temp-hour-scroll{overflow-x:auto;overscroll-behavior-inline:contain;padding-bottom:4px}
 .temp-hours{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(57px,1fr);gap:5px;min-width:max-content}
-.temp-hour{min-width:57px;border-radius:8px;background:var(--severity-bg,#fff);border:1px solid var(--severity-border,#e7eaf0);border-top:3px solid var(--severity,#8994a1);padding:5px 5px 7px;text-align:center;color:var(--rain-ink)}
-.temp-hour.is-peak{outline:2px solid #31ace0;outline-offset:-2px}
+.temp-hour{min-width:57px;border-radius:8px;background:var(--severity-bg,#fff);border:1px solid var(--severity-border,#e7eaf0);padding:7px 5px;text-align:center;color:var(--rain-ink)}
+.temp-hour-peak{font-weight:700;color:var(--rain-section)}
 .temp-hour-time{font-size:var(--rain-micro-size);color:var(--rain-muted);display:block}
 .temp-hour-main{font-size:var(--rain-value-size);font-weight:750;display:block;line-height:1.1;margin:5px 0 3px}
 .temp-hour-secondary{font-size:var(--rain-micro-size);color:var(--rain-muted);display:block}
@@ -2595,15 +2605,24 @@ function severityFor(value){
 function classColors(value){
   const tone=severityFor(value),hex=tone.color.replace('#','');
   const r=parseInt(hex.slice(0,2),16),g=parseInt(hex.slice(2,4),16),b=parseInt(hex.slice(4,6),16);
-  return `--severity:${tone.color};--severity-bg:rgba(${r},${g},${b},.09);--severity-border:rgba(${r},${g},${b},.37)`;
+  return `--severity:${tone.color};--severity-bg:rgba(${r},${g},${b},.20);--severity-border:rgba(${r},${g},${b},.49)`;
 }
 function safe(text){return String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+let lastFrameHeight=0, frameHeightPending=false;
 function height(){
-  const h=Math.ceil(document.documentElement.scrollHeight+3);
-  try{if(window.frameElement){window.frameElement.style.setProperty('height',h+'px','important');window.frameElement.style.setProperty('min-height','0px','important')}}catch(e){}
-  try{window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*')}catch(e){}
+  if(frameHeightPending)return;
+  frameHeightPending=true;
+  requestAnimationFrame(()=>{
+    frameHeightPending=false;
+    // Do not read document.scrollHeight or directly change frameElement.style.
+    // Both can feed the iframe's assigned height back into its own next height.
+    const h=Math.max(1,Math.ceil(root.getBoundingClientRect().bottom - document.body.getBoundingClientRect().top + 2));
+    if(Math.abs(h-lastFrameHeight)<2)return;
+    lastFrameHeight=h;
+    try{window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*')}catch(e){}
+  });
 }
-function animateHeight(){const start=performance.now();function tick(){height();if(performance.now()-start<350)requestAnimationFrame(tick)}requestAnimationFrame(tick)}
+function animateHeight(){height()}
 function dayHTML(day,i){
   const selectedNow=selected===i;
   const todayTag=day.today?'<span class="rr-today-tag">TODAY</span>':'';
@@ -2615,13 +2634,13 @@ function dayHTML(day,i){
     {name:'P90 · higher estimate',value:p?.p90??null,classify:true},
     {name:'Peak air temperature',value:airVal,classify:false}
   ];
-  const hours=day.steps.map((step,j)=>`<div class="temp-hour ${p&&p.index===j?'is-peak':''}" style="${classColors(step.hi.median)}">
-    <span class="temp-hour-time">${safe(step.label)}</span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span>
+  const hours=day.steps.map((step,j)=>`<div class="temp-hour" style="${classColors(step.hi.median)}">
+    <span class="temp-hour-time">${safe(step.label.toLowerCase())}${p&&p.index===j?' <span class="temp-hour-peak">(peak)</span>':''}</span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span>
     <span class="temp-hour-secondary">Air ${fmt(step.temp.median,'°')}</span></div>`).join('');
   const peakTime=p?.time?` (${safe(p.time.toLowerCase())})`:'';
   return `<div class="temp-day-wrap" data-day-wrap="${i}">
     <button type="button" class="temp-day-button" data-day="${i}" aria-expanded="${selectedNow}" aria-controls="temp-detail-${i}">
-      <span class="temp-day-date"><span class="temp-day-heading"><span class="rr-day-weekday">${safe(day.weekday)}</span>${todayTag}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
+      <span class="temp-day-date">${todayTag}<span class="rr-day-weekday">${safe(day.shortWeekday)}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
       <span class="temp-day-numbers">
         <span class="temp-day-metric"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(hiVal,'°')}</b><b class="temp-descriptor" style="--severity:${day.severity.color}" ${simple.checked?'':'hidden'}><i class="temp-risk-dot" aria-hidden="true"></i>${safe(day.severity.label)}</b><small>Heat Index</small></span>
         <span class="temp-day-metric secondary"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(airVal,'°')}</b><b class="temp-descriptor" ${simple.checked?'':'hidden'}>${safe(day.airDescriptor)}</b><small>Air temp</small></span>
@@ -2629,7 +2648,7 @@ function dayHTML(day,i){
     </button>
     <section class="temp-detail ${selectedNow?'is-open':''}" id="temp-detail-${i}" aria-label="Detailed Heat Index forecast for ${safe(day.full)}">
       <div class="temp-detail-collapse"><div class="temp-detail-body">
-      <div class="temp-detail-top"><div><strong>${todayTag?'<span class="rr-today-tag">TODAY </span>':''}${safe(day.full)}</strong></div>
+      <div class="temp-detail-top"><div class="temp-expanded-date">${todayTag}<strong>${safe(day.full)}</strong></div>
       <div style="text-align:right"><div class="temp-detail-caption">Peak Heat Index${peakTime}</div>${headline}
         <div class="temp-detail-descriptor"><span class="temp-risk-dot" style="--severity:${day.severity.color}"></span>${safe(day.severity.label)}</div>
       </div></div>
@@ -2674,11 +2693,11 @@ function drawGraph(){
  if(!flat.length)return;
  const secondaryVariable=variable==='hi'?'temp':'hi';
  // Both charts always share the same Y-axis, independently of the selected tab.
- // Include all heat-index classification thresholds, so the full risk scale is visible.
+ // Category lines are overlays only and do not expand the forecast-based range.
  const values=flat.flatMap(point=>[...Object.values(point.step.hi).filter(Number.isFinite),...Object.values(point.step.temp).filter(Number.isFinite)]);
  if(!values.length){add('text',{x:w/2,y:100,'text-anchor':'middle',fill:muted,'font-size':12},'No data for this forecast');return}
- const low=Math.floor((Math.min(...values,25)-2)/5)*5;
- let high=Math.ceil((Math.max(...values,52)+2)/5)*5;
+ const low=Math.floor((Math.min(...values)-2)/5)*5;
+ let high=Math.ceil((Math.max(...values)+2)/5)*5;
  if(high-low<10)high=low+10;
  const x0=flat[0].ms,x1=flat[flat.length-1].ms;
  const x=ms=>l+(x1===x0 ? .5 :(ms-x0)/(x1-x0))*(r-l);
@@ -2739,10 +2758,31 @@ function drawGraph(){
      // Every daily peak stays labeled, whether or not its day is expanded.
      let ly=yy<t+19?yy+17:yy-11;
      if(variable==='hi'&&showReference.checked&&i===0){ly=yy<t+28?yy+19:Math.max(t+12,yy-24);}
-     add('text',{x:Math.max(l+11,Math.min(r-11,xx)),y:ly,'text-anchor':'middle',fill:cfg.stroke,'font-size':10.5,'font-weight':750},fmt(peak.value,'°'));
+     // Give the first peak label some breathing room from threshold labels at the Y-axis.
+     const edgeLabel=variable==='hi'&&showReference.checked&&i===0;
+     const labelX=edgeLabel?Math.min(r-32,xx+17):Math.max(l+11,Math.min(r-11,xx));
+     add('text',{x:labelX,y:ly,'text-anchor':edgeLabel?'start':'middle',fill:cfg.stroke,'font-size':10.5,'font-weight':750},fmt(peak.value,'°'));
    }
  });
- // SVG touch areas cover full day strips. They are inserted last and capture taps.
+ // NOW marker is interpolated between the two surrounding three-hourly medians.
+ // It is intentionally omitted if the current time is outside published steps.
+ const nowMs=Date.now();
+ if(nowMs>=x0&&nowMs<=x1){
+   let before=null,after=null;
+   for(const point of flat){
+     if(point.ms<=nowMs&&Number.isFinite(point.step[variable].median))before=point;
+     if(point.ms>=nowMs&&Number.isFinite(point.step[variable].median)){after=point;break;}
+   }
+   if(before&&after&&after.ms-before.ms<=6*3600*1000){
+     const fraction=after.ms===before.ms?0:(nowMs-before.ms)/(after.ms-before.ms);
+     const nowValue=before.step[variable].median+(after.step[variable].median-before.step[variable].median)*fraction;
+     const xx=x(nowMs), yy=y(nowValue);
+     const currentDot=add('circle',{cx:xx,cy:yy,r:6.6,fill:'#fff',stroke:cfg.stroke,'stroke-width':1.6,'pointer-events':'none','data-current-time':'true'});
+     currentDot.appendChild(s('title',{},`Current time: ${fmt(nowValue)}`));
+     add('circle',{cx:xx,cy:yy,r:3.2,fill:cfg.stroke,stroke:'#fff','stroke-width':.7,'pointer-events':'none'});
+   }
+ }
+ // SVG hit zones cover all daily time intervals (not just narrow peak dots).
  days.forEach((day,i)=>{
    const these=flat.filter(p=>p.day===i);if(!these.length)return;
    let start=x(these[0].ms),end=x(these[these.length-1].ms);
@@ -2752,17 +2792,8 @@ function drawGraph(){
    for(let j=0;j<flat.length;j++)if(flat[j].day===i+1){next=flat[j];break;}
    if(previous)start=(start+x(previous.ms))/2;else start=l;
    if(next)end=(end+x(next.ms))/2;else end=r;
-   const rect=add('rect',{x:start,y:t,width:Math.max(2,end-start),height:h-t-6,role:'button',tabindex:'0','data-chart-day':i,'aria-label':`Select ${day.full} forecast`,class:'temp-plot-hit'});
+   const rect=add('rect',{x:start,y:t,width:Math.max(2,end-start),height:b-t,role:'button',tabindex:'0','data-chart-day':i,'aria-label':`Select ${day.full} forecast`,class:'temp-plot-hit'});
    rect.appendChild(s('title',{},`${day.full}: ${fmt((variable==='hi'?day.hiPeak:day.airPeak)?.value??null)} peak`));
-   let touchX=0,touchY=0,lastTouch=0;
-   rect.addEventListener('touchstart',event=>{const touch=event.touches[0];if(touch){touchX=touch.clientX;touchY=touch.clientY}},{passive:true});
-   rect.addEventListener('touchend',event=>{
-     const touch=event.changedTouches[0];if(!touch)return;
-     if(Math.hypot(touch.clientX-touchX,touch.clientY-touchY)>14)return;
-     event.preventDefault();lastTouch=Date.now();selectDay(i);
-   },{passive:false});
-   rect.addEventListener('click',event=>{if(Date.now()-lastTouch>650)selectDay(i)});
-   rect.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();selectDay(i)}});
  });
  root.querySelector('#temp-chart-title').textContent=(variable==='hi'?'Heat Index':'Air temperature')+' over time';
  root.querySelector('#temp-legend-line').style.background=cfg.stroke;
@@ -2773,6 +2804,31 @@ function drawGraph(){
  caption.hidden=selected<0;
  caption.textContent=selected<0?'':`${days[selected].full} · ${fmt((variable==='hi'?days[selected].hiPeak:days[selected].airPeak)?.value??null)} peak`;
 }
+let graphPointerDown=null, lastGraphPointerUp=0;
+const chartHit=target=>target&&target.closest?target.closest('[data-chart-day]'):null;
+svg.addEventListener('pointerdown',event=>{
+  const hit=chartHit(event.target);
+  graphPointerDown=hit?{id:Number(hit.dataset.chartDay),x:event.clientX,y:event.clientY,pointerId:event.pointerId}:null;
+});
+svg.addEventListener('pointerup',event=>{
+  const hit=chartHit(event.target);
+  if(!hit||!graphPointerDown||graphPointerDown.pointerId!==event.pointerId||graphPointerDown.id!==Number(hit.dataset.chartDay))return;
+  const moved=Math.hypot(event.clientX-graphPointerDown.x,event.clientY-graphPointerDown.y);
+  graphPointerDown=null;
+  if(moved>12)return;
+  lastGraphPointerUp=Date.now();
+  event.preventDefault();
+  selectDay(Number(hit.dataset.chartDay));
+});
+svg.addEventListener('pointercancel',()=>{graphPointerDown=null});
+svg.addEventListener('click',event=>{
+  const hit=chartHit(event.target);
+  if(hit&&Date.now()-lastGraphPointerUp>700)selectDay(Number(hit.dataset.chartDay));
+});
+svg.addEventListener('keydown',event=>{
+  const hit=chartHit(event.target);
+  if(hit&&(event.key==='Enter'||event.key===' ')){event.preventDefault();selectDay(Number(hit.dataset.chartDay));}
+});
 function refresh(){tabs.forEach(b=>b.setAttribute('aria-selected',String(b.dataset.variable===variable)));updateRows();drawGraph();animateHeight()}
 tabs.forEach(b=>b.addEventListener('click',()=>{variable=b.dataset.variable;refresh()}));
 simple.addEventListener('change',()=>{updateRows();animateHeight()});
@@ -2783,8 +2839,10 @@ let lastChartWidth=0;
 if(typeof ResizeObserver!=='undefined'){
   new ResizeObserver(entries=>{
     const width=Math.round(entries[0]?.contentRect?.width||0);
-    if(Math.abs(width-lastChartWidth)>2){lastChartWidth=width;drawGraph();height()}
+    if(Math.abs(width-lastChartWidth)>2){lastChartWidth=width;drawGraph();}
+    height();
   }).observe(root.querySelector('.temp-chart-shell'));
+  new ResizeObserver(height).observe(root);
 }
 window.addEventListener('resize',()=>{drawGraph();height()});
 if(document.fonts?.ready)document.fonts.ready.then(()=>{drawGraph();height()});
@@ -3031,12 +3089,17 @@ if st.session_state.get("last_forecast_location"):
     st.divider()
 if "view_mode" not in st.session_state:
     st.session_state["view_mode"] = "Rainfall Forecast"
+# Preserve existing selections across the label change in already-running sessions.
+if st.session_state.get("view_mode") == "Temperature Forecast":
+    st.session_state["view_mode"] = "Heat Index Forecast"
+if st.session_state.get("forecast_view_selector") == "Temperature Forecast":
+    st.session_state["forecast_view_selector"] = "Heat Index Forecast"
 # There is nothing to switch between before the first Get forecast request.
 # Once forecasts have been requested, show the selector as usual.
 if st.session_state.get("last_forecast_location"):
     _selected_mode = st.segmented_control(
         "View",
-        ["Rainfall Forecast", "Temperature Forecast"],
+        ["Rainfall Forecast", "Heat Index Forecast"],
         default=st.session_state["view_mode"],
         key="forecast_view_selector",
     )
@@ -3112,7 +3175,7 @@ with main:
                             components.html(outlook_html, height=980, scrolling=False)
 
 
-    elif view_mode == "Temperature Forecast":
+    elif view_mode == "Heat Index Forecast":
         if "last_temp_result" in st.session_state:
             temp_result = st.session_state["last_temp_result"]
             temp_location_name = st.session_state["last_temp_location_name"]
