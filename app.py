@@ -644,6 +644,211 @@ SHARED_RAIN_TYPOGRAPHY_CSS = r'''
 }
 '''
 
+# Keep this final style layer identical across the three self-contained forecast
+# iframes. Each original component can retain its chart-specific data colors,
+# but its chrome, controls, labels and interactions inherit these tokens.
+SHARED_FORECAST_DESIGN_CSS = r'''
+/* Simpleweather UI system v1: one source of truth for forecast-card chrome.
+   Data colors (rainfall tiers and Heat Index severity) deliberately stay local. */
+:root{
+  --sw-font:'Source Sans 3','Source Sans Pro',sans-serif;
+  --sw-ink:#283746;
+  --sw-muted:#687585;
+  --sw-subtle:#8994A1;
+  --sw-date:#737D88;
+  --sw-section:#516678;
+  --sw-accent:#1786B6;
+  --sw-focus:#159BD6;
+  --sw-selection-accent:#00BFFF;
+  --sw-surface:#FFFFFF;
+  --sw-panel:#F7FAFC;
+  --sw-hover:#F6F8FB;
+  --sw-selected:#F3F8FB;
+  --sw-line:#E7EBF0;
+  --sw-segment-bg:#EEF1F5;
+  --sw-segment-ink:#677586;
+  --sw-segment-selected:#1C3044;
+  --sw-switch-off:#D5DBE3;
+  --sw-switch-on:#25A8DB;
+  --sw-card-radius:14px;
+  --sw-card-padding:15px;
+  --sw-inner-radius:12px;
+  --sw-day-radius:8px;
+  --sw-tile-radius:8px;
+  --sw-control-radius:10px;
+  --sw-segment-radius:13px;
+  --sw-fast:150ms;
+  --sw-view:200ms;
+  --sw-expand:260ms;
+  /* Backwards-compatible aliases for the rainfall & temperature renderers. */
+  --rain-ink:var(--sw-ink);
+  --rain-muted:var(--sw-muted);
+  --rain-subtle:var(--sw-subtle);
+  --rain-date:var(--sw-date);
+  --rain-section:var(--sw-section);
+  --rain-selected:var(--sw-segment-selected);
+  --rain-today:var(--sw-accent);
+}
+html,body{font-family:var(--sw-font);-webkit-font-smoothing:antialiased}
+button,input,summary{font-family:inherit}
+/* Frame-level chrome is the same at both sides of the Streamlit columns. */
+.rr-root,.shell,.temp-root{
+  box-sizing:border-box;
+  color:var(--sw-ink);
+  background:var(--sw-surface);
+  border:1px solid var(--sw-line);
+  border-radius:var(--sw-card-radius);
+  padding:var(--sw-card-padding);
+  box-shadow:none;
+}
+.rr-card-title,.shell-title h2{
+  color:var(--sw-ink);font-size:var(--rain-title-size);
+  font-weight:700;line-height:1.3;letter-spacing:-.025em;
+}
+.rr-section-heading,.smallheading,.section-label{
+  color:var(--sw-section);font-size:var(--rain-section-size);font-weight:700;
+}
+/* Segmented tabs: same radius, typography, fill, and change of state. */
+.rr-card-tabs,.view-tabs{
+  display:flex;align-items:center;gap:3px;padding:4px;
+  border-radius:var(--sw-segment-radius);background:var(--sw-segment-bg);
+}
+.rr-card-tabs button,.view-tab{
+  border:0;border-radius:var(--sw-control-radius);background:transparent;
+  color:var(--sw-segment-ink);padding:8px 14px;
+  font-size:var(--rain-tabs-size);font-weight:700;line-height:1.2;
+  transition:background-color var(--sw-fast) ease,color var(--sw-fast) ease;
+}
+.rr-card-tabs button[aria-pressed="true"],
+.rr-card-tabs button[aria-selected="true"],.view-tab[aria-selected="true"]{
+  color:var(--sw-segment-selected);background:var(--sw-surface);
+  box-shadow:0 2px 8px #1e3b5020;
+}
+/* Compact graph/bar/matrix icon controls use the same tab treatment. */
+.subview-tabs{
+  background:var(--sw-segment-bg);border-radius:var(--sw-segment-radius);
+  padding:3px;gap:3px;
+}
+.subview-tab{
+  border-radius:var(--sw-control-radius);color:var(--sw-segment-ink);
+  transition:background-color var(--sw-fast) ease,color var(--sw-fast) ease;
+}
+.subview-tab[aria-pressed="true"]{
+  color:var(--sw-segment-selected);background:var(--sw-surface);
+  box-shadow:0 2px 8px #1e3b5020;
+}
+/* The same Simple mode switch, regardless of which iframe owns it. */
+.rr-simple-toggle,.simple-toggle{
+  display:flex;align-items:center;gap:8px;color:#506070;
+  font-size:13px;font-weight:650;cursor:pointer;user-select:none;
+}
+.rr-simple-toggle input,.simple-toggle input{
+  appearance:none;width:37px;height:22px;margin:0;position:relative;
+  flex:0 0 auto;border:0;border-radius:99px;background:var(--sw-switch-off);
+  cursor:pointer;touch-action:manipulation;
+  transition:background-color var(--sw-fast) ease;
+}
+.rr-simple-toggle input:after,.simple-toggle input:after{
+  content:'';position:absolute;left:3px;top:3px;width:16px;height:16px;
+  background:white;border-radius:50%;box-shadow:0 1px 3px #0002;
+  transition:left var(--sw-fast) ease;
+}
+.rr-simple-toggle input:checked,.simple-toggle input:checked{background:var(--sw-switch-on)}
+.rr-simple-toggle input:checked:after,.simple-toggle input:checked:after{left:18px}
+/* Day-row treatment: identical pale selected fill and 2px cyan accent. */
+.rr-selectable,.day-bar,.fingerprint,.temp-day-button{
+  border-radius:var(--sw-day-radius);
+  transition:background-color var(--sw-fast) ease;
+}
+.rr-selectable:hover,.day-bar:hover,.fingerprint:hover,.temp-day-button:hover{
+  background-color:var(--sw-hover);
+}
+.rr-selectable.is-selected,.rr-selectable.is-collapsing,
+.day-bar[aria-pressed="true"],.fingerprint[aria-pressed="true"],
+.day-bar.is-collapsing,.fingerprint.is-collapsing,
+.temp-day-button[aria-expanded="true"]{
+  background:var(--sw-selected);
+  box-shadow:inset 2px 0 0 var(--sw-selection-accent);
+  border-radius:var(--sw-day-radius) var(--sw-day-radius) 0 0;
+}
+.temp-day-wrap{border-radius:var(--sw-day-radius)}
+/* Same compact, unboxed TODAY marker; matrix dates remain inline. */
+.rr-today-tag,.day-label .today-mini,.panel-day .today-mini,.matrix-today{
+  color:var(--sw-accent);font-size:var(--rain-today-size);
+  font-weight:400;letter-spacing:.025em;line-height:1.15;
+}
+.rr-day-weekday,.day-label .day-short strong{
+  color:var(--sw-ink);font-weight:700;font-size:var(--rain-day-size);
+}
+.rr-day-calendar,.day-label .date,.day-label .date-inline{
+  color:var(--sw-date);font-weight:400;font-size:var(--rain-date-size);
+}
+/* Consistent surfaces and corners, without touching colored forecast tiles. */
+.part,.threshold-section,.temp-chart-shell{border-radius:var(--sw-inner-radius);border-color:var(--sw-line)}
+.rr-quantile,.amount-small,.chance-tile,.temp-summary-tile,.temp-hour{
+  border-radius:var(--sw-tile-radius);
+}
+.rr-detail,.panel,.temp-detail-body{background:var(--sw-panel)}
+.rr-detail-content,.panel-slide-content,.temp-detail-body{
+  background:var(--sw-panel);
+  border-color:var(--sw-line);
+  border-radius:0 0 var(--sw-day-radius) var(--sw-day-radius);
+}
+.threshold-chip{border-radius:var(--sw-control-radius)}
+/* Keyboard users see the same focus style in all embedded cards. */
+.rr-root button:focus-visible,.rr-root input:focus-visible,.rr-root summary:focus-visible,
+.shell button:focus-visible,.shell input:focus-visible,.shell summary:focus-visible,
+.temp-root button:focus-visible,.temp-root input:focus-visible,.temp-root summary:focus-visible{
+  outline:2px solid var(--sw-focus);outline-offset:2px;
+}
+/* Shared motion vocabulary; never animate iframe height continuously. */
+@keyframes rrFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes rrFadeOut{from{opacity:1}to{opacity:0}}
+.rr-variant:not([hidden]){animation-duration:var(--sw-view)}
+.rr-variant.is-closing{animation-duration:var(--sw-view)}
+.panel{transition-duration:var(--sw-expand)}
+.rr-detail{transition-duration:var(--sw-expand)}
+.temp-detail.is-open{animation-duration:var(--sw-expand)}
+.temp-chevron{transition-duration:var(--sw-expand)}
+@media(max-width:720px){
+  :root{--sw-card-radius:10px;--sw-card-padding:12px 9px}
+  .rr-card-tabs button{padding:7px 10px}
+  .view-tab{padding:7px 7px}
+}
+/* Five full rainfall-intensity names cannot fit on 320-390px in one
+   row at the standard readable font size. Keep numerical mode's 5-chip
+   row, but let Simple mode show three + two chips instead of shrinking. */
+@media(max-width:430px){
+  .outlook-simple .chips{grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+  .outlook-simple .threshold-chip{
+    height:60px;min-height:60px;max-height:none;
+  }
+  .outlook-simple .threshold-chip .chip-meaning,
+  .outlook-simple .threshold-chip .chip-meaning-level,
+  .outlook-simple .threshold-chip .chip-meaning-rest{
+    font-size:var(--rain-descriptor-size);
+    line-height:1.16;letter-spacing:normal;
+    white-space:normal;overflow-wrap:normal;
+  }
+  .outlook-simple .threshold-chip .chip-meaning-text>span{
+    white-space:normal;
+  }
+}
+@media(max-width:355px){
+  .rr-card-tabs button{font-size:11px;padding:7px 7px}
+  .view-tab{font-size:11px;padding:7px 5px}
+  .rr-simple-toggle,.simple-toggle{font-size:11px;gap:4px}
+  .rr-simple-toggle input,.simple-toggle input{width:33px;height:20px}
+  .rr-simple-toggle input:after,.simple-toggle input:after{width:14px;height:14px}
+  .rr-simple-toggle input:checked:after,.simple-toggle input:checked:after{left:16px}
+}
+@media(prefers-reduced-motion:reduce){
+  .rr-root *, .shell *, .temp-root *{
+    animation:none!important;transition:none!important;scroll-behavior:auto!important;
+  }
+}
+'''
+
 FONT_STACK = "'Source Sans 3', 'Source Sans Pro', sans-serif"
 
 def _neutral_base_rgb() -> tuple[int, int, int]:
@@ -766,7 +971,7 @@ def render_14day_outlook_html(result: dict, location_name: str) -> str:
         .replace("__RECORDS__", encoded)
         .replace("__LOCATION__", escape(location_name))
         .replace("__THRESHOLD_PALETTE__", json.dumps(palette))
-        .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS)
+        .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS + "\n" + SHARED_FORECAST_DESIGN_CSS)
     )
 
 _FOURTEEN_DAY_TEMPLATE = r'''<!doctype html>
@@ -2239,7 +2444,7 @@ def render_six_day_forecast_html(period_results: dict[int, dict], threshold_resu
     .rr-reading-guide .rr-guide-body{padding-top:7px}
     @media(max-width:720px){.rr-root{border-radius:10px;padding:12px 9px}.rr-card-title{font-size:16px}.rr-card-controls{gap:8px}.rr-card-tabs button{padding:7px 12px;font-size:12px}}
     @media(max-width:355px){.rr-card-tabs button{padding:7px 9px}}
-    </style>""" + "<style>" + SHARED_RAIN_TYPOGRAPHY_CSS + "</style>"
+    </style>""" + "<style>" + SHARED_RAIN_TYPOGRAPHY_CSS + "\n" + SHARED_FORECAST_DESIGN_CSS + "</style>"
     title = escape(location_name)
     controls = (
         f"<div class='rr-root rr-card' data-rain-period='{initial_hours}' data-rain-simple='false'>"
@@ -2425,7 +2630,7 @@ def render_temperature_forecast_html(temp_result: dict, location_name: str) -> s
     return (_TEMPERATURE_CARD_TEMPLATE
             .replace("__TEMPERATURE_DATA__", serialized)
             .replace("__LOCATION__", escape(location_name))
-            .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS))
+            .replace("__SHARED_RAIN_TYPOGRAPHY__", SHARED_RAIN_TYPOGRAPHY_CSS + "\n" + SHARED_FORECAST_DESIGN_CSS))
 
 
 _TEMPERATURE_CARD_TEMPLATE = r'''<!doctype html>
