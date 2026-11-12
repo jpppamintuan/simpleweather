@@ -3318,24 +3318,33 @@ def _obs_read_pagasa(start_utc, end_utc):
     return result
 
 
-def _obs_decode_synop(report, when):
-    """Decode FM-12 AAXX dry-bulb/dew-point and explicit 3/6-hour rainfall.
+def _obs_rain_record(when, hours, amount=None, trace=False):
+    """SYNOP RRRtR: the observation time is the END of the reported total."""
+    return {"time": when.isoformat(),
+            "rain_start": (when - timedelta(hours=hours)).isoformat(),
+            "rain_end": when.isoformat(),
+            "rain_hours": hours,
+            **({"rain_trace": True} if trace else {"rain_mm": amount})}
 
-    Decode RRRtR in section 1 and, if present, the supplementary section 3.
-    Ignore other report types and missing or unidentifiable precipitation.
+
+def _obs_decode_synop(report, when):
+    """Decode AAXX temperature/dew point and explicitly timed SYNOP rain.
+
+    Section 1 and section 3 group 6RRRtR includes ONE reporting timestamp,
+    and tR identifies the preceding accumulation interval (WMO code 4019).
+    Other parts of SYNOP (including section 2) are never treated as rain.
     """
     terms = report.replace("=", " ").split()
     if len(terms) < 6 or terms[0] != "AAXX":
         return []
     try:
-        # Prefix: AAXX YYGGiw IIiii iRiXhVV Nddff [00fff]
+        # AAXX YYGGiw IIiii iRiXhVV Nddff [00fff] ...
         start_idx = 6 if len(terms) > 5 and re.fullmatch(r"00\d{3}", terms[5]) else 5
-        section = []
-        supplemental = []
+        section, supplemental = [], []
         current = section
         for word in terms[start_idx:]:
             if word.startswith("222"):
-                current = None  # marine supplementary data, not section 1
+                current = None
                 continue
             if word == "333":
                 current = supplemental
@@ -3347,34 +3356,32 @@ def _obs_decode_synop(report, when):
         t_c = d_c = None
         for word in section:
             if re.fullmatch(r"1[01]\d{3}", word):
-                t_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
+                t_c = float(word[2:]) / 10 * (-1 if word[1] == "1" else 1)
             elif re.fullmatch(r"2[01]\d{3}", word):
-                d_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
+                d_c = float(word[2:]) / 10 * (-1 if word[1] == "1" else 1)
         output = []
         if t_c is not None and -70 <= t_c <= 60:
             output.append({"time": when.isoformat(), "temperature": t_c,
                            "heat_index": _obs_heat_index(t_c, d_c)})
-        rains = []
+        durations = {1: 6, 2: 12, 3: 18, 4: 24, 5: 1,
+                     6: 2, 7: 3, 8: 9, 9: 15}
         for word in section + supplemental:
             if not re.fullmatch(r"6\d{4}", word):
                 continue
-            number = int(word[1:4])
-            hours = {1: 6, 2: 12, 3: 18, 4: 24, 5: 1, 6: 2,
-                     7: 3, 8: 9, 9: 15}.get(int(word[4]))
-            if hours not in (3, 6):
+            hours = durations.get(int(word[4]))
+            if hours is None:
                 continue
+            number = int(word[1:4])
             if number == 990:
-                rains.append({"time": when.isoformat(), "rain_trace": True,
-                              "rain_hours": hours})
+                item = _obs_rain_record(when, hours, trace=True)
             elif number == 989:
+                # "989 mm or more" is not a precise amount to compare.
                 continue
             else:
-                mm = (number - 990)/10 if number >= 991 else float(number)
-                if 0 <= mm <= 3000:
-                    rains.append({"time": when.isoformat(), "rain_mm": mm,
-                                  "rain_hours": hours})
-        # De-duplicate sections when both repeat the same value/interval.
-        for item in rains:
+                mm = (number - 990) / 10 if number >= 991 else float(number)
+                if not 0 <= mm <= 3000:
+                    continue
+                item = _obs_rain_record(when, hours, amount=mm)
             if item not in output:
                 output.append(item)
         return output
@@ -3382,27 +3389,23 @@ def _obs_decode_synop(report, when):
         return []
 
 
-def _obs_read_ogimet(start_utc, end_utc, region):
-    """Read raw SYNOP CSV, using bounded country-specific WMO prefixes.
+def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_ids=()):
+    """Retrieve raw OGIMET CSV (SYNOP, not METAR/AWS) with source diagnostics.
 
-    OGIMET's `block` is a station-ID *prefix*, not a country identifier.
-    `46` covers far more than Taiwan and can cause oversized/blocked replies.
-    Split Taiwan into 466xx and 467xx. PH is contained in 98xxx.
+    For Taiwan, ask for the usual 466/467 prefixes first. If OGIMET returns
+    no valid reports, try its documented state query and up to two exact WMO
+    station IDs. This changes retrieval, never an observation value.
     """
-    blocks = ("98",) if region == "PH" else ("466", "467")
-    result = {}
-    errors = []
-    for block in blocks:
-        params = {"block": block,
-                  "begin": start_utc.strftime("%Y%m%d%H%M"),
-                  "end": end_utc.strftime("%Y%m%d%H%M"),
-                  "lang": "eng", "header": "yes"}
+    result, errors, request_notes = {}, [], []
+    parsed_lines_total = 0
+    decoded_reports_total = 0
+
+    def get_one(params, label):
+        nonlocal parsed_lines_total, decoded_reports_total
         try:
             response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
             body = response.text
-            if not body.strip():
-                continue
-            parsed_lines = 0
+            rows, accepted = 0, 0
             for line in body.splitlines():
                 items = line.strip().split(",", 6)
                 if len(items) != 7:
@@ -3410,7 +3413,12 @@ def _obs_read_ogimet(start_utc, end_utc, region):
                 station = items[0].strip()
                 if not re.fullmatch(r"\d{5}", station):
                     continue
-                if not station.startswith(block):
+                # Strictly match the requested country, even for a state query.
+                if region == "TW" and not station.startswith(("466", "467")):
+                    continue
+                if region == "PH" and not station.startswith("98"):
+                    continue
+                if params.get("block") and not station.startswith(params["block"]):
                     continue
                 try:
                     when = datetime(*[int(p) for p in items[1:6]], tzinfo=timezone.utc)
@@ -3418,52 +3426,111 @@ def _obs_read_ogimet(start_utc, end_utc, region):
                         continue
                 except (TypeError, ValueError):
                     continue
-                parsed_lines += 1
-                parsed = _obs_decode_synop(items[6], when)
+                rows += 1
+                parsed = _obs_decode_synop(items[6].strip(), when)
                 if parsed:
+                    accepted += 1
                     result.setdefault(station, []).extend(parsed)
-            if not parsed_lines and "<html" in body[:2000].lower():
-                errors.append(f"{block}: unexpected HTML response")
-            elif not parsed_lines and any(token in body.lower() for token in ("sorry", "too many", "temporarily", "error")):
-                errors.append(f"{block}: service reported an error")
+            parsed_lines_total += rows
+            decoded_reports_total += accepted
+            request_notes.append(f"{label}: {rows} CSV reports, {accepted} decoded")
+            if not rows and "<html" in body[:2000].lower():
+                errors.append(f"{label}: unexpected HTML instead of CSV")
+            elif not rows and any(t in body.lower() for t in ("sorry", "too many", "temporarily", "error")):
+                errors.append(f"{label}: provider returned an error message")
         except (requests.RequestException, ValueError) as exc:
-            errors.append(f"{block}: {type(exc).__name__}")
-    if errors and not result:
+            errors.append(f"{label}: {type(exc).__name__}")
+
+    params = {"begin": start_utc.strftime("%Y%m%d%H%M"),
+              "end": end_utc.strftime("%Y%m%d%H%M"),
+              "lang": "eng", "header": "yes"}
+    blocks = ("98",) if region == "PH" else ("466", "467")
+    for block in blocks:
+        get_one(dict(params, block=block), f"block {block}")
+
+    if region == "TW" and decoded_reports_total == 0:
+        get_one(dict(params, state="Taiwan"), "state Taiwan")
+        if decoded_reports_total == 0:
+            for station_id in list(dict.fromkeys(str(x) for x in nearest_ids))[:2]:
+                if re.fullmatch(r"(?:466|467)\d{2}", station_id):
+                    get_one(dict(params, block=station_id), f"station {station_id}")
+
+    if diagnostics is not None:
+        diagnostics.extend(request_notes)
+        diagnostics.extend(errors)
+    if errors and not result and parsed_lines_total == 0:
         raise RuntimeError("; ".join(errors))
     return result
 
 
 def _obs_has_data(records, variable, hours):
     if variable == "rain":
-        usable_periods = (3, 6) if hours == 6 else (3,)
-        return any(r.get("rain_hours") in usable_periods and
-                   (r.get("rain_mm") is not None or r.get("rain_trace")) for r in records)
+        return any((r.get("rain_hours") in (1, 2, 3, 6) and
+                    r.get("rain_hours") <= hours and
+                    (r.get("rain_mm") is not None or r.get("rain_trace")))
+                   for r in records)
     return any(r.get("temperature") is not None for r in records)
 
 
 def _obs_match_rain(records, start, end, hours):
-    """Use exactly matching reports; aggregate two contiguous 3h only for 6h."""
-    times = {}
+    """Match reporting-period intervals exactly; never subdivide longer totals.
+
+    Example: SYNOP at 12Z with 6RRR1 represents the whole 06-12Z period.
+    Permitted shorter reports may be summed ONLY if they cover the requested
+    period completely, with no overlaps, gaps or inferred zeros.
+    """
+    if end - start != timedelta(hours=hours):
+        return None
+    by_start = {}
     for r in records:
         if r.get("rain_mm") is None and not r.get("rain_trace"):
             continue
         try:
-            stamp = datetime.fromisoformat(r["time"])
-        except (ValueError, KeyError):
+            length = int(r["rain_hours"])
+            if length not in (1, 2, 3, 6) or length > hours:
+                continue
+            # Explicit interval endpoints take precedence over derived ones.
+            report_end = datetime.fromisoformat(r.get("rain_end") or r["time"])
+            report_start = datetime.fromisoformat(r["rain_start"]) if r.get("rain_start") else report_end - timedelta(hours=length)
+            if report_end - report_start != timedelta(hours=length):
+                continue
+            if not (start <= report_start < report_end <= end):
+                continue
+            by_start.setdefault(report_start, []).append((report_end, r))
+        except (ValueError, TypeError, KeyError):
             continue
-        if (r.get("rain_hours"), stamp) not in times:
-            times[(r["rain_hours"], stamp)] = r
-    direct = times.get((hours, end))
-    if direct is not None:
-        return {k: direct[k] for k in ("rain_mm", "rain_trace") if k in direct}
-    if hours == 6:
-        half = end - timedelta(hours=3)
-        first, second = times.get((3, half)), times.get((3, end))
-        if first is not None and second is not None:
-            # An unknown trace amount cannot be added as if it were zero.
-            if first.get("rain_mm") is not None and second.get("rain_mm") is not None:
-                return {"rain_mm": first["rain_mm"]+second["rain_mm"]}
-    return None
+
+    # Prefer direct totals and then the fewest valid contiguous reports.
+    from functools import lru_cache
+    @lru_cache(None)
+    def segments(cursor):
+        if cursor == end:
+            return ()
+        options = []
+        for next_end, r in by_start.get(cursor, ()):
+            remaining = segments(next_end)
+            if remaining is not None:
+                options.append((r,) + remaining)
+        return min(options, key=len) if options else None
+
+    chosen = segments(start)
+    if not chosen:
+        return None
+    if len(chosen) == 1 and chosen[0].get("rain_trace"):
+        return {"rain_trace": True}
+    if any(r.get("rain_trace") or r.get("rain_mm") is None for r in chosen):
+        # A trace is not zero and cannot be summed as a precise quantity.
+        return None
+    return {"rain_mm": round(sum(r["rain_mm"] for r in chosen), 3)}
+
+
+def _obs_dataset_summary(name, by_station):
+    """Counts by rainfall DURATION, not misleading 'all decoded readings'."""
+    rows = [record for station_rows in by_station.values() for record in station_rows]
+    rain_counts = {h: sum(r.get("rain_hours") == h for r in rows) for h in (1, 2, 3, 6, 12, 24)}
+    t_count = sum(r.get("temperature") is not None for r in rows)
+    amounts = ", ".join(f"{h}h={rain_counts[h]}" for h in (1, 2, 3, 6, 12, 24) if rain_counts[h]) or "none"
+    return f"{name}: {len(by_station)} stations, {t_count} temperature reports, rainfall intervals ({amounts})"
 
 
 def _obs_match_temp(records, when):
@@ -3521,13 +3588,17 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
         try:
             data = _obs_read_pagasa(start, end)
             datasets.append(("PAGASA WIS2", data))
-            notes.append(f"PAGASA WIS2: {sum(len(v) for v in data.values())} decoded readings")
+            notes.append(_obs_dataset_summary("PAGASA WIS2", data))
         except Exception as exc:
             notes.append(f"PAGASA WIS2: {type(exc).__name__}")
     try:
-        data = _obs_read_ogimet(start, end, region)
+        ogimet_checks = []
+        data = _obs_read_ogimet(start, end, region, diagnostics=ogimet_checks,
+                                nearest_ids=[s["id"] for s in candidates[:3]])
         datasets.append(("OGIMET (SYNOP)", data))
-        notes.append(f"OGIMET: {sum(len(v) for v in data.values())} decoded readings")
+        notes.append(_obs_dataset_summary("OGIMET", data))
+        if region == "TW" and not data:
+            notes.append("OGIMET attempts: " + "; ".join(ogimet_checks))
     except Exception as exc:
         notes.append(f"OGIMET: {type(exc).__name__}: {str(exc)[:100]}")
     any_relevant_reading = False
@@ -3592,7 +3663,7 @@ def _render_observation_component(html, kind, lat, lon, periods_by_hours, region
     """
     # A bridge-code change must create a new component identity so Streamlit
     # cannot keep an iframe/cached component with obsolete JavaScript.
-    fingerprint = hashlib.sha256((html + "\nobs-bridge-v2").encode("utf-8")).hexdigest()[:20]
+    fingerprint = hashlib.sha256((html + "\nobs-bridge-v3").encode("utf-8")).hexdigest()[:20]
     code = (_OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
             .replace("__OBS_FINGERPRINT__", fingerprint))
     folder = _OBS_COMPONENT_DIR / (kind + "_" + fingerprint)
