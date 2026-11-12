@@ -3404,7 +3404,7 @@ def _obs_decode_synop(report, when):
         return []
 
 
-def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_ids=()):
+def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_ids=(), rain_hours=None, requested_periods=()):
     """Read CSV SYNOP reports and retain only vetted regional WMO stations.
 
     The country query uses the exact "Taiw" prefix from OGIMET's territorial
@@ -3414,6 +3414,22 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
     result, errors, request_notes = {}, [], []
     decoded_reports_total = 0
     parsed_lines_total = 0
+    requested_windows = []
+    if rain_hours in (3, 6):
+        for first, last in requested_periods:
+            try:
+                window = (datetime.fromisoformat(first), datetime.fromisoformat(last))
+                if window[1] <= end_utc:
+                    requested_windows.append(window)
+            except (TypeError, ValueError):
+                pass
+
+    def has_matching_rain(station_ids=None):
+        if not requested_windows:
+            return False
+        ids = station_ids if station_ids is not None else result.keys()
+        return any(_obs_match_rain(result.get(str(wmo), ()), first, last, rain_hours) is not None
+                   for wmo in ids for first, last in requested_windows)
 
     def get_one(params, label):
         nonlocal decoded_reports_total, parsed_lines_total
@@ -3421,6 +3437,8 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
             response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
             body = response.text
             raw_csv, eligible, decoded = 0, 0, 0
+            rain_by_length = {3: 0, 6: 0, 24: 0}
+            decoded_hours = set()
             rejected_station_samples = set()
             for line in body.splitlines():
                 items = line.strip().split(",", 6)
@@ -3453,10 +3471,18 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
                 parsed = _obs_decode_synop(items[6].strip(), when)
                 if parsed:
                     decoded += 1
+                    decoded_hours.add(when.hour)
+                    for record in parsed:
+                        period = record.get("rain_hours")
+                        if period in rain_by_length:
+                            rain_by_length[period] += 1
                     result.setdefault(station, []).extend(parsed)
             parsed_lines_total += eligible
             decoded_reports_total += decoded
-            detail = f"{label}: {raw_csv} raw CSV reports, {eligible} eligible, {decoded} decoded"
+            detail = (f"{label}: {raw_csv} raw CSV reports, {eligible} eligible, {decoded} decoded; "
+                      f"precipitation groups 3h={rain_by_length[3]}, 6h={rain_by_length[6]}, "
+                      f"24h={rain_by_length[24]}; report hours UTC="
+                      + ",".join(f"{hour:02d}" for hour in sorted(decoded_hours)))
             if rejected_station_samples:
                 detail += "; excluded IDs: " + ",".join(sorted(rejected_station_samples))
             request_notes.append(detail)
@@ -3473,6 +3499,19 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
               "lang": "eng", "header": "yes"}
     if region == "PH":
         get_one(dict(params, block="98"), "block 98")
+        # A broad query may return only part of the reports needed at the
+        # selected location. When it provides no exact-period match, retry
+        # a few nearby SYNOP stations by full WMO index, using the SAME time
+        # window and the same strict WMO precipitation decoder. Never invent
+        # rain values or split a longer accumulation period.
+        valid_nearby = list(dict.fromkeys(
+            str(wmo) for wmo in nearest_ids if re.fullmatch(r"98\d{3}", str(wmo))
+        ))[:4]
+        if requested_windows and not has_matching_rain(valid_nearby):
+            for wmo in valid_nearby:
+                get_one(dict(params, block=wmo), f"station {wmo}")
+                if has_matching_rain():
+                    break
     else:
         # The website's working Taiwan territorial query uses state=Taiw.
         get_one(dict(params, state="Taiw"), "state Taiw")
@@ -3488,6 +3527,17 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
                     if decoded_reports_total > 0:
                         break
 
+    # The broad block and full-station retries can overlap. Avoid counting
+    # identical reports twice or accidentally summing duplicate intervals.
+    for wmo, rows in result.items():
+        seen = set()
+        unique = []
+        for row in rows:
+            key = tuple(sorted(row.items()))
+            if key not in seen:
+                seen.add(key)
+                unique.append(row)
+        result[wmo] = unique
     if diagnostics is not None:
         diagnostics.extend(request_notes)
         diagnostics.extend(errors)
@@ -3627,10 +3677,12 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
     try:
         ogimet_checks = []
         data = _obs_read_ogimet(start, end, region, diagnostics=ogimet_checks,
-                                nearest_ids=[s["id"] for s in candidates[:3]])
+                                nearest_ids=[s["id"] for s in candidates[:4]],
+                                rain_hours=hours if variable == "rain" else None,
+                                requested_periods=periods if variable == "rain" else ())
         datasets.append(("OGIMET (SYNOP)", data))
         notes.append(_obs_dataset_summary("OGIMET", data))
-        if region == "TW" and not data:
+        if variable == "rain" or (region == "TW" and not data):
             notes.append("OGIMET attempts: " + "; ".join(ogimet_checks))
     except Exception as exc:
         notes.append(f"OGIMET: {type(exc).__name__}: {str(exc)[:100]}")
@@ -3663,6 +3715,14 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
                         "distance_km": round(station["distance_km"], 1),
                         "distant": station["distance_km"] > 25,
                         "values": values, "fetched_at": now.isoformat()}
+    if variable == "rain" and periods:
+        completed = [(datetime.fromisoformat(first), datetime.fromisoformat(last))
+                     for first, last in periods if datetime.fromisoformat(last) <= now]
+        if completed:
+            first, last = completed[0]
+            notes.append(f"First completed forecast window UTC: {first:%Y-%m-%d %H:%M}"
+                         f" to {last:%Y-%m-%d %H:%M}")
+        notes.append("Nearby WMO IDs: " + ", ".join(s["id"] for s in candidates[:4]))
     if not datasets:
         diagnosis = "Observation providers could not be reached."
     elif any_relevant_reading:
@@ -3696,7 +3756,7 @@ def _render_observation_component(html, kind, lat, lon, periods_by_hours, region
     """
     # A bridge-code change must create a new component identity so Streamlit
     # cannot keep an iframe/cached component with obsolete JavaScript.
-    fingerprint = hashlib.sha256((html + "\nobs-bridge-v3").encode("utf-8")).hexdigest()[:20]
+    fingerprint = hashlib.sha256((html + "\nobs-bridge-v4").encode("utf-8")).hexdigest()[:20]
     code = (_OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
             .replace("__OBS_FINGERPRINT__", fingerprint))
     folder = _OBS_COMPONENT_DIR / (kind + "_" + fingerprint)
