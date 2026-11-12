@@ -3158,8 +3158,13 @@ def _obs_pagasa_stations():
 @st.cache_data(ttl=24*3600, show_spinner=False)
 def _obs_noaa_stations():
     """Fallback metadata; actual reports must still be AAXX synoptic messages."""
-    raw = _obs_fetch("https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv", {}, max_bytes=5_000_000).content
-    frame = pd.read_csv(BytesIO(raw), dtype=str)
+    # The official Taiwanese station fallback below must remain available even
+    # when the optional NOAA station inventory cannot be downloaded.
+    try:
+        raw = _obs_fetch("https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv", {}, max_bytes=5_000_000).content
+        frame = pd.read_csv(BytesIO(raw), dtype=str)
+    except (requests.RequestException, ValueError, pd.errors.ParserError):
+        frame = pd.DataFrame()
     found = []
     for row in frame.to_dict("records"):
         code = str(row.get("USAF") or "")[:5]
@@ -3177,6 +3182,28 @@ def _obs_noaa_stations():
                       "name": str(row.get("STATION NAME") or code),
                       "lat": lat, "lon": lon,
                       "country": "TW" if country == "TW" else "PH"})
+    # NOAA's ISD inventory is not a complete WMO/SYNOP catalogue. Taiwan's
+    # official CWA synoptic-station list supplies trustworthy coordinates and
+    # WMO identifiers even when the corresponding ISD record is absent.
+    # These are traditional CWA SYNOP locations (not AWS/ARG). Their inclusion
+    # in the catalogue does NOT imply that an observation is available.
+    taiwan_synop = (
+        ("46690", "Tamsui", 25.164889, 121.448906),
+        ("46691", "Anbu", 25.182586, 121.529731),
+        ("46692", "Taipei", 25.037658, 121.514853),
+        ("46693", "Zhuzihu", 25.162078, 121.544547),
+        ("46694", "Keelung", 25.133314, 121.740475),
+        ("46695", "Pengjia Islet", 25.627975, 122.079744),
+        ("46699", "Hualien", 23.9751, 121.6133),
+        ("46706", "Su'ao", 24.5967, 121.8574),
+        ("46708", "Yilan", 24.7640, 121.7565),
+    )
+    known = {s["id"] for s in found}
+    for wmo, name, latitude, longitude in taiwan_synop:
+        if wmo not in known:
+            found.append({"id": wmo, "wigos": f"0-20000-0-{wmo}",
+                          "name": name, "lat": latitude, "lon": longitude,
+                          "country": "TW"})
     return found
 
 
@@ -3268,7 +3295,7 @@ def _obs_read_pagasa(start_utc, end_utc):
     params = {"f": "json", "limit": 1000, "datetime":
               f"{start_utc:%Y-%m-%dT%H:%M:%SZ}/{end_utc:%Y-%m-%dT%H:%M:%SZ}"}
     url = _OBS_WIS_BASE + "/messages/items"
-    for _ in range(2):
+    for _ in range(8):
         page = _obs_fetch(url, params).json()
         for feature in page.get("features", []):
             props = feature.get("properties") or {}
@@ -3292,77 +3319,117 @@ def _obs_read_pagasa(start_utc, end_utc):
 
 
 def _obs_decode_synop(report, when):
-    """Defensive FM-12 section-1 decoder; no METAR/AWS or inferred intervals."""
+    """Decode FM-12 AAXX dry-bulb/dew-point and explicit 3/6-hour rainfall.
+
+    Decode RRRtR in section 1 and, if present, the supplementary section 3.
+    Ignore other report types and missing or unidentifiable precipitation.
+    """
     terms = report.replace("=", " ").split()
-    if not terms or terms[0] != "AAXX":
-        return []
-    # AAXX YYGGiw IIiii iRiXhVV Nddff [00fff] 1snTTT 2snTdTdTd ... 222...
-    if len(terms) < 6:
+    if len(terms) < 6 or terms[0] != "AAXX":
         return []
     try:
-        start_idx = 5
-        if len(terms) > 5 and re.fullmatch(r"00\d{3}", terms[5]):
-            start_idx = 6
+        # Prefix: AAXX YYGGiw IIiii iRiXhVV Nddff [00fff]
+        start_idx = 6 if len(terms) > 5 and re.fullmatch(r"00\d{3}", terms[5]) else 5
         section = []
+        supplemental = []
+        current = section
         for word in terms[start_idx:]:
-            if word.startswith(("222", "333", "444", "555")):
+            if word.startswith("222"):
+                current = None  # marine supplementary data, not section 1
+                continue
+            if word == "333":
+                current = supplemental
+                continue
+            if word.startswith(("444", "555")):
                 break
-            section.append(word)
+            if current is not None:
+                current.append(word)
         t_c = d_c = None
-        rains = []
         for word in section:
             if re.fullmatch(r"1[01]\d{3}", word):
                 t_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
             elif re.fullmatch(r"2[01]\d{3}", word):
                 d_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
-            elif re.fullmatch(r"6\d{4}", word):
-                number = int(word[1:4])
-                # WMO code table 4019, not a sequential number of hours.
-                hours = {1: 6, 2: 12, 3: 18, 4: 24, 5: 1, 6: 2,
-                         7: 3, 8: 9, 9: 15}.get(int(word[4]))
-                if hours not in (3, 6):
-                    continue
-                if number == 990:  # WMO 3590: trace, not a zero reading.
-                    rains.append({"time": when.isoformat(), "rain_trace": True, "rain_hours": hours})
-                elif number == 989:  # At least 989 mm; not an exact amount.
-                    continue
-                else:
-                    mm = (number - 990) / 10 if 991 <= number <= 999 else float(number)
-                    if 0 <= mm <= 3000:
-                        rains.append({"time": when.isoformat(), "rain_mm": mm, "rain_hours": hours})
         output = []
         if t_c is not None and -70 <= t_c <= 60:
             output.append({"time": when.isoformat(), "temperature": t_c,
                            "heat_index": _obs_heat_index(t_c, d_c)})
-        return output + rains
+        rains = []
+        for word in section + supplemental:
+            if not re.fullmatch(r"6\d{4}", word):
+                continue
+            number = int(word[1:4])
+            hours = {1: 6, 2: 12, 3: 18, 4: 24, 5: 1, 6: 2,
+                     7: 3, 8: 9, 9: 15}.get(int(word[4]))
+            if hours not in (3, 6):
+                continue
+            if number == 990:
+                rains.append({"time": when.isoformat(), "rain_trace": True,
+                              "rain_hours": hours})
+            elif number == 989:
+                continue
+            else:
+                mm = (number - 990)/10 if number >= 991 else float(number)
+                if 0 <= mm <= 3000:
+                    rains.append({"time": when.isoformat(), "rain_mm": mm,
+                                  "rain_hours": hours})
+        # De-duplicate sections when both repeat the same value/interval.
+        for item in rains:
+            if item not in output:
+                output.append(item)
+        return output
     except (TypeError, ValueError, OverflowError):
         return []
 
 
 def _obs_read_ogimet(start_utc, end_utc, region):
-    """One geographical WMO block per 30-min cache period, not per station."""
-    # WMO 98xxx covers Philippine synoptic reports; 46xxx Taiwan region.
-    params = {"block": "98" if region == "PH" else "46",
-              "begin": start_utc.strftime("%Y%m%d%H%M"),
-              "end": end_utc.strftime("%Y%m%d%H%M"), "lang": "eng"}
-    response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
+    """Read raw SYNOP CSV, using bounded country-specific WMO prefixes.
+
+    OGIMET's `block` is a station-ID *prefix*, not a country identifier.
+    `46` covers far more than Taiwan and can cause oversized/blocked replies.
+    Split Taiwan into 466xx and 467xx. PH is contained in 98xxx.
+    """
+    blocks = ("98",) if region == "PH" else ("466", "467")
     result = {}
-    for line in response.text.splitlines():
-        items = line.strip().split(",", 6)
-        if len(items) != 7:
-            continue
-        station = items[0].strip()
-        if not re.fullmatch(r"\d{5}", station):
-            continue
+    errors = []
+    for block in blocks:
+        params = {"block": block,
+                  "begin": start_utc.strftime("%Y%m%d%H%M"),
+                  "end": end_utc.strftime("%Y%m%d%H%M"),
+                  "lang": "eng", "header": "yes"}
         try:
-            when = datetime(*[int(p) for p in items[1:6]], tzinfo=timezone.utc)
-            if not start_utc <= when <= end_utc:
+            response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
+            body = response.text
+            if not body.strip():
                 continue
-        except (TypeError, ValueError):
-            continue
-        parsed = _obs_decode_synop(items[6], when)
-        if parsed:
-            result.setdefault(station, []).extend(parsed)
+            parsed_lines = 0
+            for line in body.splitlines():
+                items = line.strip().split(",", 6)
+                if len(items) != 7:
+                    continue
+                station = items[0].strip()
+                if not re.fullmatch(r"\d{5}", station):
+                    continue
+                if not station.startswith(block):
+                    continue
+                try:
+                    when = datetime(*[int(p) for p in items[1:6]], tzinfo=timezone.utc)
+                    if not start_utc <= when <= end_utc:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+                parsed_lines += 1
+                parsed = _obs_decode_synop(items[6], when)
+                if parsed:
+                    result.setdefault(station, []).extend(parsed)
+            if not parsed_lines and "<html" in body[:2000].lower():
+                errors.append(f"{block}: unexpected HTML response")
+            elif not parsed_lines and any(token in body.lower() for token in ("sorry", "too many", "temporarily", "error")):
+                errors.append(f"{block}: service reported an error")
+        except (requests.RequestException, ValueError) as exc:
+            errors.append(f"{block}: {type(exc).__name__}")
+    if errors and not result:
+        raise RuntimeError("; ".join(errors))
     return result
 
 
@@ -3417,44 +3484,59 @@ def _obs_match_temp(records, when):
 
 @st.cache_data(ttl=30*60, show_spinner=False)
 def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
-    """Live-fetch lazily, select nearest station with a usable observed value."""
+    """Fetch lazily, then select the nearest station with ACTUAL aligned data.
+
+    Diagnostic messages distinguish missing reports from request/decoder
+    failures. No observation is guessed or shifted to another time window.
+    """
     periods = json.loads(periods_json)
     now = datetime.now(timezone.utc)
-    start = min(datetime.fromisoformat(p[0]) for p in periods) if periods else now-timedelta(hours=24)
+    start = min((datetime.fromisoformat(p[0]) for p in periods), default=now-timedelta(hours=24))
     start = max(start-timedelta(hours=6), now-timedelta(days=3))
     end = min(now, max((datetime.fromisoformat(p[-1]) for p in periods), default=now))
     if start > end:
         start, end = end-timedelta(hours=6), end
+    notes = []
     try:
         stations = _obs_pagasa_stations() if region == "PH" else _obs_noaa_stations()
-    except Exception:
+    except Exception as exc:
+        notes.append(f"Station inventory: {type(exc).__name__}")
         stations = []
     if not stations:
         try:
             stations = _obs_noaa_stations()
-        except Exception:
+        except Exception as exc:
+            notes.append(f"Fallback inventory: {type(exc).__name__}")
             stations = []
+    # Only stations physically inside the chosen region. Taiwan's NOAA
+    # inventory also includes non-Taiwanese East Asian 46xxx records.
+    stations = [s for s in stations if s.get("country") == region]
     candidates = sorted((dict(s, distance_km=_obs_distance_km(lat, lon, s["lat"], s["lon"]))
                          for s in stations), key=lambda s: s["distance_km"])
     if not candidates:
-        return {"status": "unavailable", "message": "Synoptic station metadata is unavailable."}
+        return {"status": "unavailable", "message":
+                "No synoptic station metadata found for this region. " + "; ".join(notes)}
     datasets = []
     if region == "PH":
         try:
-            datasets.append(("PAGASA WIS2", _obs_read_pagasa(start, end)))
-        except Exception:
-            pass
+            data = _obs_read_pagasa(start, end)
+            datasets.append(("PAGASA WIS2", data))
+            notes.append(f"PAGASA WIS2: {sum(len(v) for v in data.values())} decoded readings")
+        except Exception as exc:
+            notes.append(f"PAGASA WIS2: {type(exc).__name__}")
     try:
-        datasets.append(("OGIMET (SYNOP)", _obs_read_ogimet(start, end, region)))
-    except Exception:
-        pass
-    # Provider priority applies to each station; geographic proximity prevails
-    # over a farther provider. Stations must have usable observations.
+        data = _obs_read_ogimet(start, end, region)
+        datasets.append(("OGIMET (SYNOP)", data))
+        notes.append(f"OGIMET: {sum(len(v) for v in data.values())} decoded readings")
+    except Exception as exc:
+        notes.append(f"OGIMET: {type(exc).__name__}: {str(exc)[:100]}")
+    any_relevant_reading = False
     for station in candidates:
         for source, by_station in datasets:
             readings = by_station.get(station["id"], [])
             if not _obs_has_data(readings, variable, hours):
                 continue
+            any_relevant_reading = True
             values = {}
             for start_text, end_text in periods:
                 period_start, period_end = datetime.fromisoformat(start_text), datetime.fromisoformat(end_text)
@@ -3477,8 +3559,13 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
                         "distance_km": round(station["distance_km"], 1),
                         "distant": station["distance_km"] > 25,
                         "values": values, "fetched_at": now.isoformat()}
-    return {"status": "unavailable",
-            "message": "No nearby or distant SYNOP station has reports aligned with the forecast periods."}
+    if not datasets:
+        diagnosis = "Observation providers could not be reached."
+    elif any_relevant_reading:
+        diagnosis = "Station observations exist, but none match the forecast periods exactly."
+    else:
+        diagnosis = f"No usable {hours}-hour {variable} observations in the requested period."
+    return {"status": "unavailable", "message": diagnosis + " " + "; ".join(notes)}
 
 
 def _obs_periods_rain(period_results, hours):
@@ -3503,16 +3590,21 @@ def _render_observation_component(html, kind, lat, lon, periods_by_hours, region
     enables Compare to actual. Streamlit renders returned observations back
     to the same iframe without altering the existing forecast DOM/state.
     """
-    code = _OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
-    fingerprint = hashlib.sha256(html.encode("utf-8")).hexdigest()[:20]
+    # A bridge-code change must create a new component identity so Streamlit
+    # cannot keep an iframe/cached component with obsolete JavaScript.
+    fingerprint = hashlib.sha256((html + "\nobs-bridge-v2").encode("utf-8")).hexdigest()[:20]
+    code = (_OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
+            .replace("__OBS_FINGERPRINT__", fingerprint))
     folder = _OBS_COMPONENT_DIR / (kind + "_" + fingerprint)
     folder.mkdir(parents=True, exist_ok=True)
     page = folder / "index.html"
-    if not page.exists():
-        if html.lstrip().lower().startswith("<!doctype"):
-            rendered = html.replace("</body>", code + "</body>")
-        else:
-            rendered = "<!doctype html><html><head><meta charset='utf-8'></head><body>" + html + code + "</body></html>"
+    # The component name/URL is content-based. Refresh its HTML when the
+    # observation bridge changes even if the forecast HTML is identical.
+    if html.lstrip().lower().startswith("<!doctype"):
+        rendered = html.replace("</body>", code + "</body>")
+    else:
+        rendered = "<!doctype html><html><head><meta charset='utf-8'></head><body>" + html + code + "</body></html>"
+    if not page.exists() or page.read_text(encoding="utf-8") != rendered:
         page.write_text(rendered, encoding="utf-8")
     component = components.declare_component("sw_compare_" + kind + "_" + fingerprint, path=str(folder))
     session_key = "sw_obs_payload_" + kind + "_" + fingerprint
@@ -3565,8 +3657,12 @@ _OBS_COMPARE_BRIDGE = r'''
 (()=>{
  'use strict';
  const kind=__OBS_KIND__;
+ const storageKey='sw-compare-enabled:'+kind+':__OBS_FINGERPRINT__';
  let response={};
- const enabled=new Set();
+ let restored=[];
+ try{restored=JSON.parse(window.sessionStorage.getItem(storageKey)||'[]');}catch(_err){}
+ const enabled=new Set(Array.isArray(restored)?restored:[]);
+ function preserveSelection(){try{window.sessionStorage.setItem(storageKey,JSON.stringify(Array.from(enabled)));}catch(_err){}}
  const root=document.querySelector(kind==='heat'?'.temp-root':'.rr-root');
  if(!root)return;
  function text(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -3664,6 +3760,7 @@ _OBS_COMPARE_BRIDGE = r'''
      action.querySelector('input').addEventListener('change',event=>{
        const key=dayKey(panel),hours=period(panel);
        if(event.target.checked)enabled.add(key);else enabled.delete(key);
+       preserveSelection();
        refresh();
        if(event.target.checked&&!response[String(hours)]){
          componentValue({type:'load',hours,nonce:Date.now()+'-'+Math.random()});
