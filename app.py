@@ -3114,6 +3114,16 @@ _OBS_SESSION.headers.update({"User-Agent": "Simpleweather/1.0 (synoptic observat
 _OBS_WIS_BASE = "https://wis.pagasa.dost.gov.ph/oapi/collections"
 _OBS_OGIMET = "https://www.ogimet.com/cgi-bin/getsynop"
 
+# OGIMET's SYNOP catalog uses alternate WMO indexes for some Taiwanese
+# synoptic sites. For example, Taipei appears as 58968 on OGIMET even though
+# CWA also uses the 46692 index. These are separate source identifiers for
+# matching reports; never substitute one ID for the other while decoding.
+_OBS_TW_OGIMET_STATIONS = (
+    ("58968", "Taipei (OGIMET)", 25.0300, 121.5200),
+    ("58974", "Pengjia Islet (OGIMET)", 25.6300, 122.0700),
+)
+_OBS_TW_OGIMET_IDS = {station[0] for station in _OBS_TW_OGIMET_STATIONS}
+
 
 def _obs_fetch(url, params, *, max_bytes=3_000_000):
     """Bounded network read. An outage never interrupts the forecast app."""
@@ -3169,8 +3179,9 @@ def _obs_noaa_stations():
     for row in frame.to_dict("records"):
         code = str(row.get("USAF") or "")[:5]
         country = str(row.get("CTRY") or "")
-        if ((country not in ("RP", "TW", "PH")) or
-            not re.fullmatch(r"(?:98|46)\d{3}", code)):
+        if (country in ("RP", "PH") and not re.fullmatch(r"98\d{3}", code)) or (
+            country == "TW" and not re.fullmatch(r"(?:46|58)\d{3}", code)
+        ) or country not in ("RP", "PH", "TW"):
             continue
         try:
             lat, lon = float(row["LAT"]), float(row["LON"])
@@ -3198,6 +3209,10 @@ def _obs_noaa_stations():
         ("46706", "Su'ao", 24.5967, 121.8574),
         ("46708", "Yilan", 24.7640, 121.7565),
     )
+    # Add OGIMET-only (or alternate) WMO indices as distinct catalog entries.
+    # Never interpret the 589xx prefix broadly as Taiwan: other 589xx stations
+    # can be in mainland China. Only explicitly checked Taiwanese sites belong.
+    taiwan_synop += _OBS_TW_OGIMET_STATIONS
     known = {s["id"] for s in found}
     for wmo, name, latitude, longitude in taiwan_synop:
         if wmo not in known:
@@ -3390,22 +3405,23 @@ def _obs_decode_synop(report, when):
 
 
 def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_ids=()):
-    """Retrieve raw OGIMET CSV (SYNOP, not METAR/AWS) with source diagnostics.
+    """Read CSV SYNOP reports and retain only vetted regional WMO stations.
 
-    For Taiwan, ask for the usual 466/467 prefixes first. If OGIMET returns
-    no valid reports, try its documented state query and up to two exact WMO
-    station IDs. This changes retrieval, never an observation value.
+    The country query uses the exact "Taiw" prefix from OGIMET's territorial
+    listing. Taiwan's OGIMET SYNOP index is not limited to 466xx/467xx: the
+    verified alternate Taipei and Pengjia Islet IDs are 58968 and 58974.
     """
     result, errors, request_notes = {}, [], []
-    parsed_lines_total = 0
     decoded_reports_total = 0
+    parsed_lines_total = 0
 
     def get_one(params, label):
-        nonlocal parsed_lines_total, decoded_reports_total
+        nonlocal decoded_reports_total, parsed_lines_total
         try:
             response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
             body = response.text
-            rows, accepted = 0, 0
+            raw_csv, eligible, decoded = 0, 0, 0
+            rejected_station_samples = set()
             for line in body.splitlines():
                 items = line.strip().split(",", 6)
                 if len(items) != 7:
@@ -3413,8 +3429,15 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
                 station = items[0].strip()
                 if not re.fullmatch(r"\d{5}", station):
                     continue
-                # Strictly match the requested country, even for a state query.
-                if region == "TW" and not station.startswith(("466", "467")):
+                raw_csv += 1
+                # Do not accidentally allow nearby mainland-China stations
+                # merely because their WMO index also begins with 589.
+                if region == "TW" and not (
+                    station.startswith(("466", "467")) or
+                    station in _OBS_TW_OGIMET_IDS
+                ):
+                    if len(rejected_station_samples) < 3:
+                        rejected_station_samples.add(station)
                     continue
                 if region == "PH" and not station.startswith("98"):
                     continue
@@ -3426,17 +3449,21 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
                         continue
                 except (TypeError, ValueError):
                     continue
-                rows += 1
+                eligible += 1
                 parsed = _obs_decode_synop(items[6].strip(), when)
                 if parsed:
-                    accepted += 1
+                    decoded += 1
                     result.setdefault(station, []).extend(parsed)
-            parsed_lines_total += rows
-            decoded_reports_total += accepted
-            request_notes.append(f"{label}: {rows} CSV reports, {accepted} decoded")
-            if not rows and "<html" in body[:2000].lower():
+            parsed_lines_total += eligible
+            decoded_reports_total += decoded
+            detail = f"{label}: {raw_csv} raw CSV reports, {eligible} eligible, {decoded} decoded"
+            if rejected_station_samples:
+                detail += "; excluded IDs: " + ",".join(sorted(rejected_station_samples))
+            request_notes.append(detail)
+            if not raw_csv and "<html" in body[:2000].lower():
                 errors.append(f"{label}: unexpected HTML instead of CSV")
-            elif not rows and any(t in body.lower() for t in ("sorry", "too many", "temporarily", "error")):
+            elif not raw_csv and any(t in body.lower() for t in
+                                      ("sorry", "too many", "temporarily", "error")):
                 errors.append(f"{label}: provider returned an error message")
         except (requests.RequestException, ValueError) as exc:
             errors.append(f"{label}: {type(exc).__name__}")
@@ -3444,16 +3471,22 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
     params = {"begin": start_utc.strftime("%Y%m%d%H%M"),
               "end": end_utc.strftime("%Y%m%d%H%M"),
               "lang": "eng", "header": "yes"}
-    blocks = ("98",) if region == "PH" else ("466", "467")
-    for block in blocks:
-        get_one(dict(params, block=block), f"block {block}")
-
-    if region == "TW" and decoded_reports_total == 0:
-        get_one(dict(params, state="Taiwan"), "state Taiwan")
+    if region == "PH":
+        get_one(dict(params, block="98"), "block 98")
+    else:
+        # The website's working Taiwan territorial query uses state=Taiw.
+        get_one(dict(params, state="Taiw"), "state Taiw")
         if decoded_reports_total == 0:
-            for station_id in list(dict.fromkeys(str(x) for x in nearest_ids))[:2]:
-                if re.fullmatch(r"(?:466|467)\d{2}", station_id):
+            # Target known nearby WMO IDs and the verified alternate Taipei ID.
+            # Country searches may be incomplete or unavailable even when an
+            # individual station's historical reports exist.
+            ids = list(dict.fromkeys([str(x) for x in nearest_ids] +
+                                     ["58968", "58974"]))
+            for station_id in ids[:5]:
+                if re.fullmatch(r"(?:466|467)\d{2}", station_id) or station_id in _OBS_TW_OGIMET_IDS:
                     get_one(dict(params, block=station_id), f"station {station_id}")
+                    if decoded_reports_total > 0:
+                        break
 
     if diagnostics is not None:
         diagnostics.extend(request_notes)
