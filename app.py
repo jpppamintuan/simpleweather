@@ -3094,6 +3094,600 @@ refresh();
 </script>
 </body></html>'''
 
+# ---------------------------------------------------------------------------
+# Observed weather: PAGASA WIS2 SYNOP first, OGIMET SYNOP second.
+# All data are requested only when Compare to actual is enabled. Never
+# infer a missing accumulation, report time, or Heat Index observation.
+# ---------------------------------------------------------------------------
+import base64
+import hashlib
+from io import BytesIO, StringIO
+import re
+import tempfile
+from datetime import timedelta
+
+import requests
+
+_OBS_TIMEOUT = (5, 12)
+_OBS_SESSION = requests.Session()
+_OBS_SESSION.headers.update({"User-Agent": "Simpleweather/1.0 (synoptic observations; cached 30 minutes)", "Accept": "application/json,text/plain,*/*"})
+_OBS_WIS_BASE = "https://wis.pagasa.dost.gov.ph/oapi/collections"
+_OBS_OGIMET = "https://www.ogimet.com/cgi-bin/getsynop"
+
+
+def _obs_fetch(url, params, *, max_bytes=3_000_000):
+    """Bounded network read. An outage never interrupts the forecast app."""
+    response = _OBS_SESSION.get(url, params=params, timeout=_OBS_TIMEOUT)
+    response.raise_for_status()
+    size = response.headers.get("Content-Length")
+    if size and int(size) > max_bytes:
+        raise ValueError("Observation response is too large")
+    if len(response.content) > max_bytes:
+        raise ValueError("Observation response is too large")
+    return response
+
+
+def _obs_distance_km(lat1, lon1, lat2, lon2):
+    a, b = map(math.radians, (float(lat1), float(lat2)))
+    dlat, dlon = b-a, math.radians(float(lon2)-float(lon1))
+    h = math.sin(dlat/2)**2 + math.cos(a)*math.cos(b)*math.sin(dlon/2)**2
+    return 6371.0088 * 2 * math.atan2(math.sqrt(h), math.sqrt(max(0, 1-h)))
+
+
+@st.cache_data(ttl=24*3600, show_spinner=False)
+def _obs_pagasa_stations():
+    """PAGASA's official WIS2 published synoptic station inventory; no AWS/ARG."""
+    result = []
+    url = _OBS_WIS_BASE + "/stations/items"
+    payload = _obs_fetch(url, {"f": "json", "limit": 200}).json()
+    for item in payload.get("features", []):
+        props = item.get("properties") or {}
+        coord = (item.get("geometry") or {}).get("coordinates") or []
+        wmo = str(props.get("traditional_station_identifier") or "")
+        topic = " ".join(props.get("topics") or [])
+        if (len(coord) < 2 or not re.fullmatch(r"98\d{3}", wmo)
+                or "/synop" not in topic or props.get("facility_type") != "landFixed"
+                or props.get("status", "operational").lower() != "operational"):
+            continue
+        result.append({"id": wmo, "wigos": props.get("wigos_station_identifier") or item.get("id"),
+                       "name": props.get("name") or wmo, "lat": float(coord[1]),
+                       "lon": float(coord[0]), "country": "PH"})
+    return result
+
+
+@st.cache_data(ttl=24*3600, show_spinner=False)
+def _obs_noaa_stations():
+    """Fallback metadata; actual reports must still be AAXX synoptic messages."""
+    raw = _obs_fetch("https://www.ncei.noaa.gov/pub/data/noaa/isd-history.csv", {}, max_bytes=5_000_000).content
+    frame = pd.read_csv(BytesIO(raw), dtype=str)
+    found = []
+    for row in frame.to_dict("records"):
+        code = str(row.get("USAF") or "")[:5]
+        country = str(row.get("CTRY") or "")
+        if ((country not in ("RP", "TW", "PH")) or
+            not re.fullmatch(r"(?:98|46)\d{3}", code)):
+            continue
+        try:
+            lat, lon = float(row["LAT"]), float(row["LON"])
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                continue
+        except (ValueError, TypeError):
+            continue
+        found.append({"id": code, "wigos": f"0-20000-0-{code}",
+                      "name": str(row.get("STATION NAME") or code),
+                      "lat": lat, "lon": lon,
+                      "country": "TW" if country == "TW" else "PH"})
+    return found
+
+
+def _obs_first_number(handle, keys):
+    """Only read known ecCodes BUFR descriptors; missing data stay missing."""
+    import eccodes
+    for key in keys:
+        try:
+            vals = eccodes.codes_get_array(handle, key)
+            for candidate in vals:
+                val = float(candidate)
+                if math.isfinite(val) and abs(val) < 1e8:
+                    return val
+        except Exception:
+            continue
+    return None
+
+
+def _obs_heat_index(t_c, dew_c):
+    """NOAA/NWS heat-index formula, computed from observed T and dewpoint."""
+    if t_c is None or dew_c is None or dew_c > t_c + 0.25:
+        return None
+    rh = 100 * math.exp((17.625 * dew_c)/(243.04+dew_c)
+                        - (17.625 * t_c)/(243.04+t_c))
+    if not (0 <= rh <= 100.5):
+        return None
+    rh = min(100.0, rh)
+    t_f = t_c * 9/5 + 32
+    simple_f = 0.5*(t_f+61.0+((t_f-68.0)*1.2)+(rh*.094))
+    if (simple_f + t_f) / 2 < 80:
+        return (simple_f-32)*5/9
+    hi = (-42.379+2.04901523*t_f+10.14333127*rh-.22475541*t_f*rh
+          -.00683783*t_f**2-.05481717*rh**2+.00122874*t_f**2*rh
+          +.00085282*t_f*rh**2-.00000199*t_f**2*rh**2)
+    if rh < 13 and 80 <= t_f <= 112:
+        hi -= (13-rh)/4*math.sqrt((17-abs(t_f-95))/17)
+    elif rh > 85 and 80 <= t_f <= 87:
+        hi += (rh-85)/10*((87-t_f)/5)
+    return (hi-32)*5/9
+
+
+def _obs_convert_kelvin(value):
+    if value is None:
+        return None
+    return value - 273.15 if value > 150 else value
+
+
+def _obs_decode_pagasa_bufr(content, when_utc):
+    """PAGASA publishes BUFR; ecCodes comes with cfgrib on the app runtime.
+
+    Only explicitly labelled 3/6-hour totals are used. We do NOT guess the
+    accumulation period from generic precipitation descriptors.
+    """
+    try:
+        import eccodes
+        payload = base64.b64decode(content, validate=True)
+        if not payload.startswith(b"BUFR"):
+            return []
+        stream = BytesIO(payload)
+        output = []
+        while True:
+            msg = eccodes.codes_bufr_new_from_file(stream)
+            if msg is None:
+                break
+            try:
+                eccodes.codes_set(msg, "unpack", 1)
+                t_c = _obs_convert_kelvin(_obs_first_number(msg, ("airTemperature", "airTemperatureAt2M")))
+                d_c = _obs_convert_kelvin(_obs_first_number(msg, ("dewpointTemperature", "dewpointTemperatureAt2M")))
+                rain3 = _obs_first_number(msg, ("totalPrecipitationPast3Hours", "totalPrecipitationInPast3Hours"))
+                rain6 = _obs_first_number(msg, ("totalPrecipitationPast6Hours", "totalPrecipitationInPast6Hours"))
+                base = {"time": when_utc.isoformat(), "temperature": t_c,
+                        "heat_index": _obs_heat_index(t_c, d_c)}
+                if t_c is not None:
+                    output.append(base)
+                for hours, rain in ((3, rain3), (6, rain6)):
+                    if rain is not None and 0 <= rain <= 3000:
+                        output.append({"time": when_utc.isoformat(), "rain_mm": rain,
+                                       "rain_hours": hours})
+            finally:
+                eccodes.codes_release(msg)
+        return output
+    except Exception:
+        return []
+
+
+def _obs_read_pagasa(start_utc, end_utc):
+    """One bounded WIS2 date-window request; optionally follows one next page."""
+    result = {}
+    params = {"f": "json", "limit": 1000, "datetime":
+              f"{start_utc:%Y-%m-%dT%H:%M:%SZ}/{end_utc:%Y-%m-%dT%H:%M:%SZ}"}
+    url = _OBS_WIS_BASE + "/messages/items"
+    for _ in range(2):
+        page = _obs_fetch(url, params).json()
+        for feature in page.get("features", []):
+            props = feature.get("properties") or {}
+            wigos = str(props.get("wigos_station_identifier") or "")
+            if not wigos.startswith("0-20000-0-98"):
+                continue
+            try:
+                when = datetime.fromisoformat(str(props["datetime"]).replace("Z", "+00:00"))
+                if not (start_utc <= when <= end_utc):
+                    continue
+            except (KeyError, ValueError, TypeError):
+                continue
+            content = (props.get("content") or {}).get("value")
+            if content:
+                result.setdefault(wigos.split("-")[-1], []).extend(_obs_decode_pagasa_bufr(content, when))
+        next_url = next((link.get("href") for link in page.get("links", []) if link.get("rel") == "next"), None)
+        if not next_url or not next_url.startswith("https://wis.pagasa.dost.gov.ph/"):
+            break
+        url, params = next_url, {}
+    return result
+
+
+def _obs_decode_synop(report, when):
+    """Defensive FM-12 section-1 decoder; no METAR/AWS or inferred intervals."""
+    terms = report.replace("=", " ").split()
+    if not terms or terms[0] != "AAXX":
+        return []
+    # AAXX YYGGiw IIiii iRiXhVV Nddff [00fff] 1snTTT 2snTdTdTd ... 222...
+    if len(terms) < 6:
+        return []
+    try:
+        start_idx = 5
+        if len(terms) > 5 and re.fullmatch(r"00\d{3}", terms[5]):
+            start_idx = 6
+        section = []
+        for word in terms[start_idx:]:
+            if word.startswith(("222", "333", "444", "555")):
+                break
+            section.append(word)
+        t_c = d_c = None
+        rains = []
+        for word in section:
+            if re.fullmatch(r"1[01]\d{3}", word):
+                t_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
+            elif re.fullmatch(r"2[01]\d{3}", word):
+                d_c = float(word[2:])/10 * (-1 if word[1] == "1" else 1)
+            elif re.fullmatch(r"6\d{4}", word):
+                number = int(word[1:4])
+                # WMO code table 4019, not a sequential number of hours.
+                hours = {1: 6, 2: 12, 3: 18, 4: 24, 5: 1, 6: 2,
+                         7: 3, 8: 9, 9: 15}.get(int(word[4]))
+                if hours not in (3, 6):
+                    continue
+                if number == 990:  # WMO 3590: trace, not a zero reading.
+                    rains.append({"time": when.isoformat(), "rain_trace": True, "rain_hours": hours})
+                elif number == 989:  # At least 989 mm; not an exact amount.
+                    continue
+                else:
+                    mm = (number - 990) / 10 if 991 <= number <= 999 else float(number)
+                    if 0 <= mm <= 3000:
+                        rains.append({"time": when.isoformat(), "rain_mm": mm, "rain_hours": hours})
+        output = []
+        if t_c is not None and -70 <= t_c <= 60:
+            output.append({"time": when.isoformat(), "temperature": t_c,
+                           "heat_index": _obs_heat_index(t_c, d_c)})
+        return output + rains
+    except (TypeError, ValueError, OverflowError):
+        return []
+
+
+def _obs_read_ogimet(start_utc, end_utc, region):
+    """One geographical WMO block per 30-min cache period, not per station."""
+    # WMO 98xxx covers Philippine synoptic reports; 46xxx Taiwan region.
+    params = {"block": "98" if region == "PH" else "46",
+              "begin": start_utc.strftime("%Y%m%d%H%M"),
+              "end": end_utc.strftime("%Y%m%d%H%M"), "lang": "eng"}
+    response = _obs_fetch(_OBS_OGIMET, params, max_bytes=5_000_000)
+    result = {}
+    for line in response.text.splitlines():
+        items = line.strip().split(",", 6)
+        if len(items) != 7:
+            continue
+        station = items[0].strip()
+        if not re.fullmatch(r"\d{5}", station):
+            continue
+        try:
+            when = datetime(*[int(p) for p in items[1:6]], tzinfo=timezone.utc)
+            if not start_utc <= when <= end_utc:
+                continue
+        except (TypeError, ValueError):
+            continue
+        parsed = _obs_decode_synop(items[6], when)
+        if parsed:
+            result.setdefault(station, []).extend(parsed)
+    return result
+
+
+def _obs_has_data(records, variable, hours):
+    if variable == "rain":
+        usable_periods = (3, 6) if hours == 6 else (3,)
+        return any(r.get("rain_hours") in usable_periods and
+                   (r.get("rain_mm") is not None or r.get("rain_trace")) for r in records)
+    return any(r.get("temperature") is not None for r in records)
+
+
+def _obs_match_rain(records, start, end, hours):
+    """Use exactly matching reports; aggregate two contiguous 3h only for 6h."""
+    times = {}
+    for r in records:
+        if r.get("rain_mm") is None and not r.get("rain_trace"):
+            continue
+        try:
+            stamp = datetime.fromisoformat(r["time"])
+        except (ValueError, KeyError):
+            continue
+        if (r.get("rain_hours"), stamp) not in times:
+            times[(r["rain_hours"], stamp)] = r
+    direct = times.get((hours, end))
+    if direct is not None:
+        return {k: direct[k] for k in ("rain_mm", "rain_trace") if k in direct}
+    if hours == 6:
+        half = end - timedelta(hours=3)
+        first, second = times.get((3, half)), times.get((3, end))
+        if first is not None and second is not None:
+            # An unknown trace amount cannot be added as if it were zero.
+            if first.get("rain_mm") is not None and second.get("rain_mm") is not None:
+                return {"rain_mm": first["rain_mm"]+second["rain_mm"]}
+    return None
+
+
+def _obs_match_temp(records, when):
+    candidates = []
+    for reading in records:
+        if reading.get("temperature") is None:
+            continue
+        try:
+            offset = abs((datetime.fromisoformat(reading["time"]) - when).total_seconds())
+        except (ValueError, TypeError):
+            continue
+        if offset <= 30*60:
+            candidates.append((offset, reading))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda x: x[0])[1]
+
+
+@st.cache_data(ttl=30*60, show_spinner=False)
+def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
+    """Live-fetch lazily, select nearest station with a usable observed value."""
+    periods = json.loads(periods_json)
+    now = datetime.now(timezone.utc)
+    start = min(datetime.fromisoformat(p[0]) for p in periods) if periods else now-timedelta(hours=24)
+    start = max(start-timedelta(hours=6), now-timedelta(days=3))
+    end = min(now, max((datetime.fromisoformat(p[-1]) for p in periods), default=now))
+    if start > end:
+        start, end = end-timedelta(hours=6), end
+    try:
+        stations = _obs_pagasa_stations() if region == "PH" else _obs_noaa_stations()
+    except Exception:
+        stations = []
+    if not stations:
+        try:
+            stations = _obs_noaa_stations()
+        except Exception:
+            stations = []
+    candidates = sorted((dict(s, distance_km=_obs_distance_km(lat, lon, s["lat"], s["lon"]))
+                         for s in stations), key=lambda s: s["distance_km"])
+    if not candidates:
+        return {"status": "unavailable", "message": "Synoptic station metadata is unavailable."}
+    datasets = []
+    if region == "PH":
+        try:
+            datasets.append(("PAGASA WIS2", _obs_read_pagasa(start, end)))
+        except Exception:
+            pass
+    try:
+        datasets.append(("OGIMET (SYNOP)", _obs_read_ogimet(start, end, region)))
+    except Exception:
+        pass
+    # Provider priority applies to each station; geographic proximity prevails
+    # over a farther provider. Stations must have usable observations.
+    for station in candidates:
+        for source, by_station in datasets:
+            readings = by_station.get(station["id"], [])
+            if not _obs_has_data(readings, variable, hours):
+                continue
+            values = {}
+            for start_text, end_text in periods:
+                period_start, period_end = datetime.fromisoformat(start_text), datetime.fromisoformat(end_text)
+                if period_end > now:
+                    continue
+                if variable == "rain":
+                    amount = _obs_match_rain(readings, period_start, period_end, hours)
+                    if amount is not None:
+                        values[f"{int(period_start.timestamp()*1000)}-{int(period_end.timestamp()*1000)}"] = (
+                            {"rain_trace": True} if amount.get("rain_trace")
+                            else {"rain_mm": round(amount["rain_mm"], 2)})
+                else:
+                    report = _obs_match_temp(readings, period_end)
+                    if report:
+                        values[str(int(period_end.timestamp()*1000))] = {
+                            "temperature": report.get("temperature"),
+                            "heat_index": report.get("heat_index")}
+            if values:
+                return {"status": "ok", "source": source, "station": station["name"],
+                        "distance_km": round(station["distance_km"], 1),
+                        "distant": station["distance_km"] > 25,
+                        "values": values, "fetched_at": now.isoformat()}
+    return {"status": "unavailable",
+            "message": "No nearby or distant SYNOP station has reports aligned with the forecast periods."}
+
+
+def _obs_periods_rain(period_results, hours):
+    bins = (period_results.get(hours) or {}).get("days") or []
+    return json.dumps([(p["start_utc"].astimezone(timezone.utc).isoformat(),
+                        p["end_utc"].astimezone(timezone.utc).isoformat()) for p in bins])
+
+
+def _obs_periods_heat(result):
+    return json.dumps([(step["time_utc"].astimezone(timezone.utc).isoformat(),
+                        step["time_utc"].astimezone(timezone.utc).isoformat())
+                       for step in result.get("steps", []) if isinstance(step.get("time_utc"), datetime)])
+
+
+_OBS_COMPONENT_DIR = Path(tempfile.gettempdir()) / "simpleweather_compare_components"
+
+
+def _render_observation_component(html, kind, lat, lon, periods_by_hours, region):
+    """Bidirectional Streamlit component, built from app.py without extra repo files.
+
+    A component value message triggers a Python rerun *only* when the user
+    enables Compare to actual. Streamlit renders returned observations back
+    to the same iframe without altering the existing forecast DOM/state.
+    """
+    code = _OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
+    fingerprint = hashlib.sha256(html.encode("utf-8")).hexdigest()[:20]
+    folder = _OBS_COMPONENT_DIR / (kind + "_" + fingerprint)
+    folder.mkdir(parents=True, exist_ok=True)
+    page = folder / "index.html"
+    if not page.exists():
+        if html.lstrip().lower().startswith("<!doctype"):
+            rendered = html.replace("</body>", code + "</body>")
+        else:
+            rendered = "<!doctype html><html><head><meta charset='utf-8'></head><body>" + html + code + "</body></html>"
+        page.write_text(rendered, encoding="utf-8")
+    component = components.declare_component("sw_compare_" + kind + "_" + fingerprint, path=str(folder))
+    session_key = "sw_obs_payload_" + kind + "_" + fingerprint
+    event_key = session_key + "_last_event"
+    result = component(obs_payload=st.session_state.get(session_key), key="sw_component_" + kind + "_" + fingerprint,
+                       default=None)
+    if isinstance(result, dict) and result.get("type") == "load":
+        nonce = str(result.get("nonce", ""))
+        if nonce and nonce != st.session_state.get(event_key):
+            st.session_state[event_key] = nonce
+            hours = 3 if kind == "heat" else int(result.get("hours", 3))
+            if hours not in (3, 6):
+                hours = 3
+            periods = periods_by_hours.get(hours) or "[]"
+            # The component expects responses keyed by accumulation length.
+            # Keep both the 3-hour and 6-hour results when users switch tabs.
+            all_payloads = dict(st.session_state.get(session_key) or {})
+            all_payloads[str(hours)] = _obs_for_forecast(
+                round(lat, 6), round(lon, 6), kind, hours, periods, region)
+            st.session_state[session_key] = all_payloads
+            st.rerun()
+
+_OBS_COMPARE_BRIDGE = r'''
+<style>
+/* Compare-to-actual additions are scoped; all existing forecast styles remain. */
+.sw-obs-action{display:flex;align-items:center;justify-content:flex-end;margin:9px 0 5px}
+.sw-obs-toggle{display:inline-flex;gap:7px;align-items:center;cursor:pointer;user-select:none;
+  font-family:inherit;font-size:12px;font-weight:650;color:#506070}
+.sw-obs-toggle input{appearance:none;width:34px;height:20px;border-radius:99px;background:#d5dbe3;
+  position:relative;margin:0;flex:none;cursor:pointer}
+.sw-obs-toggle input:after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;
+  border-radius:50%;background:white;box-shadow:0 1px 3px #0002;transition:left .16s}
+.sw-obs-toggle input:checked{background:#25a8db}.sw-obs-toggle input:checked:after{left:17px}
+.sw-obs-toggle input:focus-visible{outline:2px solid #159bd6;outline-offset:3px}
+.sw-obs-status{font-size:11px;color:#697789;line-height:1.4;margin:4px 0 7px}
+.sw-obs-status .sw-obs-warning{display:block;color:#986228;font-weight:650}
+.sw-obs-row{margin:9px 0 0;padding:8px 0 0;border-top:1px solid #e0e8ee}
+.sw-obs-row .sw-obs-title{font-size:11px;font-weight:750;color:#516678;margin-bottom:6px}
+.sw-obs-values{display:grid;min-width:0;align-items:center}
+.sw-obs-value{font-size:10px;color:#283746;background:#edf6fb;border:1px solid #dcecf4;
+ border-radius:5px;padding:4px 1px;text-align:center;font-weight:700;min-width:0;overflow:hidden}
+.sw-obs-value.is-na{color:#8994a1;background:#f8fafc;border-color:#edf0f4;font-weight:400}
+.temp-hour .sw-obs-temp{display:block;border-top:1px solid rgba(40,55,70,.14);margin-top:5px;
+ padding-top:5px;font-size:10px;font-weight:650;line-height:1.4;white-space:normal;color:#283746}
+.temp-hour .sw-obs-temp small{display:block;font-size:9px;font-weight:400;color:#506070}
+.temp-hour .sw-obs-temp[hidden]{display:none!important}
+.temp-detail .sw-obs-action{margin:9px 0 6px}
+</style>
+<script>
+(()=>{
+ 'use strict';
+ const kind=__OBS_KIND__;
+ let response={};
+ const enabled=new Set();
+ const root=document.querySelector(kind==='heat'?'.temp-root':'.rr-root');
+ if(!root)return;
+ function text(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+ function period(panel){return kind==='heat'?3:Number(panel.closest('.rr-variant')?.dataset.rrVariant?.split('-')[0]||3);}
+ function dayKey(panel){
+   if(kind==='heat')return String(panel.closest('[data-day-wrap]')?.dataset.dayWrap||'0');
+   return String(period(panel))+':'+String(panel.dataset.rrDate||'');
+ }
+ function panels(){return Array.from(root.querySelectorAll(kind==='heat'?'.temp-detail':'.rr-detail'));}
+ function componentValue(payload){
+   window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:payload},'*');
+ }
+ function displayStatus(panel,data){
+   let line=panel.querySelector('.sw-obs-status');
+   if(!line)return;
+   const p=period(panel),on=enabled.has(dayKey(panel));
+   const row=panel.querySelector('.sw-obs-row');
+   if(row)row.hidden=!on;
+   line.hidden=!on;
+   if(!on)return;
+   if(!data){line.textContent='Loading synoptic observations…';return;}
+   if(data.status!=='ok'){
+     line.textContent=data.message||'Station observations are unavailable for these periods.';
+     return;
+   }
+   line.innerHTML=`${text(data.source)} · ${text(data.station)} · ${Number(data.distance_km).toFixed(1)} km from selected location`
+     +(data.distant?'<span class="sw-obs-warning">Station is over 25 km away; conditions at your location may differ.</span>':'');
+ }
+ function renderRain(panel,data){
+   displayStatus(panel,data);
+   const row=panel.querySelector('.sw-obs-row');
+   if(!row)return;
+   const slots=Array.from(panel.querySelectorAll('.rr-detail-bar-values .rr-slot'));
+   const cells=row.querySelector('.sw-obs-values');
+   if(!cells)return;
+   cells.style.gridTemplateColumns=`repeat(${slots.length},minmax(0,1fr))`;
+   cells.style.columnGap='2px';
+   cells.replaceChildren();
+   slots.forEach(slot=>{
+     const span=document.createElement('span');
+     const start=slot.dataset.startMs,end=slot.dataset.endMs;
+     const record=data?.values?.[start+'-'+end];
+     const value=record?.rain_mm,trace=Boolean(record?.rain_trace);
+     span.className='sw-obs-value'+((Number.isFinite(value)||trace)?'':' is-na');
+     span.textContent=trace?'trace':Number.isFinite(value)?((value<10?Number(value).toFixed(1):Math.round(value))+''):'—';
+     span.title=trace?'Trace rainfall reported':Number.isFinite(value)?`Observed ${value} mm in this ${period(panel)}-hour period`:'No matching observation';
+     cells.appendChild(span);
+   });
+ }
+ function renderHeat(panel,data){
+   displayStatus(panel,data);
+   panel.querySelectorAll('.temp-hour[data-valid-time]').forEach(tile=>{
+     let area=tile.querySelector('.sw-obs-temp');
+     if(!area){area=document.createElement('span');area.className='sw-obs-temp';tile.appendChild(area);}
+     const show=enabled.has(dayKey(panel));
+     area.hidden=!show;
+     if(!show)return;
+     const record=data?.values?.[String(Date.parse(tile.dataset.validTime))];
+     if(!record){area.innerHTML='<small>Observed</small>—';return;}
+     const value=v=>Number.isFinite(v)?Math.round(v)+'°':'—';
+     area.innerHTML=`<small>Observed</small>HI ${value(record.heat_index)}<br>Air ${value(record.temperature)}`;
+   });
+ }
+ function refresh(){
+   panels().forEach(panel=>{
+     const hours=period(panel);
+     const active=enabled.has(dayKey(panel));
+     const toggle=panel.querySelector('.sw-obs-toggle input');
+     if(toggle)toggle.checked=active;
+     const payload=response[String(hours)];
+     if(kind==='heat')renderHeat(panel,payload);
+     else renderRain(panel,payload);
+   });
+   // Preserve the existing card's self-sizing logic on content changes.
+   window.requestAnimationFrame(()=>{
+     const h=Math.ceil(root.getBoundingClientRect().height+2);
+     window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*');
+   });
+ }
+ function install(){
+   for(const panel of panels()){
+     if(panel.querySelector('.sw-obs-action'))continue;
+     const anchor=kind==='heat'?panel.querySelector('.temp-hour-title'):panel.querySelector('.rr-detail-bars');
+     if(!anchor)continue;
+     const action=document.createElement('div');action.className='sw-obs-action';
+     action.innerHTML='<label class="sw-obs-toggle"><input type="checkbox" aria-label="Compare forecasts with synoptic station observations">Compare to actual</label>';
+     const status=document.createElement('div');status.className='sw-obs-status';status.hidden=true;
+     anchor.parentElement.insertBefore(action,anchor);
+     anchor.parentElement.insertBefore(status,action.nextSibling);
+     if(kind==='rain'){
+       const obs=document.createElement('div');obs.className='sw-obs-row';obs.hidden=true;
+       obs.innerHTML='<div class="sw-obs-title">Observed rainfall (mm)</div><div class="sw-obs-values"></div>';
+       anchor.appendChild(obs);
+     }
+     action.querySelector('input').addEventListener('change',event=>{
+       const key=dayKey(panel),hours=period(panel);
+       if(event.target.checked)enabled.add(key);else enabled.delete(key);
+       refresh();
+       if(event.target.checked&&!response[String(hours)]){
+         componentValue({type:'load',hours,nonce:Date.now()+'-'+Math.random()});
+       }
+     });
+   }
+   refresh();
+ }
+ window.addEventListener('message',event=>{
+   if(event.data?.type!=='streamlit:render')return;
+   const incoming=event.data?.args?.obs_payload;
+   if(incoming && typeof incoming==='object')response=incoming;
+   install();
+ });
+ if(kind==='heat'){
+   const dayList=root.querySelector('#temp-days');
+   if(dayList&&typeof MutationObserver!=='undefined')new MutationObserver(install).observe(dayList,{childList:true});
+ }
+ install();
+ window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:componentReady',apiVersion:1},'*');
+})();
+</script>
+'''
+
 def render_table_html(result: dict) -> str:
     windows = result["windows"]
     data = result["data"]
@@ -3391,11 +3985,12 @@ with main:
                         st.warning("There isn't enough rainfall data for the available timing options.")
                     else:
                         rain_card_html = render_six_day_forecast_html(period_results, card_thr, rain_name)
-                        if hasattr(st, "iframe"):
-                            st.iframe(rain_card_html, height="content")
-                        else:
-                            # The card resizes this iframe on every mode or day change.
-                            components.html(rain_card_html, height=510, scrolling=False)
+                        _obs_region = "TW" if region_for_point(*rain_true) == "taiwan" else "PH"
+                        _render_observation_component(
+                            rain_card_html, "rain", rain_true[0], rain_true[1],
+                            {h: _obs_periods_rain(period_results, h) for h in period_results},
+                            _obs_region,
+                        )
             with right_col:
                 if thr_result is not None:
                     resolution = thr_result.get("resolution") or "0p25"
@@ -3426,17 +4021,11 @@ with main:
                 st.warning("No Heat Index forecast is available for the selected period.")
             else:
                 heat_card_html = render_temperature_forecast_html(temp_result, temp_location_name)
-                if hasattr(st, "iframe"):
-                    st.iframe(heat_card_html, height="content")
-                else:
-                    # The card reports its height as daily details slide down/up.
-                    components.html(heat_card_html, height=900, scrolling=False)
-                st.caption(
-                    _coords_caption(
-                        temp_location_name,
-                        *st.session_state.get("last_temp_true", (true_lat, true_lon)),
-                        temp_result,
-                    )
+                _obs_lat, _obs_lon = st.session_state.get("last_temp_true", (true_lat, true_lon))
+                _obs_region = "TW" if region_for_point(_obs_lat, _obs_lon) == "taiwan" else "PH"
+                _render_observation_component(
+                    heat_card_html, "heat", _obs_lat, _obs_lon,
+                    {3: _obs_periods_heat(temp_result)}, _obs_region,
                 )
 
 
@@ -3496,4 +4085,41 @@ if view_mode == "Rainfall Forecast":
                         st.caption("The threshold products were retrieved individually because the combined request wasn't available.")
             render_status_footer()
 else:
-    render_status_footer()
+    with st.expander("Forecast details & sources", expanded=False):
+        st.markdown(
+            "<style>"
+            ".st-key-heat_footnote_text [data-testid='stMarkdown'] p{font-size:.82rem;line-height:1.42;}"
+            ".st-key-heat_footnote_text [data-testid='stCaptionContainer'] p{font-size:.72rem;line-height:1.35;}"
+            "details:has(.st-key-heat_footnote_text) summary{font-size:.88rem;}"
+            "</style>",
+            unsafe_allow_html=True,
+        )
+        with st.container(key="heat_footnote_text"):
+            st.markdown(
+                "**Forecast estimates.** Heat Index and air temperature are ECMWF ENS "
+                "3-hourly probabilistic estimates. Daily peaks are the highest available "
+                "3-hourly median values, not exact daily maxima. P10 and P90 describe "
+                "the ensemble range at the indicated time."
+            )
+            st.markdown(
+                "**Source and updates.** ECMWF Open Data (CC BY 4.0), "
+                "retrieved from stored forecast products at the stated resolution. "
+                "Forecasts represent model grid-point estimates, not measurements "
+                "at the exact selected coordinates."
+            )
+            st.markdown(
+                "**Compare to actual.** Synoptic-station measurements are retrieved "
+                "on demand, with PAGASA WIS2 checked before OGIMET (SYNOP). "
+                "Observed Heat Index is calculated from station air temperature and "
+                "dew point where available. Comparisons are shown only when report "
+                "times match the forecast periods; station distance and source "
+                "appear alongside the observations."
+            )
+            if "last_temp_result" in st.session_state:
+                _heat = st.session_state["last_temp_result"]
+                _lat, _lon = st.session_state.get("last_temp_true", (true_lat, true_lon))
+                st.caption(_coords_caption(
+                    st.session_state.get("last_temp_location_name", "Selected location"),
+                    _lat, _lon, _heat,
+                ))
+        render_status_footer()
