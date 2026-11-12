@@ -18,7 +18,7 @@ from taiwan_support import taiwan_enabled
 GITHUB_REPO = "jpppamintuan/simpleweather"
 _DATA_BRANCH = "data"
 _COMMIT_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/{_DATA_BRANCH}"
-MAX_MANIFEST_AGE_HOURS = 2
+MAX_MANIFEST_AGE_HOURS = 6
 _MANIFEST_CACHE_TTL_SECONDS = 30
 _manifest_cache: dict = {"ts": 0.0, "data": None}
 _SHA_CACHE_TTL_SECONDS = 60
