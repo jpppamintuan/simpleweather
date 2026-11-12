@@ -3097,7 +3097,7 @@ refresh();
 # ---------------------------------------------------------------------------
 # Observed weather: PAGASA WIS2 SYNOP first, OGIMET SYNOP second.
 # All data are requested only when Compare to actual is enabled. Never
-# infer a missing accumulation, report time, or Heat Index observation.
+# fabricate a missing accumulation, report time, or Heat Index observation.
 # ---------------------------------------------------------------------------
 import base64
 import hashlib
@@ -3510,7 +3510,7 @@ def _obs_read_ogimet(start_utc, end_utc, region, *, diagnostics=None, nearest_id
         if requested_windows and not has_matching_rain(valid_nearby):
             for wmo in valid_nearby:
                 get_one(dict(params, block=wmo), f"station {wmo}")
-                if has_matching_rain():
+                if has_matching_rain(valid_nearby):
                     break
     else:
         # The website's working Taiwan territorial query uses state=Taiw.
@@ -3556,55 +3556,114 @@ def _obs_has_data(records, variable, hours):
 
 
 def _obs_match_rain(records, start, end, hours):
-    """Match reporting-period intervals exactly; never subdivide longer totals.
+    """Return only rainfall totals supported by complete, aligned SYNOP periods.
 
-    Example: SYNOP at 12Z with 6RRR1 represents the whole 06-12Z period.
-    Permitted shorter reports may be summed ONLY if they cover the requested
-    period completely, with no overlaps, gaps or inferred zeros.
+    Direct reports (or gap-free combinations of shorter reports) take priority.
+    For a missing SIX-hour period only, infer its amount by subtracting three
+    fully observed 6-hour intervals from a containing reported 24-hour total.
+    Never distribute longer totals into shorter bins or silently fill gaps.
     """
     if end - start != timedelta(hours=hours):
         return None
     by_start = {}
+    day_totals = []
     for r in records:
         if r.get("rain_mm") is None and not r.get("rain_trace"):
             continue
         try:
             length = int(r["rain_hours"])
-            if length not in (1, 2, 3, 6) or length > hours:
-                continue
-            # Explicit interval endpoints take precedence over derived ones.
             report_end = datetime.fromisoformat(r.get("rain_end") or r["time"])
-            report_start = datetime.fromisoformat(r["rain_start"]) if r.get("rain_start") else report_end - timedelta(hours=length)
+            report_start = (datetime.fromisoformat(r["rain_start"])
+                            if r.get("rain_start") else report_end - timedelta(hours=length))
             if report_end - report_start != timedelta(hours=length):
                 continue
-            if not (start <= report_start < report_end <= end):
-                continue
-            by_start.setdefault(report_start, []).append((report_end, r))
-        except (ValueError, TypeError, KeyError):
+            # A trace is not a measured numeric zero, and cannot be subtracted.
+            if length == 24 and hours == 6 and not r.get("rain_trace"):
+                amount = float(r["rain_mm"])
+                if math.isfinite(amount) and amount >= 0:
+                    day_totals.append((report_start, report_end, amount))
+            elif length in (1, 2, 3, 6) and length <= hours:
+                # Keep reports outside the requested period as well; they may
+                # be needed to reconstruct the other three six-hour slots.
+                by_start.setdefault(report_start, []).append((report_end, r))
+        except (ValueError, TypeError, KeyError, OverflowError):
             continue
 
-    # Prefer direct totals and then the fewest valid contiguous reports.
     from functools import lru_cache
+
     @lru_cache(None)
-    def segments(cursor):
-        if cursor == end:
+    def segments(cursor, slot_end):
+        if cursor == slot_end:
             return ()
         options = []
-        for next_end, r in by_start.get(cursor, ()):
-            remaining = segments(next_end)
+        for next_end, report in by_start.get(cursor, ()):
+            if next_end > slot_end or next_end <= cursor:
+                continue
+            remaining = segments(next_end, slot_end)
             if remaining is not None:
-                options.append((r,) + remaining)
+                options.append((report,) + remaining)
         return min(options, key=len) if options else None
 
-    chosen = segments(start)
-    if not chosen:
+    def numeric_total(first, last):
+        chosen = segments(first, last)
+        if not chosen or any(r.get("rain_trace") or r.get("rain_mm") is None
+                             for r in chosen):
+            return None
+        try:
+            amounts = [float(r["rain_mm"]) for r in chosen]
+            if not all(math.isfinite(v) and v >= 0 for v in amounts):
+                return None
+            return sum(amounts)
+        except (ValueError, TypeError):
+            return None
+
+    # Reported totals and gap-free sums have higher priority than derived ones.
+    chosen = segments(start, end)
+    if chosen:
+        if len(chosen) == 1 and chosen[0].get("rain_trace"):
+            return {"rain_trace": True}
+        if not any(r.get("rain_trace") or r.get("rain_mm") is None for r in chosen):
+            direct = numeric_total(start, end)
+            if direct is not None:
+                return {"rain_mm": round(direct, 3)}
+
+    if hours != 6:
         return None
-    if len(chosen) == 1 and chosen[0].get("rain_trace"):
-        return {"rain_trace": True}
-    if any(r.get("rain_trace") or r.get("rain_mm") is None for r in chosen):
-        # A trace is not zero and cannot be summed as a precise quantity.
+
+    possible = []
+    for day_start, day_end, day_amount in day_totals:
+        # Require one complete 24-hour total covering exactly four 6-hour
+        # slots, including the requested six-hour interval.
+        if not (day_start <= start < end <= day_end):
+            continue
+        slots = [(day_start + timedelta(hours=6*i),
+                  day_start + timedelta(hours=6*(i+1))) for i in range(4)]
+        if (start, end) not in slots:
+            continue
+        other_amounts = []
+        for slot_start, slot_end in slots:
+            if (slot_start, slot_end) == (start, end):
+                continue
+            amount = numeric_total(slot_start, slot_end)
+            if amount is None:
+                break  # Never assume that an unreported interval is dry.
+            other_amounts.append(amount)
+        if len(other_amounts) != 3:
+            continue
+        leftover = day_amount - sum(other_amounts)
+        # A materially negative residual is inconsistent, not zero rainfall.
+        if leftover < -1e-6 or not math.isfinite(leftover):
+            continue
+        possible.append(max(0.0, leftover))
+
+    if not possible:
         return None
-    return {"rain_mm": round(sum(r["rain_mm"] for r in chosen), 3)}
+    # Reject conflicting reconstructions rather than arbitrarily choosing a
+    # containing 24-hour report. Small floating-point differences are fine.
+    if max(possible) - min(possible) > 1e-6:
+        return None
+    return {"rain_mm": round(possible[0], 3), "derived": True,
+            "derivation": "24h_minus_other_6h"}
 
 
 def _obs_dataset_summary(name, by_station):
@@ -3642,7 +3701,11 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
     periods = json.loads(periods_json)
     now = datetime.now(timezone.utc)
     start = min((datetime.fromisoformat(p[0]) for p in periods), default=now-timedelta(hours=24))
-    start = max(start-timedelta(hours=6), now-timedelta(days=3))
+    # Reconstructing a six-hour total from a reported 24-hour accumulation
+    # needs the other three six-hour intervals, up to 18 hours earlier.
+    # Fetch a full day's history before the first requested period only here.
+    lookback = 24 if variable == "rain" and hours == 6 else 6
+    start = max(start-timedelta(hours=lookback), now-timedelta(days=4 if lookback == 24 else 3))
     end = min(now, max((datetime.fromisoformat(p[-1]) for p in periods), default=now))
     if start > end:
         start, end = end-timedelta(hours=6), end
@@ -3703,7 +3766,9 @@ def _obs_for_forecast(lat, lon, variable, hours, periods_json, region):
                     if amount is not None:
                         values[f"{int(period_start.timestamp()*1000)}-{int(period_end.timestamp()*1000)}"] = (
                             {"rain_trace": True} if amount.get("rain_trace")
-                            else {"rain_mm": round(amount["rain_mm"], 2)})
+                            else {"rain_mm": round(amount["rain_mm"], 2),
+                                  **({"derived": True, "derivation": amount["derivation"]}
+                                     if amount.get("derived") else {})})
                 else:
                     report = _obs_match_temp(readings, period_end)
                     if report:
@@ -3756,7 +3821,7 @@ def _render_observation_component(html, kind, lat, lon, periods_by_hours, region
     """
     # A bridge-code change must create a new component identity so Streamlit
     # cannot keep an iframe/cached component with obsolete JavaScript.
-    fingerprint = hashlib.sha256((html + "\nobs-bridge-v4").encode("utf-8")).hexdigest()[:20]
+    fingerprint = hashlib.sha256((html + "\nobs-bridge-v5").encode("utf-8")).hexdigest()[:20]
     code = (_OBS_COMPARE_BRIDGE.replace("__OBS_KIND__", json.dumps(kind))
             .replace("__OBS_FINGERPRINT__", fingerprint))
     folder = _OBS_COMPONENT_DIR / (kind + "_" + fingerprint)
@@ -3811,6 +3876,7 @@ _OBS_COMPARE_BRIDGE = r'''
 .sw-obs-value{font-size:10px;color:#283746;background:#edf6fb;border:1px solid #dcecf4;
  border-radius:5px;padding:4px 1px;text-align:center;font-weight:700;min-width:0;overflow:hidden}
 .sw-obs-value.is-na{color:#8994a1;background:#f8fafc;border-color:#edf0f4;font-weight:400}
+.sw-obs-derivation{font-size:10px;color:#697789;margin-top:5px;line-height:1.4}
 .temp-hour .sw-obs-temp{display:block;border-top:1px solid rgba(40,55,70,.14);margin-top:5px;
  padding-top:5px;font-size:10px;font-weight:650;line-height:1.4;white-space:normal;color:#283746}
 .temp-hour .sw-obs-temp small{display:block;font-size:9px;font-weight:400;color:#506070}
@@ -3865,16 +3931,31 @@ _OBS_COMPARE_BRIDGE = r'''
    cells.style.gridTemplateColumns=`repeat(${slots.length},minmax(0,1fr))`;
    cells.style.columnGap='2px';
    cells.replaceChildren();
+   let hasDerived=false;
    slots.forEach(slot=>{
      const span=document.createElement('span');
      const start=slot.dataset.startMs,end=slot.dataset.endMs;
      const record=data?.values?.[start+'-'+end];
      const value=record?.rain_mm,trace=Boolean(record?.rain_trace);
+     const derived=Boolean(record?.derived);
+     if(derived)hasDerived=true;
      span.className='sw-obs-value'+((Number.isFinite(value)||trace)?'':' is-na');
-     span.textContent=trace?'trace':Number.isFinite(value)?((value<10?Number(value).toFixed(1):Math.round(value))+''):'—';
-     span.title=trace?'Trace rainfall reported':Number.isFinite(value)?`Observed ${value} mm in this ${period(panel)}-hour period`:'No matching observation';
+     span.textContent=trace?'trace':Number.isFinite(value)?((value<10?Number(value).toFixed(1):Math.round(value))+(derived?'*':'')):'—';
+     span.title=trace?'Trace rainfall reported':Number.isFinite(value)?
+       (derived?`Derived ~${value} mm from a reported 24-hour total minus the other fully observed six-hour periods; approximate due to reporting precision`:
+                `Observed ${value} mm in this ${period(panel)}-hour period`):'No matching observation';
      cells.appendChild(span);
    });
+   let footnote=row.querySelector('.sw-obs-derivation');
+   if(hasDerived && !footnote){
+     footnote=document.createElement('div');
+     footnote.className='sw-obs-derivation';
+     row.appendChild(footnote);
+   }
+   if(footnote){
+     footnote.hidden=!hasDerived;
+     if(hasDerived)footnote.textContent='* Derived from a reported 24-hour total and other complete 6-hour observations; approximate due to reporting precision.';
+   }
  }
  function renderHeat(panel,data){
    displayStatus(panel,data);
