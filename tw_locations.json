@@ -1,21 +1,112 @@
 [
-  {"name":"Taipei City", "lat":25.0330, "lon":121.5654},
-  {"name":"Ximending (Taipei)", "lat":25.0432, "lon":121.5077},
-  {"name":"Chiang Kai-shek Memorial Hall", "lat":25.0347, "lon":121.5219},
-  {"name":"Taipei 101 / Xinyi", "lat":25.0339, "lon":121.5645},
-  {"name":"National Palace Museum", "lat":25.1024, "lon":121.5485},
-  {"name":"Shilin", "lat":25.0880, "lon":121.5240},
-  {"name":"Beitou", "lat":25.1360, "lon":121.5070},
-  {"name":"Yangmingshan", "lat":25.1700, "lon":121.5600},
-  {"name":"Maokong Gondola", "lat":24.9687, "lon":121.5871},
-  {"name":"Taipei Zoo", "lat":24.9985, "lon":121.5818},
-  {"name":"Wulai", "lat":24.8665, "lon":121.5517},
-  {"name":"Wulai Waterfall", "lat":24.8476, "lon":121.5523},
-  {"name":"Jiufen", "lat":25.1090, "lon":121.8440},
-  {"name":"Shifen", "lat":25.0420, "lon":121.7770},
-  {"name":"Shifen Waterfall", "lat":25.0450, "lon":121.7930},
-  {"name":"Yehliu Geopark", "lat":25.2066, "lon":121.6905},
-  {"name":"Keelung", "lat":25.1283, "lon":121.7419},
-  {"name":"Shenao / Badouzi", "lat":25.1344, "lon":121.8020},
-  {"name":"Heping Island", "lat":25.1620, "lon":121.7640}
+  {
+    "name": "Taipei City (All days)",
+    "lat": 25.033,
+    "lon": 121.5654
+  },
+  {
+    "name": "Ximending (Days 1 & 3 / Wed & Fri)",
+    "lat": 25.0432,
+    "lon": 121.5077
+  },
+  {
+    "name": "Chiang Kai-shek Memorial Hall (Day 1 / Wed)",
+    "lat": 25.0347,
+    "lon": 121.5219
+  },
+  {
+    "name": "Ningxia Night Market (Day 1 / Wed)",
+    "lat": 25.0556,
+    "lon": 121.5151
+  },
+  {
+    "name": "National Palace Museum (Day 2 / Thu)",
+    "lat": 25.1024,
+    "lon": 121.5485
+  },
+  {
+    "name": "Zhishan Garden (National Palace Museum) (Day 2 / Thu)",
+    "lat": 25.1013,
+    "lon": 121.5498
+  },
+  {
+    "name": "Beitou (Day 2 / Thu)",
+    "lat": 25.136,
+    "lon": 121.507
+  },
+  {
+    "name": "Taipei 101 / Xinyi (Day 2 / Thu)",
+    "lat": 25.0339,
+    "lon": 121.5645
+  },
+  {
+    "name": "Linjiang Street Night Market (Day 2 / Thu)",
+    "lat": 25.0299,
+    "lon": 121.5554
+  },
+  {
+    "name": "Shifen (Day 3 / Fri)",
+    "lat": 25.042,
+    "lon": 121.777
+  },
+  {
+    "name": "Shifen Waterfall (Day 3 / Fri)",
+    "lat": 25.045,
+    "lon": 121.793
+  },
+  {
+    "name": "Heping Island (Day 3 / Fri)",
+    "lat": 25.160629,
+    "lon": 121.76384
+  },
+  {
+    "name": "Shen'ao Rail Bike (Badouzi) (Day 3 / Fri)",
+    "lat": 25.1344,
+    "lon": 121.802
+  },
+  {
+    "name": "Raohe Night Market (Day 3 / Fri)",
+    "lat": 25.051,
+    "lon": 121.5775
+  },
+  {
+    "name": "Wulai (Day 4 / Sat)",
+    "lat": 24.8665,
+    "lon": 121.5517
+  },
+  {
+    "name": "Wulai Log Cart (Day 4 / Sat)",
+    "lat": 24.8618,
+    "lon": 121.551
+  },
+  {
+    "name": "Wulai Waterfall (Day 4 / Sat)",
+    "lat": 24.8476,
+    "lon": 121.5523
+  },
+  {
+    "name": "Yun Hsien Resort / Cable Car (Day 4 / Sat)",
+    "lat": 24.8452,
+    "lon": 121.5539
+  },
+  {
+    "name": "Taipei Zoo (Day 4 / Sat)",
+    "lat": 24.9985,
+    "lon": 121.5818
+  },
+  {
+    "name": "Maokong Gondola (Day 4 / Sat)",
+    "lat": 24.9687,
+    "lon": 121.5871
+  },
+  {
+    "name": "Jingmei Night Market (Day 4 / Sat)",
+    "lat": 24.9907,
+    "lon": 121.5417
+  },
+  {
+    "name": "Taoyuan International Airport (Day 5 / Sun)",
+    "lat": 25.0764,
+    "lon": 121.2239
+  }
 ]
