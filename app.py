@@ -2700,10 +2700,16 @@ button{cursor:pointer}
 .rr-simple-toggle input:checked{background:#25a8db}.rr-simple-toggle input:checked:after{left:18px}
 .temp-guide{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);margin:0 0 10px}
 .temp-chart-shell{border:1px solid #edf0f4;border-radius:12px;padding:12px 11px 6px;background:#fdfefe;min-width:0}
+.temp-daily-chart{margin-top:11px}
+.temp-details-grid.temp-range-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+.temp-range-summary .temp-summary-tile b{font-size:var(--rain-detail-title-size)}
+.temp-range-summary .temp-summary-tile small:last-child{margin-top:3px;font-size:var(--rain-micro-size)}
+.temp-range-description{font-size:var(--rain-secondary-size);color:var(--rain-section);font-weight:650;margin-top:7px}
+.temp-detail-peak{text-align:right}
 .temp-chart-top{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:2px}
 .rr-section-heading{font-size:var(--rain-section-size);font-weight:750;color:var(--rain-section)}
 .temp-chart-meta{font-size:var(--rain-micro-size);font-weight:400;color:var(--rain-muted)}
-#temp-graph{width:100%;height:255px;display:block;overflow:visible;touch-action:pan-y}
+.temp-graph{width:100%;height:241px;display:block;overflow:visible;touch-action:pan-y}
 .temp-plot-hit{fill:transparent;cursor:pointer;pointer-events:all;touch-action:manipulation}
 .temp-day-button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
 .temp-plot-hit:focus-visible{stroke:#159bd6;stroke-width:2;stroke-dasharray:3 4;outline:none}
@@ -2711,6 +2717,7 @@ button{cursor:pointer}
 .temp-legend-entry{display:inline-flex;gap:5px;align-items:center}
 .temp-legend-line{width:17px;height:3px;border-radius:5px;background:var(--temp-accent)}
 .temp-legend-range{width:16px;height:9px;border-radius:3px;background:#B5DCEB88;border:1px solid #B5DCEB}
+.temp-legend-observed{width:9px;height:9px;border-radius:50%;background:#fff;border:2px solid #53667A}
 .temp-chart-selected{font-size:var(--rain-secondary-size);color:var(--rain-muted);text-align:center;margin:2px 0 0}
 .temp-graph-options{color:var(--rain-muted);font-size:var(--rain-secondary-size);margin:9px 4px 2px}
 .temp-graph-options summary{cursor:pointer;color:#576b80;font-weight:700}
@@ -2790,7 +2797,7 @@ button{cursor:pointer}
 .temp-note p{margin:7px 0 0}
 @media(max-width:430px){
   .temp-detail-top{flex-direction:column;align-items:stretch;gap:7px}
-  .temp-detail-top>div:last-child{text-align:left!important}
+  .temp-detail-peak{text-align:left}
   .temp-detail-descriptor{justify-content:flex-start}
 }
 @media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{grid-template-columns:54px minmax(0,1fr) 14px;padding:10px 7px;gap:8px;min-height:84px}.temp-day-ranges{gap:8px}.temp-day-numbers{gap:10px}}
@@ -2805,31 +2812,18 @@ __SHARED_RAIN_TYPOGRAPHY__
   <div class="temp-top-subtitle">ECMWF ENS · 3-hourly probabilistic estimates</div>
   <div class="temp-card-controls">
     <div class="rr-card-tabs" role="tablist" aria-label="Forecast variable">
-      <button type="button" role="tab" data-variable="hi" aria-selected="true" aria-controls="temp-graph">Heat Index</button>
-      <button type="button" role="tab" data-variable="temp" aria-selected="false" aria-controls="temp-graph">Air temperature</button>
+      <button type="button" role="tab" data-variable="hi" aria-selected="true" aria-controls="temp-days">Heat Index</button>
+      <button type="button" role="tab" data-variable="temp" aria-selected="false" aria-controls="temp-days">Air temperature</button>
     </div>
     <label class="rr-simple-toggle"><input type="checkbox" id="temp-simple">Simple mode</label>
   </div>
-  <div class="temp-guide">Tap a graph peak or a day below to view details.</div>
-  <section class="temp-chart-shell" aria-label="Heat index and air temperature graph">
-    <div class="temp-chart-top"><span class="rr-section-heading" id="temp-chart-title">Heat Index over time</span><span class="temp-chart-meta">3-hourly most likely estimate</span></div>
-    <svg id="temp-graph" role="img" aria-label="Interactive forecast graph with a marker for each daily peak. Tap a day marker to expand the corresponding daily forecast."></svg>
-    <div class="temp-legend"><span class="temp-legend-entry"><span class="temp-legend-line" id="temp-legend-line"></span><span>Most likely</span></span><span class="temp-legend-entry"><span class="temp-legend-range" id="temp-legend-range"></span><span>Likely range</span></span></div>
-    <div class="temp-chart-selected" id="temp-graph-caption" hidden></div>
-    <details class="temp-graph-options"><summary>Graph options</summary>
-      <div class="temp-graph-options-inner">
-        <label><input type="checkbox" id="temp-show-range" checked> Likely range</label>
-        <label id="temp-reference-label"><input type="checkbox" id="temp-show-reference" checked> Heat Index category lines</label>
-        <label><input type="checkbox" id="temp-show-compare"> Compare both variables</label>
-      </div>
-    </details>
-  </section>
+  <div class="temp-guide">Select a day to see its 3-hourly graph and forecast details.</div>
   <div class="temp-section"><span class="rr-section-heading">Day-by-day outlook</span><small>Available 3-hourly periods</small></div>
   <p class="temp-range-key">Solid bars: lowest–highest median · Pale bars: minimum P10–maximum P90</p>
   <div class="temp-days" id="temp-days"></div>
   <details class="temp-note"><summary>How to read this forecast</summary>
-    <p>The highlighted Heat Index is the default. Each day’s bold range spans its lowest to highest available 3-hourly median estimate; the lighter range spans its lowest P10 to highest P90 estimate. These are not ensemble percentiles of daily minimum or maximum. Graph shading shows P10–P90 estimates at individual times; expanded daily peaks remain the highest 3-hourly medians.</p>
-    <p>Simple mode uses Heat Index caution categories and informal air-temperature descriptions in the daily overview. Detailed figures and graph values remain available. Daily periods use Philippine local time (UTC+8); partial days use only available forecast steps.</p>
+    <p>The highlighted Heat Index is the default. Each day’s bold range spans its lowest to highest available 3-hourly median estimate; the lighter range spans its lowest P10 to highest P90 estimate. These are not ensemble percentiles of daily minimum or maximum. Each expanded day shows its own 3-hourly graph, with P10–P90 shading and the selected variable’s highest 3-hourly median marked.</p>
+    <p>Simple mode uses Heat Index caution categories and informal air-temperature descriptions in the daily overview and summary. Detailed figures and graph values remain available. Daily periods use Philippine local time (UTC+8); partial days use only available forecast steps.</p>
   </details>
 </main>
 <script>
@@ -2837,13 +2831,11 @@ __SHARED_RAIN_TYPOGRAPHY__
 'use strict';
 const days=__TEMPERATURE_DATA__;
 const root=document.getElementById('temp-root');
-const svg=document.getElementById('temp-graph');
+let svg=null;
 const list=document.getElementById('temp-days');
 const tabs=Array.from(root.querySelectorAll('[data-variable]'));
 const simple=document.getElementById('temp-simple');
-const showRange=document.getElementById('temp-show-range');
-const showReference=document.getElementById('temp-show-reference');
-const showCompare=document.getElementById('temp-show-compare');
+const graphOptions={range:true,reference:true,compare:false};
 const categories=[
  {value:27,name:'Caution',color:'#F4C430'},
  {value:33,name:'Extreme caution',color:'#FF9F1C'},
@@ -2856,6 +2848,7 @@ const ink='#283746', muted='#687585';
 const palette={hi:{stroke:'#DF8744',shade:'#F6D6B4'},temp:{stroke:'#238FC2',shade:'#C8E6F1'}};
 function fmt(value,unit='°C'){return Number.isFinite(value)?`${Math.round(value)}${unit}`:'—'}
 function dec(value){return Number.isFinite(value)?`${value.toFixed(1)}°C`:'—'}
+function formatDailySpan(low,high){return Number.isFinite(low)&&Number.isFinite(high)?`${fmt(low,'°')}–${fmt(high,'°C')}`:'—';}
 function severityFor(value){
   if(!Number.isFinite(value))return {label:'Unavailable',color:'#8994A1'};
   for(let i=categories.length-1;i>=0;i--)if(value>=categories[i].value)return {label:categories[i].name,color:categories[i].color};
@@ -2937,18 +2930,14 @@ function animateHeight(){
 function dayHTML(day,i){
   const selectedNow=selected===i;
   const todayTag=day.today?'<span class="rr-today-tag">TODAY</span>':'';
-  const airVal=day.airPeak?.value??null;
-  const p=day.hiPeak;
-  const headline=p?`<div class="temp-detail-value">${fmt(p.value)}</div>`:'<div class="temp-detail-value">—</div>';
-  const stats=[
-    {name:'P10 · lower estimate',value:p?.p10??null,classify:true},
-    {name:'P90 · higher estimate',value:p?.p90??null,classify:true},
-    {name:'Peak air temperature',value:airVal,classify:false}
-  ];
+  const p=day.hiPeak; // Retain the Heat Index peak marker in existing 3-hourly tiles.
+  const selectedPeak=variable==='hi'?day.hiPeak:day.airPeak;
+  const selectedRange=variable==='hi'?day.hiRange:day.airRange;
+  const selectedDescriptor=variable==='hi'?day.severity.label:day.airDescriptor;
+  const selectedPeakTime=selectedPeak?.time?` (${safe(selectedPeak.time.toLowerCase())})`:'';
   const hours=day.steps.map((step,j)=>`<div class="temp-hour" data-valid-time="${safe(step.time)}" style="${classColors(step.hi.median)}">
     <span class="temp-hour-time">${safe(step.label.toLowerCase())}${p&&p.index===j?' <span class="temp-hour-peak">(peak)</span>':''}<span class="temp-hour-now" hidden>NOW</span></span><span class="temp-hour-main">${fmt(step.hi.median,'°')}</span>
     <span class="temp-hour-secondary">Air ${fmt(step.temp.median,'°')}</span></div>`).join('');
-  const peakTime=p?.time?` (${safe(p.time.toLowerCase())})`:'';
   return `<div class="temp-day-wrap" data-day-wrap="${i}">
     <button type="button" class="temp-day-button" data-day="${i}" aria-expanded="${selectedNow}" aria-controls="temp-detail-${i}">
       <span class="temp-day-date">${todayTag}<span class="rr-day-weekday">${safe(day.shortWeekday)}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
@@ -2958,11 +2947,29 @@ function dayHTML(day,i){
     <section class="temp-detail ${selectedNow?'is-open':''}" id="temp-detail-${i}" aria-label="Detailed Heat Index forecast for ${safe(day.full)}">
       <div class="temp-detail-collapse"><div class="temp-detail-body">
       <div class="temp-detail-top"><div class="temp-expanded-date">${todayTag}<strong>${safe(day.full)}</strong></div>
-      <div style="text-align:right"><div class="temp-detail-caption">Peak Heat Index${peakTime}</div>${headline}
-        <div class="temp-detail-descriptor"><span class="temp-risk-dot" style="--severity:${day.severity.color}"></span>${safe(day.severity.label)}</div>
+      <div class="temp-detail-peak"><div class="temp-detail-caption">Peak ${variable==='hi'?'Heat Index':'air temperature'}${selectedPeakTime}</div>
+        <div class="temp-detail-value">${fmt(selectedPeak?.value??null)}</div>
+        <div class="temp-detail-descriptor">${variable==='hi'?`<span class="temp-risk-dot" style="--severity:${day.severity.color}"></span>`:''}${safe(selectedDescriptor)}</div>
       </div></div>
-      <div class="temp-details-grid">${stats.map(stat=>`<div class="temp-summary-tile ${stat.classify?'is-hi-classified':''}" ${stat.classify?`style="${classColors(stat.value)}"`:''}>
-        <small>${safe(stat.name)}</small><b>${fmt(stat.value)}</b></div>`).join('')}</div>
+      <div class="temp-details-grid temp-range-summary">
+        <div class="temp-summary-tile"><small>Most likely daily range</small><b>${formatDailySpan(selectedRange?.medianMin,selectedRange?.medianMax)}</b><small>Lowest–highest 3-hourly median</small></div>
+        <div class="temp-summary-tile"><small>Wider estimate</small><b>${formatDailySpan(selectedRange?.p10Min,selectedRange?.p90Max)}</b><small>Minimum P10 – maximum P90</small></div>
+      </div>
+      <div class="temp-range-description" ${simple.checked?'':'hidden'}>${safe(selectedRange?.description||'Unavailable')}</div>
+      <section class="temp-chart-shell temp-daily-chart" aria-label="${variable==='hi'?'Heat Index':'Air temperature'} three-hourly graph for ${safe(day.full)}">
+        <div class="temp-chart-top"><span class="rr-section-heading">${variable==='hi'?'Heat Index':'Air temperature'} over the day</span><span class="temp-chart-meta">3-hourly most likely estimate</span></div>
+        <svg class="temp-graph" role="img" aria-label="${variable==='hi'?'Heat Index':'Air temperature'} forecast: 3-hourly medians and P10 to P90 estimates. Peak and current-time markers shown when available."></svg>
+        <div class="temp-legend">
+          <span class="temp-legend-entry"><span class="temp-legend-line" style="background:${palette[variable].stroke}"></span><span>Most likely</span></span>
+          <span class="temp-legend-entry temp-legend-range-entry" ${graphOptions.range?'':'hidden'}><span class="temp-legend-range" style="background:${palette[variable].shade}88"></span><span>Likely range</span></span>
+          <span class="temp-legend-entry temp-legend-observed-entry" hidden><span class="temp-legend-observed"></span><span>Observed</span></span>
+        </div>
+        <details class="temp-graph-options"><summary>Graph options</summary><div class="temp-graph-options-inner">
+          <label><input type="checkbox" data-graph-option="range" ${graphOptions.range?'checked':''}> Likely range</label>
+          <label ${variable==='hi'?'':'hidden'}><input type="checkbox" data-graph-option="reference" ${graphOptions.reference?'checked':''}> Heat Index category lines</label>
+          <label><input type="checkbox" data-graph-option="compare" ${graphOptions.compare?'checked':''}> Compare both variables</label>
+        </div></details>
+      </section>
       <div class="rr-section-heading temp-hour-title">3-hourly forecast</div>
       <div class="temp-hour-scroll"><div class="temp-hours">${hours}</div></div>
       <div class="temp-hour-labels">Heat Index is emphasized; air temperature appears below each value.</div>
@@ -2979,8 +2986,8 @@ function highlightCurrentPeriod(){
     if(marker)marker.hidden=!current;
   });
 }
-function updateRows(){list.innerHTML=days.map(dayHTML).join('');highlightCurrentPeriod();height()}
-function selectDay(i){if(i<0||i>=days.length)return;selected=selected===i?-1:i;updateRows();drawGraph();animateHeight()}
+function updateRows(){list.innerHTML=days.map(dayHTML).join('');highlightCurrentPeriod();drawGraph();height()}
+function selectDay(i){if(i<0||i>=days.length)return;selected=selected===i?-1:i;updateRows();animateHeight()}
 // One stable listener survives every re-render and works when tapping child spans/SVGs.
 list.addEventListener('click',event=>{
   const button=event.target.closest?.('.temp-day-button');
@@ -3005,168 +3012,155 @@ function curve(points){
  return d;
 }
 function drawGraph(){
+ svg=list.querySelector('.temp-detail.is-open .temp-graph');
+ if(!svg||selected<0||selected>=days.length)return;
  svg.replaceChildren();
- const w=Math.max(260,Math.floor(svg.getBoundingClientRect().width)||320),h=255,l=43,r=w-12,t=32,b=211;
- svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
- const flat=[];days.forEach((day,i)=>day.steps.forEach(step=>flat.push({day:i,step,ms:Date.parse(step.time)})));
+ const day=days[selected],flat=day.steps.map((step,i)=>({step,dayIndex:i,ms:Date.parse(step.time)})).filter(p=>Number.isFinite(p.ms));
  if(!flat.length)return;
+ const w=Math.max(260,Math.round(svg.getBoundingClientRect().width)||320);
+ const h=241,l=43,r=w-13,t=31,b=195;
+ svg.setAttribute('viewBox',`0 0 ${w} ${h}`);
  const secondaryVariable=variable==='hi'?'temp':'hi';
- // Both charts always share the same Y-axis, independently of the selected tab.
- // Category lines are overlays only and do not expand the forecast-based range.
- const values=flat.flatMap(point=>[...Object.values(point.step.hi).filter(Number.isFinite),...Object.values(point.step.temp).filter(Number.isFinite)]);
- if(!values.length){add('text',{x:w/2,y:100,'text-anchor':'middle',fill:muted,'font-size':12},'No data for this forecast');return}
+ // Preserve the shared Heat Index/temperature axis, but calculate it for this day only.
+ const values=flat.flatMap(p=>[...Object.values(p.step.hi).filter(Number.isFinite),
+                               ...Object.values(p.step.temp).filter(Number.isFinite)]);
+ // Include live station measurements in the local scale so observed dots
+ // cannot fall outside the visible plot when they differ from forecasts.
+ const panel=list.querySelector('.temp-detail.is-open');
+ if(panel)panel.querySelectorAll('.temp-hour').forEach(tile=>{
+   for(const key of ['obsHi','obsTemp']){
+     const raw=tile.dataset[key];
+     if(raw!==undefined&&raw!==''&&Number.isFinite(Number(raw)))values.push(Number(raw));
+   }
+ });
+ if(!values.length){add('text',{x:w/2,y:100,'text-anchor':'middle',fill:muted,'font-size':12},'No data for this day');return;}
  const low=Math.floor((Math.min(...values)-2)/5)*5;
  let high=Math.ceil((Math.max(...values)+2)/5)*5;
  if(high-low<10)high=low+10;
+ const interval=3*60*60*1000;
  const x0=flat[0].ms,x1=flat[flat.length-1].ms;
- const x=ms=>l+(x1===x0 ? .5 :(ms-x0)/(x1-x0))*(r-l);
- const y=val=>b-(val-low)/(high-low)*(b-t);
+ const x=ms=>l+(x1===x0?.5:(ms-x0)/(x1-x0))*(r-l);
+ const y=value=>b-(value-low)/(high-low)*(b-t);
  for(let i=0;i<=4;i++){
    const v=low+(high-low)*i/4,yy=y(v);
    add('line',{x1:l,y1:yy,x2:r,y2:yy,stroke:'#E7EDF2','stroke-width':1,'stroke-dasharray':'3 4'});
    add('text',{x:l-6,y:yy+3,'text-anchor':'end',fill:muted,'font-size':10},`${Math.round(v)}°`);
  }
  const cfg=palette[variable];
- if(showReference.checked&&variable==='hi')categories.forEach(cat=>{
-    const yy=y(cat.value);
-    if(yy<t||yy>b)return;
-    add('line',{x1:l,y1:yy,x2:r,y2:yy,stroke:cat.color,'stroke-width':1.15,'stroke-dasharray':'4 4','stroke-opacity':'.85'});
-    // Classification labels are just above the line, close to the Y-axis.
-    const labelWidth=Math.min(w-60,cat.name.length*5.25+9);
-    add('rect',{x:l+2,y:yy-16,width:labelWidth,height:13,rx:3,fill:'#fff','fill-opacity':'.9'});
-    add('text',{x:l+6,y:yy-6,'text-anchor':'start',fill:cat.color,'font-size':9,'font-weight':750},cat.name);
+ if(graphOptions.reference&&variable==='hi')categories.forEach(cat=>{
+   const yy=y(cat.value);
+   if(yy<t||yy>b)return;
+   add('line',{x1:l,y1:yy,x2:r,y2:yy,stroke:cat.color,'stroke-width':1.15,'stroke-dasharray':'4 4','stroke-opacity':'.85'});
+   const width=Math.min(w-60,cat.name.length*5.25+9);
+   add('rect',{x:l+2,y:yy-16,width,height:13,rx:3,fill:'#fff','fill-opacity':'.9'});
+   add('text',{x:l+6,y:yy-6,'text-anchor':'start',fill:cat.color,'font-size':9,'font-weight':750},cat.name);
  });
- if(showCompare.checked){
-    const secondaryGroups=[];let secondary=[];
-    flat.forEach(point=>{
-      const value=point.step[secondaryVariable].median;
-      if(Number.isFinite(value))secondary.push({x:x(point.ms),y:y(value)});
-      else{if(secondary.length)secondaryGroups.push(secondary);secondary=[]}
-    });if(secondary.length)secondaryGroups.push(secondary);
-    secondaryGroups.forEach(g=>add('path',{d:curve(g),fill:'none',stroke:palette[secondaryVariable].stroke,'stroke-width':1.65,'stroke-dasharray':'4 4','stroke-opacity':'.85'}));
+ if(graphOptions.compare){
+   const groups=[];let group=[];
+   flat.forEach(p=>{
+     const v=p.step[secondaryVariable].median;
+     if(Number.isFinite(v))group.push({x:x(p.ms),y:y(v)});
+     else{if(group.length)groups.push(group);group=[];}
+   });
+   if(group.length)groups.push(group);
+   groups.forEach(g=>add('path',{d:curve(g),fill:'none',stroke:palette[secondaryVariable].stroke,'stroke-width':1.65,'stroke-dasharray':'4 4','stroke-opacity':'.85'}));
  }
- const groups=[];let segment=[];
- flat.forEach(point=>{
-   const {median,p10,p90}=point.step[variable];
-   if([median,p10,p90].every(Number.isFinite))segment.push({x:x(point.ms),lo:y(p10),hi:y(p90)});
-   else{if(segment.length)groups.push(segment);segment=[]}
- });if(segment.length)groups.push(segment);
- if(showRange.checked)groups.forEach(group=>{
-   if(group.length<2)return;
-   const upper=group.map(p=>({x:p.x,y:p.hi})),lower=group.map(p=>({x:p.x,y:p.lo}));
-   const fill=curve(upper)+' '+curve(lower.reverse()).replace(/^M/,'L')+' Z';
-   add('path',{d:fill,fill:cfg.shade,'fill-opacity':'.5',stroke:'none'});
+ const bands=[];let band=[];
+ flat.forEach(p=>{
+   const {median,p10,p90}=p.step[variable];
+   if([median,p10,p90].every(Number.isFinite))band.push({x:x(p.ms),lo:y(p10),hi:y(p90)});
+   else{if(band.length)bands.push(band);band=[];}
  });
- let midSeg=[];const midGroups=[];
- flat.forEach(point=>{
-   const value=point.step[variable].median;
-   if(Number.isFinite(value))midSeg.push({x:x(point.ms),y:y(value)});
-   else{if(midSeg.length)midGroups.push(midSeg);midSeg=[]}
- });if(midSeg.length)midGroups.push(midSeg);
- midGroups.forEach(g=>add('path',{d:curve(g),fill:'none',stroke:cfg.stroke,'stroke-width':2.65,'stroke-linecap':'round','stroke-linejoin':'round'}));
- days.forEach((day,i)=>{
-   const these=flat.filter(p=>p.day===i);if(!these.length)return;
-   const first=x(these[0].ms),last=x(these[these.length-1].ms),middle=(first+last)/2;
-   if(selected===i)add('rect',{x:Math.max(l,first-3),y:t,width:Math.max(4,last-first+6),height:b-t,rx:4,fill:cfg.stroke,'fill-opacity':'.045'});
-   add('text',{x:middle,y:240,'text-anchor':'middle',fill:selected===i?ink:muted,'font-size':10,'font-weight':selected===i?700:400},`${day.weekday.slice(0,3)} ${day.day.split(' ')[0]}`);
-   const peak=variable==='hi'?day.hiPeak:day.airPeak;
-   if(peak&&these[peak.index]){
-     const xx=x(these[peak.index].ms),yy=y(peak.value),active=selected===i;
-     if(active)add('circle',{cx:xx,cy:yy,r:8,fill:cfg.stroke,'fill-opacity':'.15'});
-     add('circle',{cx:xx,cy:yy,r:active?4.6:3.3,fill:cfg.stroke,stroke:'#fff','stroke-width':1.5});
-     // Every daily peak stays labeled, whether or not its day is expanded.
-     let ly=yy<t+19?yy+17:yy-11;
-     if(variable==='hi'&&showReference.checked&&i===0){ly=yy<t+28?yy+19:Math.max(t+12,yy-24);}
-     // Give the first peak label some breathing room from threshold labels at the Y-axis.
-     const edgeLabel=variable==='hi'&&showReference.checked&&i===0;
-     const labelX=edgeLabel?Math.min(r-32,xx+17):Math.max(l+11,Math.min(r-11,xx));
-     add('text',{x:labelX,y:ly,'text-anchor':edgeLabel?'start':'middle',fill:cfg.stroke,'font-size':10.5,'font-weight':750},fmt(peak.value,'°'));
-   }
+ if(band.length)bands.push(band);
+ if(graphOptions.range)bands.forEach(points=>{
+   if(points.length<2)return;
+   const upper=points.map(p=>({x:p.x,y:p.hi}));
+   const lower=points.map(p=>({x:p.x,y:p.lo})).reverse();
+   add('path',{d:curve(upper)+' '+curve(lower).replace(/^M/,'L')+' Z',fill:cfg.shade,'fill-opacity':'.5',stroke:'none'});
  });
- // NOW marker is interpolated between the two surrounding three-hourly medians.
- // It is intentionally omitted if the current time is outside published steps.
- const nowMs=Date.now();
- if(nowMs>=x0&&nowMs<=x1){
+ const paths=[];let path=[];
+ flat.forEach(p=>{
+   const v=p.step[variable].median;
+   if(Number.isFinite(v))path.push({x:x(p.ms),y:y(v)});
+   else{if(path.length)paths.push(path);path=[];}
+ });
+ if(path.length)paths.push(path);
+ paths.forEach(points=>add('path',{d:curve(points),fill:'none',stroke:cfg.stroke,'stroke-width':2.65,'stroke-linecap':'round','stroke-linejoin':'round'}));
+ // At most eight labels: the actual three-hourly local times within this one day.
+ flat.forEach(p=>{
+   const label=p.step.label.toLowerCase();
+   add('text',{x:x(p.ms),y:218,'text-anchor':'middle',fill:muted,'font-size':9.5},label);
+ });
+ const peak=variable==='hi'?day.hiPeak:day.airPeak;
+ if(peak&&flat.some(p=>p.dayIndex===peak.index)){
+   const p=flat.find(p=>p.dayIndex===peak.index),xx=x(p.ms),yy=y(peak.value);
+   add('circle',{cx:xx,cy:yy,r:8,fill:cfg.stroke,'fill-opacity':'.16'});
+   const point=add('circle',{cx:xx,cy:yy,r:4.5,fill:cfg.stroke,stroke:'#fff','stroke-width':1.5,'data-daily-peak':'true'});
+   point.appendChild(s('title',{},`Daily peak ${fmt(peak.value)} at ${peak.time}`));
+   let labelY=yy<t+22?yy+18:yy-12;
+   const labelX=Math.max(l+20,Math.min(r-20,xx));
+   add('text',{x:labelX,y:labelY,'text-anchor':'middle',fill:cfg.stroke,'font-size':10.5,'font-weight':750},fmt(peak.value,'°'));
+ }
+ // Keep the existing current-time dot, now limited to the open day's graph.
+ const now=Date.now();
+ if(now>=x0&&now<=x1){
    let before=null,after=null;
-   for(const point of flat){
-     if(point.ms<=nowMs&&Number.isFinite(point.step[variable].median))before=point;
-     if(point.ms>=nowMs&&Number.isFinite(point.step[variable].median)){after=point;break;}
+   for(const p of flat){
+     if(p.ms<=now&&Number.isFinite(p.step[variable].median))before=p;
+     if(p.ms>=now&&Number.isFinite(p.step[variable].median)){after=p;break;}
    }
-   if(before&&after&&after.ms-before.ms<=6*3600*1000){
-     const fraction=after.ms===before.ms?0:(nowMs-before.ms)/(after.ms-before.ms);
+   if(before&&after&&after.ms-before.ms<=2*interval){
+     const fraction=before.ms===after.ms?0:(now-before.ms)/(after.ms-before.ms);
      const nowValue=before.step[variable].median+(after.step[variable].median-before.step[variable].median)*fraction;
-     const xx=x(nowMs), yy=y(nowValue);
-     const currentDot=add('circle',{cx:xx,cy:yy,r:6.6,fill:'#fff',stroke:cfg.stroke,'stroke-width':1.6,'pointer-events':'none','data-current-time':'true'});
-     currentDot.appendChild(s('title',{},`Current time: ${fmt(nowValue)}`));
-     add('circle',{cx:xx,cy:yy,r:3.2,fill:cfg.stroke,stroke:'#fff','stroke-width':.7,'pointer-events':'none'});
+     const dot=add('circle',{cx:x(now),cy:y(nowValue),r:6.6,fill:'#fff',stroke:cfg.stroke,'stroke-width':1.6,'data-current-time':'true'});
+     dot.appendChild(s('title',{},`Current time: ${fmt(nowValue)}`));
+     add('circle',{cx:x(now),cy:y(nowValue),r:3.2,fill:cfg.stroke,stroke:'#fff','stroke-width':.7});
    }
  }
- // SVG hit zones cover all daily time intervals (not just narrow peak dots).
- days.forEach((day,i)=>{
-   const these=flat.filter(p=>p.day===i);if(!these.length)return;
-   let start=x(these[0].ms),end=x(these[these.length-1].ms);
-   // Avoid Array.findLast() for older mobile Safari compatibility.
-   let previous=null,next=null;
-   for(let j=flat.length-1;j>=0;j--)if(flat[j].day===i-1){previous=flat[j];break;}
-   for(let j=0;j<flat.length;j++)if(flat[j].day===i+1){next=flat[j];break;}
-   if(previous)start=(start+x(previous.ms))/2;else start=l;
-   if(next)end=(end+x(next.ms))/2;else end=r;
-   const rect=add('rect',{x:start,y:t,width:Math.max(2,end-start),height:b-t,role:'button',tabindex:'0','data-chart-day':i,'aria-label':`Select ${day.full} forecast`,class:'temp-plot-hit'});
-   rect.appendChild(s('title',{},`${day.full}: ${fmt((variable==='hi'?day.hiPeak:day.airPeak)?.value??null)} peak`));
- });
- root.querySelector('#temp-chart-title').textContent=(variable==='hi'?'Heat Index':'Air temperature')+' over time';
- root.querySelector('#temp-legend-line').style.background=cfg.stroke;
- root.querySelector('#temp-legend-range').style.background=cfg.shade+'88';
- root.querySelector('#temp-legend-range').parentElement.hidden=!showRange.checked;
- root.querySelector('#temp-reference-label').hidden=variable!=='hi';
- const caption=root.querySelector('#temp-graph-caption');
- caption.hidden=selected<0;
- caption.textContent=selected<0?'':`${days[selected].full} · ${fmt((variable==='hi'?days[selected].hiPeak:days[selected].airPeak)?.value??null)} peak`;
+ // Station observations, when the existing Compare to actual toggle is enabled,
+ // are discrete markers rather than a second continuous observation curve.
+ const openPanel=panel;
+ let observedCount=0;
+ if(openPanel){
+   openPanel.querySelectorAll('.temp-hour[data-valid-time]').forEach(tile=>{
+     const observed=Number(tile.dataset[variable==='hi'?'obsHi':'obsTemp']);
+     if(!tile.dataset[variable==='hi'?'obsHi':'obsTemp']||!Number.isFinite(observed))return;
+     const ms=Date.parse(tile.dataset.validTime);
+     if(!Number.isFinite(ms)||ms<x0||ms>x1) return;
+     observedCount++;
+     const dot=add('circle',{cx:x(ms),cy:y(observed),r:3.5,fill:'#fff',stroke:'#53667A','stroke-width':1.8,'data-observed':'true'});
+     dot.appendChild(s('title',{},`Observed ${variable==='hi'?'Heat Index':'air temperature'}: ${fmt(observed)} at ${tile.querySelector('.temp-hour-time')?.textContent||''}`));
+   });
+ }
+ const legend=list.querySelector('.temp-detail.is-open .temp-legend-range-entry');
+ if(legend)legend.hidden=!graphOptions.range;
+ const obsLegend=list.querySelector('.temp-detail.is-open .temp-legend-observed-entry');
+ if(obsLegend)obsLegend.hidden=observedCount===0;
 }
-let graphPointerDown=null, lastGraphPointerUp=0;
-const chartHit=target=>target&&target.closest?target.closest('[data-chart-day]'):null;
-svg.addEventListener('pointerdown',event=>{
-  const hit=chartHit(event.target);
-  graphPointerDown=hit?{id:Number(hit.dataset.chartDay),x:event.clientX,y:event.clientY,pointerId:event.pointerId}:null;
+list.addEventListener('change',event=>{
+ const option=event.target.closest?.('[data-graph-option]');
+ if(!option)return;
+ graphOptions[option.dataset.graphOption]=option.checked;
+ drawGraph();animateHeight();
 });
-svg.addEventListener('pointerup',event=>{
-  const hit=chartHit(event.target);
-  if(!hit||!graphPointerDown||graphPointerDown.pointerId!==event.pointerId||graphPointerDown.id!==Number(hit.dataset.chartDay))return;
-  const moved=Math.hypot(event.clientX-graphPointerDown.x,event.clientY-graphPointerDown.y);
-  graphPointerDown=null;
-  if(moved>12)return;
-  lastGraphPointerUp=Date.now();
-  event.preventDefault();
-  selectDay(Number(hit.dataset.chartDay));
-});
-svg.addEventListener('pointercancel',()=>{graphPointerDown=null});
-svg.addEventListener('click',event=>{
-  const hit=chartHit(event.target);
-  if(hit&&Date.now()-lastGraphPointerUp>700)selectDay(Number(hit.dataset.chartDay));
-});
-svg.addEventListener('keydown',event=>{
-  const hit=chartHit(event.target);
-  if(hit&&(event.key==='Enter'||event.key===' ')){event.preventDefault();selectDay(Number(hit.dataset.chartDay));}
-});
-function refresh(){tabs.forEach(b=>b.setAttribute('aria-selected',String(b.dataset.variable===variable)));updateRows();drawGraph();animateHeight()}
+window.addEventListener('sw:heat-observations-changed',()=>drawGraph());
+function refresh(){tabs.forEach(b=>b.setAttribute('aria-selected',String(b.dataset.variable===variable)));updateRows();animateHeight()}
 tabs.forEach(b=>b.addEventListener('click',()=>{variable=b.dataset.variable;refresh()}));
 simple.addEventListener('change',()=>{updateRows();animateHeight()});
-[showRange,showReference,showCompare].forEach(input=>input.addEventListener('change',()=>{drawGraph();animateHeight()}));
-// Only redraw when the chart width changes; root height changes on day expansion
-// and should not trigger a ResizeObserver feedback loop on iOS.
+// Draw only the open daily graph. Height changes do not trigger graph redraws,
+// avoiding the iframe feedback loop seen on mobile browsers.
 let lastChartWidth=0;
 if(typeof ResizeObserver!=='undefined'){
   new ResizeObserver(entries=>{
     const width=Math.round(entries[0]?.contentRect?.width||0);
     if(Math.abs(width-lastChartWidth)>2){lastChartWidth=width;drawGraph();}
     height();
-  }).observe(root.querySelector('.temp-chart-shell'));
-  new ResizeObserver(height).observe(root);
+  }).observe(root);
 }
 window.addEventListener('resize',()=>{drawGraph();height()});
 if(document.fonts?.ready)document.fonts.ready.then(()=>{drawGraph();height()});
-// Update the highlighted period as the local clock crosses a 3-hour boundary.
-window.setInterval(highlightCurrentPeriod,60*1000);
+// Update the highlighted three-hour interval and current-time dot every minute.
+window.setInterval(()=>{highlightCurrentPeriod();drawGraph();},60*1000);
 refresh();
 })();
 </script>
@@ -4042,9 +4036,11 @@ _OBS_COMPARE_BRIDGE = r'''
      if(!area){area=document.createElement('span');area.className='sw-obs-temp';tile.appendChild(area);}
      const show=enabled.has(dayKey(panel));
      area.hidden=!show;
-     if(!show)return;
+     if(!show){delete tile.dataset.obsHi;delete tile.dataset.obsTemp;return;}
      const record=data?.values?.[String(Date.parse(tile.dataset.validTime))];
-     if(!record){area.innerHTML='<small>Observed</small>—';return;}
+     if(!record){delete tile.dataset.obsHi;delete tile.dataset.obsTemp;area.innerHTML='<small>Observed</small>—';return;}
+     if(Number.isFinite(record.heat_index))tile.dataset.obsHi=String(record.heat_index);else delete tile.dataset.obsHi;
+     if(Number.isFinite(record.temperature))tile.dataset.obsTemp=String(record.temperature);else delete tile.dataset.obsTemp;
      const value=v=>Number.isFinite(v)?Math.round(v)+'°':'—';
      area.innerHTML=`<small>Observed</small>HI ${value(record.heat_index)}<br>Air ${value(record.temperature)}`;
    });
@@ -4063,6 +4059,7 @@ _OBS_COMPARE_BRIDGE = r'''
    window.requestAnimationFrame(()=>{
      const h=Math.ceil(root.getBoundingClientRect().height+2);
      window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setFrameHeight',height:h},'*');
+     if(kind==='heat')window.dispatchEvent(new Event('sw:heat-observations-changed'));
    });
  }
  function install(){
