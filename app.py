@@ -2574,8 +2574,10 @@ def _air_temperature_descriptor(value):
 def render_temperature_forecast_html(temp_result: dict, location_name: str) -> str:
     """Interactive six-day Heat Index-first card based on stored 3-hourly ENS data.
 
-    Peaks are the maximum of available *3-hourly median* values in a local day.
-    P10 and P90 at the selected peak time are not percentiles of daily maxima.
+    Daily overview ranges use the lowest/highest available 3-hourly medians
+    and the outer minimum P10/maximum P90 at any available 3-hourly step.
+    They are not ensemble quantiles of the actual daily minimum and maximum.
+    The expanded details still show the highest 3-hourly median value.
     """
     from collections import defaultdict
 
@@ -2617,10 +2619,34 @@ def render_temperature_forecast_html(temp_result: dict, location_name: str) -> s
             return {"index": ix, "value": value, "time": steps[ix]["label"],
                     "p10": steps[ix][kind]["p10"], "p90": steps[ix][kind]["p90"]}
 
+        def daily_range(kind):
+            """Describe the available three-hourly median span and outer P10/P90 envelope."""
+            median_values = [entry[kind]["median"] for entry in steps
+                             if entry[kind]["median"] is not None]
+            lower_values = [entry[kind]["p10"] for entry in steps
+                            if entry[kind]["p10"] is not None]
+            upper_values = [entry[kind]["p90"] for entry in steps
+                            if entry[kind]["p90"] is not None]
+            if not median_values:
+                return {"medianMin": None, "medianMax": None,
+                        "p10Min": None, "p90Max": None, "description": "Unavailable"}
+            median_min, median_max = min(median_values), max(median_values)
+            if kind == "hi":
+                low_desc = _temperature_severity(median_min)["label"]
+                high_desc = _temperature_severity(median_max)["label"]
+            else:
+                low_desc = _air_temperature_descriptor(median_min)
+                high_desc = _air_temperature_descriptor(median_max)
+            return {
+                "medianMin": median_min, "medianMax": median_max,
+                "p10Min": min(lower_values) if lower_values else None,
+                "p90Max": max(upper_values) if upper_values else None,
+                "description": low_desc if low_desc == high_desc else f"{low_desc} to {high_desc}",
+            }
+
         hi_peak, air_peak = peak("hi"), peak("temp")
-        air_low_entries = [entry["temp"]["median"] for entry in steps
-                           if entry["temp"]["median"] is not None]
-        air_low = min(air_low_entries) if air_low_entries else None
+        hi_range, air_range = daily_range("hi"), daily_range("temp")
+        air_low = air_range["medianMin"]
         records.append({
             "date": day.isoformat(),
             "weekday": day.strftime("%A"),
@@ -2631,6 +2657,8 @@ def render_temperature_forecast_html(temp_result: dict, location_name: str) -> s
             "steps": steps,
             "hiPeak": hi_peak,
             "airPeak": air_peak,
+            "hiRange": hi_range,
+            "airRange": air_range,
             "airLow": air_low,
             "severity": _temperature_severity(hi_peak["value"] if hi_peak else None),
             "airDescriptor": _air_temperature_descriptor(air_peak["value"] if air_peak else None),
@@ -2704,6 +2732,20 @@ button{cursor:pointer}
 .rr-day-weekday{font-size:var(--rain-day-size);font-weight:700;color:var(--rain-ink)}
 .rr-day-calendar{font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date)}
 .rr-today-tag{font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);letter-spacing:.025em}
+.temp-day-button{grid-template-columns:72px minmax(0,1fr) 15px;min-height:112px;align-items:center}
+.temp-day-ranges{display:flex;flex-direction:column;gap:9px;min-width:0;width:100%;max-width:570px;justify-self:end}
+.temp-range-row{display:flex;flex-direction:column;gap:3px;min-width:0;width:100%;color:var(--rain-ink)}
+.temp-range-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0;line-height:1.15}
+.temp-range-name{font-size:var(--rain-secondary-size);font-weight:700;color:var(--rain-section);white-space:nowrap}
+.temp-range-median{font-size:var(--rain-value-size);font-weight:750;color:var(--rain-ink);white-space:nowrap;letter-spacing:-.01em}
+.temp-range-track{display:block;position:relative;width:100%;height:9px;border-radius:99px;background:#eef1f5;overflow:hidden}
+.temp-range-outer,.temp-range-core{display:block;position:absolute;top:1px;height:7px;border-radius:99px;min-width:3px}
+.temp-range-outer{background:var(--range-pale);opacity:.9}
+.temp-range-core{background:var(--range-bold);z-index:1}
+.temp-range-foot{display:flex;justify-content:space-between;align-items:center;gap:6px;line-height:1.1;font-size:var(--rain-micro-size);color:var(--rain-muted)}
+.temp-range-foot span{white-space:nowrap}
+.temp-range-simple{display:block;font-size:var(--rain-micro-size);font-weight:650;line-height:1.2;color:var(--rain-section)}
+.temp-range-key{font-size:var(--rain-secondary-size);font-weight:400;color:var(--rain-muted);margin:0 3px 7px;line-height:1.35}
 .temp-day-numbers{display:flex;gap:14px;align-items:center;justify-content:flex-end;min-width:0;text-align:right}
 .temp-day-metric{min-width:0;display:flex;align-items:flex-end;flex-direction:column;gap:2px}
 .temp-day-metric b{font-size:var(--rain-value-size);font-weight:750;color:var(--rain-ink);line-height:1.05;white-space:nowrap}
@@ -2751,8 +2793,8 @@ button{cursor:pointer}
   .temp-detail-top>div:last-child{text-align:left!important}
   .temp-detail-descriptor{justify-content:flex-start}
 }
-@media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{padding:9px 7px;gap:6px;min-height:62px}.temp-day-numbers{gap:10px}}
-@media(max-width:355px){.rr-card-tabs button{padding:7px 8px;font-size:10.5px}.rr-simple-toggle{font-size:11px;gap:4px}.rr-simple-toggle input{width:33px;height:20px}.rr-simple-toggle input:after{width:14px;height:14px}.rr-simple-toggle input:checked:after{left:16px}.temp-day-numbers{gap:7px}.temp-day-metric b.temp-descriptor{max-width:101px}}
+@media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{grid-template-columns:54px minmax(0,1fr) 14px;padding:10px 7px;gap:8px;min-height:112px}.temp-day-ranges{gap:8px}.temp-day-numbers{gap:10px}}
+@media(max-width:355px){.rr-card-tabs button{padding:7px 8px;font-size:10.5px}.rr-simple-toggle{font-size:11px;gap:4px}.rr-simple-toggle input{width:33px;height:20px}.rr-simple-toggle input:after{width:14px;height:14px}.rr-simple-toggle input:checked:after{left:16px}.temp-day-button{grid-template-columns:49px minmax(0,1fr) 12px;gap:5px}.temp-range-foot{font-size:9px}.temp-day-numbers{gap:7px}.temp-day-metric b.temp-descriptor{max-width:101px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 __SHARED_RAIN_TYPOGRAPHY__
 </style>
@@ -2768,7 +2810,7 @@ __SHARED_RAIN_TYPOGRAPHY__
     </div>
     <label class="rr-simple-toggle"><input type="checkbox" id="temp-simple">Simple mode</label>
   </div>
-  <div class="temp-guide">Tap a peak or a day below to view details.</div>
+  <div class="temp-guide">Tap a graph peak or a day below to view details.</div>
   <section class="temp-chart-shell" aria-label="Heat index and air temperature graph">
     <div class="temp-chart-top"><span class="rr-section-heading" id="temp-chart-title">Heat Index over time</span><span class="temp-chart-meta">3-hourly most likely estimate</span></div>
     <svg id="temp-graph" role="img" aria-label="Interactive forecast graph with a marker for each daily peak. Tap a day marker to expand the corresponding daily forecast."></svg>
@@ -2782,10 +2824,11 @@ __SHARED_RAIN_TYPOGRAPHY__
       </div>
     </details>
   </section>
-  <div class="temp-section"><span class="rr-section-heading">Day-by-day outlook</span><small>Peak of the most likely estimate</small></div>
+  <div class="temp-section"><span class="rr-section-heading">Day-by-day outlook</span><small>Available 3-hourly periods</small></div>
+  <p class="temp-range-key">Solid bars: lowest–highest median · Pale bars: minimum P10–maximum P90</p>
   <div class="temp-days" id="temp-days"></div>
   <details class="temp-note"><summary>How to read this forecast</summary>
-    <p>The highlighted Heat Index is the default. Daily peaks are the highest available 3-hourly median estimates, not exact daily maxima. The shaded band shows P10–P90 estimates at individual times; it is not the probability range for daily maxima.</p>
+    <p>The highlighted Heat Index is the default. Each day’s bold range spans its lowest to highest available 3-hourly median estimate; the lighter range spans its lowest P10 to highest P90 estimate. These are not ensemble percentiles of daily minimum or maximum. Graph shading shows P10–P90 estimates at individual times; expanded daily peaks remain the highest 3-hourly medians.</p>
     <p>Simple mode uses Heat Index caution categories and informal air-temperature descriptions in the daily overview. Detailed figures and graph values remain available. Daily periods use Philippine local time (UTC+8); partial days use only available forecast steps.</p>
   </details>
 </main>
@@ -2824,6 +2867,43 @@ function classColors(value){
   return `--severity:${tone.color};--severity-bg:rgba(${r},${g},${b},.20);--severity-border:rgba(${r},${g},${b},.49)`;
 }
 function safe(text){return String(text).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+// Use one consistent horizontal scale for each variable across all displayed days,
+// so the position and length of the range bars are comparable between days.
+const dailyRangeScales={};
+for(const [kind,field] of [['hi','hiRange'],['temp','airRange']]){
+  const values=days.flatMap(d=>[d[field]?.medianMin,d[field]?.medianMax,d[field]?.p10Min,d[field]?.p90Max]).filter(Number.isFinite);
+  const lo=values.length?Math.floor(Math.min(...values)-2):0;
+  const hi=values.length?Math.ceil(Math.max(...values)+2):40;
+  dailyRangeScales[kind]={low:lo,high:hi>lo?hi:lo+10};
+}
+function rangePct(kind,value){
+ const scale=dailyRangeScales[kind];
+ return Number.isFinite(value)?Math.max(0,Math.min(100,(value-scale.low)/(scale.high-scale.low)*100)):0;
+}
+function dailyRangeHTML(day,kind){
+  const range=kind==='hi'?day.hiRange:day.airRange;
+  const isHi=kind==='hi',name=isHi?'Heat Index':'Air temp';
+  const medianLow=range?.medianMin,medianHigh=range?.medianMax;
+  const lower=range?.p10Min,upper=range?.p90Max;
+  const hasMedian=Number.isFinite(medianLow)&&Number.isFinite(medianHigh);
+  const barLow=Number.isFinite(lower)?lower:medianLow;
+  const barHigh=Number.isFinite(upper)?upper:medianHigh;
+  const hasOuter=Number.isFinite(barLow)&&Number.isFinite(barHigh);
+  const track=hasMedian?`<span class="temp-range-track" aria-hidden="true">
+      ${hasOuter?`<span class="temp-range-outer" style="left:${rangePct(kind,barLow).toFixed(2)}%;width:${Math.max(1,rangePct(kind,barHigh)-rangePct(kind,barLow)).toFixed(2)}%"></span>`:''}
+      <span class="temp-range-core" style="left:${rangePct(kind,medianLow).toFixed(2)}%;width:${Math.max(1,rangePct(kind,medianHigh)-rangePct(kind,medianLow)).toFixed(2)}%"></span>
+    </span>`:'';
+  const medText=hasMedian?`${fmt(medianLow,'°')}–${fmt(medianHigh,'°')}`:'—';
+  const p10Text=Number.isFinite(lower)?fmt(lower,'°'):'—';
+  const p90Text=Number.isFinite(upper)?fmt(upper,'°'):'—';
+  const accessible=`${name}: median range ${hasMedian?`${fmt(medianLow)} to ${fmt(medianHigh)}`:'unavailable'}; lowest P10 ${Number.isFinite(lower)?fmt(lower):'unavailable'}; highest P90 ${Number.isFinite(upper)?fmt(upper):'unavailable'}`;
+  return `<span class="temp-range-row" style="--range-bold:${isHi?'#DF8744':'#238FC2'};--range-pale:${isHi?'#F6D6B4':'#C8E6F1'}" aria-label="${safe(accessible)}">
+    <span class="temp-range-head"><span class="temp-range-name">${name}</span><b class="temp-range-median">${medText}</b></span>
+    ${track}
+    <span class="temp-range-foot"><span>Min P10 ${p10Text}</span><span>Max P90 ${p90Text}</span></span>
+    <span class="temp-range-simple" ${simple.checked?'':'hidden'}>${safe(range?.description||'Unavailable')}</span>
+  </span>`;
+}
 let lastFrameHeight=0, frameHeightPending=false;
 function height(){
   if(frameHeightPending)return;
@@ -2857,7 +2937,7 @@ function animateHeight(){
 function dayHTML(day,i){
   const selectedNow=selected===i;
   const todayTag=day.today?'<span class="rr-today-tag">TODAY</span>':'';
-  const hiVal=day.hiPeak?.value??null,airVal=day.airPeak?.value??null;
+  const airVal=day.airPeak?.value??null;
   const p=day.hiPeak;
   const headline=p?`<div class="temp-detail-value">${fmt(p.value)}</div>`:'<div class="temp-detail-value">—</div>';
   const stats=[
@@ -2872,10 +2952,8 @@ function dayHTML(day,i){
   return `<div class="temp-day-wrap" data-day-wrap="${i}">
     <button type="button" class="temp-day-button" data-day="${i}" aria-expanded="${selectedNow}" aria-controls="temp-detail-${i}">
       <span class="temp-day-date">${todayTag}<span class="rr-day-weekday">${safe(day.shortWeekday)}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
-      <span class="temp-day-numbers">
-        <span class="temp-day-metric"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(hiVal,'°')}</b><b class="temp-descriptor" style="--severity:${day.severity.color}" ${simple.checked?'':'hidden'}><i class="temp-risk-dot" aria-hidden="true"></i>${safe(day.severity.label)}</b><small>Heat Index</small></span>
-        <span class="temp-day-metric secondary"><b class="temp-number" ${simple.checked?'hidden':''}>${fmt(airVal,'°')}</b><b class="temp-descriptor" ${simple.checked?'':'hidden'}>${safe(day.airDescriptor)}</b><small>Air temp</small></span>
-      </span><svg class="temp-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>
+      <span class="temp-day-ranges">${dailyRangeHTML(day,'hi')}${dailyRangeHTML(day,'temp')}</span>
+      <svg class="temp-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>
     </button>
     <section class="temp-detail ${selectedNow?'is-open':''}" id="temp-detail-${i}" aria-label="Detailed Heat Index forecast for ${safe(day.full)}">
       <div class="temp-detail-collapse"><div class="temp-detail-body">
@@ -4439,9 +4517,11 @@ else:
         with st.container(key="heat_footnote_text"):
             st.markdown(
                 "**Forecast estimates.** Heat Index and air temperature are ECMWF ENS "
-                "3-hourly probabilistic estimates. Daily peaks are the highest available "
-                "3-hourly median values, not exact daily maxima. P10 and P90 describe "
-                "the ensemble range at the indicated time."
+                "3-hourly probabilistic estimates. The day-by-day inner range spans "
+                "the lowest and highest available 3-hourly median values; its lighter "
+                "outer band spans the minimum P10 and maximum P90 across those times. "
+                "These are not percentiles of the actual daily minimum or maximum. "
+                "Expanded daily peaks remain the highest available 3-hourly medians."
             )
             st.markdown(
                 "**Source and updates.** ECMWF Open Data (CC BY 4.0), "
