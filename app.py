@@ -2732,7 +2732,7 @@ button{cursor:pointer}
 .rr-day-weekday{font-size:var(--rain-day-size);font-weight:700;color:var(--rain-ink)}
 .rr-day-calendar{font-size:var(--rain-date-size);font-weight:400;color:var(--rain-date)}
 .rr-today-tag{font-size:var(--rain-today-size);font-weight:400;color:var(--rain-today);letter-spacing:.025em}
-.temp-day-button{grid-template-columns:72px minmax(0,1fr) 15px;min-height:112px;align-items:center}
+.temp-day-button{grid-template-columns:72px minmax(0,1fr) 15px;min-height:84px;align-items:center}
 .temp-day-ranges{display:flex;flex-direction:column;gap:9px;min-width:0;width:100%;max-width:570px;justify-self:end}
 .temp-range-row{display:flex;flex-direction:column;gap:3px;min-width:0;width:100%;color:var(--rain-ink)}
 .temp-range-head{display:flex;align-items:baseline;justify-content:space-between;gap:6px;min-width:0;line-height:1.15}
@@ -2793,7 +2793,7 @@ button{cursor:pointer}
   .temp-detail-top>div:last-child{text-align:left!important}
   .temp-detail-descriptor{justify-content:flex-start}
 }
-@media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{grid-template-columns:54px minmax(0,1fr) 14px;padding:10px 7px;gap:8px;min-height:112px}.temp-day-ranges{gap:8px}.temp-day-numbers{gap:10px}}
+@media(max-width:720px){.temp-root{border-radius:10px;padding:12px 9px}.temp-chart-shell{padding:10px 6px 5px}.temp-day-button{grid-template-columns:54px minmax(0,1fr) 14px;padding:10px 7px;gap:8px;min-height:84px}.temp-day-ranges{gap:8px}.temp-day-numbers{gap:10px}}
 @media(max-width:355px){.rr-card-tabs button{padding:7px 8px;font-size:10.5px}.rr-simple-toggle{font-size:11px;gap:4px}.rr-simple-toggle input{width:33px;height:20px}.rr-simple-toggle input:after{width:14px;height:14px}.rr-simple-toggle input:checked:after{left:16px}.temp-day-button{grid-template-columns:49px minmax(0,1fr) 12px;gap:5px}.temp-range-foot{font-size:9px}.temp-day-numbers{gap:7px}.temp-day-metric b.temp-descriptor{max-width:101px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
 __SHARED_RAIN_TYPOGRAPHY__
@@ -2952,7 +2952,7 @@ function dayHTML(day,i){
   return `<div class="temp-day-wrap" data-day-wrap="${i}">
     <button type="button" class="temp-day-button" data-day="${i}" aria-expanded="${selectedNow}" aria-controls="temp-detail-${i}">
       <span class="temp-day-date">${todayTag}<span class="rr-day-weekday">${safe(day.shortWeekday)}</span><span class="rr-day-calendar">${safe(day.day)}</span></span>
-      <span class="temp-day-ranges">${dailyRangeHTML(day,'hi')}${dailyRangeHTML(day,'temp')}</span>
+      <span class="temp-day-ranges">${dailyRangeHTML(day,variable)}</span>
       <svg class="temp-chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>
     </button>
     <section class="temp-detail ${selectedNow?'is-open':''}" id="temp-detail-${i}" aria-label="Detailed Heat Index forecast for ${safe(day.full)}">
