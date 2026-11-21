@@ -1,0 +1,23 @@
+{
+  "generated_at": "2026-11-21T16:01:02.601150+00:00",
+  "run_times": {
+    "percentile": "2026-11-21T06:00:00+00:00",
+    "threshold": "2026-11-21T00:00:00+00:00",
+    "temperature": "2026-11-21T06:00:00+00:00",
+    "taiwan_threshold": "2026-11-21T00:00:00+00:00",
+    "taiwan_percentile": "2026-11-21T06:00:00+00:00",
+    "taiwan_temperature": "2026-11-21T06:00:00+00:00"
+  },
+  "resolutions": {
+    "threshold": "0p1",
+    "percentile": "0p1",
+    "temperature": "0p1",
+    "taiwan_threshold": "0p1",
+    "taiwan_percentile": "0p1",
+    "taiwan_temperature": "0p1"
+  },
+  "published_at": {},
+  "failures": [],
+  "upgrade_failures": [],
+  "taiwan_failures": []
+}
